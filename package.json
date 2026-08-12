@@ -1,0 +1,23 @@
+{
+	"name": "todo-kanban",
+	"version": "1.0.0",
+	"type": "module",
+	"description": "Electrobun app with SQLite CRUD operations via RPC",
+	"scripts": {
+		"start": "electrobun dev",
+		"dev": "electrobun dev --watch",
+		"build:dev": "bun install && electrobun build",
+		"build:canary": "electrobun build --env=canary",
+		"build:stable": "electrobun build --env=stable",
+		"mcp": "bun run mcp/server.ts",
+		"test": "bun test"
+	},
+	"dependencies": {
+		"@modelcontextprotocol/sdk": "^1.30.0",
+		"electrobun": "1.18.1"
+	},
+	"devDependencies": {
+		"@types/bun": "latest",
+		"typescript": "^5.7.2"
+	}
+}

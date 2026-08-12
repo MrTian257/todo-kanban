@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>View Harness — todo-kanban</title>
+<link rel="stylesheet" href="../src/mainview/index.css">
+</head>
+<body>
+<script>
+// ── electrobun/view module shims (must exist before the view bundle loads) ──
+window.__electrobunWebviewId = undefined;
+window.__electrobunRpcSocketPort = undefined;
+window.__electrobun = { receiveMessageFromBun: null };
+
+// ── Mock KanbanApi — mirrors the real electrobun RPC surface ─────────────
+(function () {
+  "use strict";
+  let nextProjectId = 100;
+  let nextTaskId = 1000;
+  const now = "2026-08-05 00:00:00";
+
+  const projects = [
+    { id: 1, name: "示例项目", description: "演示项目", created_at: now, updated_at: now },
+    { id: 2, name: "第二项目", description: "", created_at: now, updated_at: now },
+  ];
+  const tasks = [
+    { id: 10, project_id: 1, title: "需求评审", description: "## 目标\n\n梳理本周迭代需求", status: "todo", priority: "high", assignee: "张伟", position: 0, created_at: now, updated_at: now },
+    { id: 11, project_id: 1, title: "接口联调", description: "```ts\nconst x = 1;\n```", status: "doing", priority: "high", assignee: "王强", position: 0, created_at: now, updated_at: now },
+    { id: 12, project_id: 1, title: "项目立项", description: "- [x] 确定范围\n- [ ] 里程碑", status: "done", priority: "medium", assignee: "赵磊", position: 0, created_at: now, updated_at: now },
+    { id: 13, project_id: 2, title: "第二项目任务", description: "", status: "todo", priority: "low", assignee: "", position: 0, created_at: now, updated_at: now },
+  ];
+  const calls = [];
+  window.__calls = calls;
+
+  const clone = (o) => JSON.parse(JSON.stringify(o));
+
+  const api = {
+    getProjects: async () => clone(projects),
+    createProject: async ({ name, description }) => {
+      calls.push(["createProject", { name, description }]);
+      const p = { id: ++nextProjectId, name, description: description || "", created_at: now, updated_at: now };
+      projects.push(p);
+      return clone(p);
+    },
+    updateProject: async ({ id, name, description }) => {
+      calls.push(["updateProject", { id, name, description }]);
+      const p = projects.find((x) => x.id === id);
+      if (!p) return null;
+      if (name !== undefined) p.name = name;
+      if (description !== undefined) p.description = description;
+      p.updated_at = now;
+      return clone(p);
+    },
+    deleteProject: async ({ id }) => {
+      calls.push(["deleteProject", { id }]);
+      const before = tasks.length;
+      for (let i = tasks.length - 1; i >= 0; i--) if (tasks[i].project_id === id) tasks.splice(i, 1);
+      const idx = projects.findIndex((x) => x.id === id);
+      if (idx >= 0) projects.splice(idx, 1);
+      return { deletedTasks: before - tasks.length };
+    },
+    getTasks: async ({ projectId }) => clone(tasks.filter((t) => t.project_id === projectId)),
+    getTask: async ({ id }) => clone(tasks.find((t) => t.id === id) ?? null),
+    createTask: async (input) => {
+      calls.push(["createTask", input]);
+      const status = input.status || "todo";
+      const max = Math.max(-1, ...tasks.filter((t) => t.project_id === input.projectId && t.status === status).map((t) => t.position));
+      const t = {
+        id: ++nextTaskId,
+        project_id: input.projectId,
+        title: input.title,
+        description: input.description || "",
+        status,
+        priority: input.priority || "medium",
+        assignee: input.assignee || "",
+        position: max + 1,
+        created_at: now,
+        updated_at: now,
+      };
+      tasks.push(t);
+      return clone(t);
+    },
+    updateTask: async ({ id, ...patch }) => {
+      calls.push(["updateTask", { id, ...patch }]);
+      const t = tasks.find((x) => x.id === id);
+      if (!t) return null;
+      if (patch.title !== undefined) t.title = patch.title;
+      if (patch.description !== undefined) t.description = patch.description;
+      if (patch.priority !== undefined) t.priority = patch.priority;
+      if (patch.assignee !== undefined) t.assignee = patch.assignee;
+      t.updated_at = now;
+      return clone(t);
+    },
+    setTaskStatus: async ({ id, status }) => {
+      calls.push(["setTaskStatus", { id, status }]);
+      const t = tasks.find((x) => x.id === id);
+      if (!t) return null;
+      t.status = status;
+      t.updated_at = now;
+      return clone(t);
+    },
+    moveTask: async ({ id, status, beforeId }) => {
+      calls.push(["moveTask", { id, status, beforeId }]);
+      const task = tasks.find((x) => x.id === id);
+      if (!task) return null;
+      const target = status || task.status;
+      // same reorder semantics as shared/db.ts moveTask
+      const others = tasks.filter((t) => t.project_id === task.project_id && t.status === target && t.id !== id)
+        .sort((a, b) => a.position - b.position || a.id - b.id);
+      const order = [];
+      let inserted = false;
+      for (const t of others) {
+        if (!inserted && beforeId !== null && beforeId !== undefined && t.id === beforeId) {
+          order.push(id);
+          inserted = true;
+        }
+        order.push(t.id);
+      }
+      if (!inserted) order.push(id);
+      task.status = target;
+      order.forEach((tid, i) => {
+        const t = tasks.find((x) => x.id === tid);
+        if (t) t.position = i;
+      });
+      if (target !== task.status) { /* status unchanged in mock after assignment above; renumber source below */
+      }
+      return clone(task);
+    },
+    deleteTask: async ({ id }) => {
+      calls.push(["deleteTask", { id }]);
+      const idx = tasks.findIndex((x) => x.id === id);
+      if (idx >= 0) tasks.splice(idx, 1);
+      return { success: idx >= 0 };
+    },
+    getStats: async ({ projectId } = {}) => {
+      const list = projectId ? tasks.filter((t) => t.project_id === projectId) : tasks;
+      return {
+        projects: projects.length,
+        total: list.length,
+        todo: list.filter((t) => t.status === "todo").length,
+        doing: list.filter((t) => t.status === "doing").length,
+        done: list.filter((t) => t.status === "done").length,
+      };
+    },
+  };
+  window.__KANBAN_API__ = api;
+})();
+</script>
+<script type="module" src="index.js"></script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+{
+	"$schema": "https://opencode.ai/config.json",
+	"mcp": {
+		"todo-kanban": {
+			"type": "local",
+			"command": ["bun", "run", "mcp/server.ts"],
+			"enabled": true,
+			"env": {}
+		}
+	}
+}
