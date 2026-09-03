@@ -9,7 +9,7 @@
 - **git** 在 PATH 中（后端所有 git 操作走系统 CLI）
 - 可选：系统 `curl`（GitLab 远端分支增强；Windows 10+ 自带）
 - Tauri 2 系统依赖（Windows：WebView2 一般系统自带）
-- ⚠ `tauri.conf.json` 的 `beforeDevCommand/beforeBuildCommand` 配置为 `bun run dev/build`——直接 `npm run tauri dev` 需要机器装有 **bun**；否则先手动 `npm run dev` 起前端再跑 tauri（或把配置改成 npm，重构时建议直接对齐）
+- ✅ v2.0.0 起 `tauri.conf.json` 的 `beforeDevCommand/beforeBuildCommand` 已对齐 **npm**（`npm run dev` / `npm run build`），无需 bun
 
 ## 2. 常用命令
 
@@ -40,7 +40,7 @@ npm run tauri build          # 打包桌面应用（release 为 GUI 子系统，
 
 | 现象 | 处理 |
 | --- | --- |
-| `tauri dev` 报 bun 不存在 | 装 bun，或先 `npm run dev` 手动起前端后 `npm run tauri dev`（或改 tauri.conf.json 为 npm） |
+| ~~`tauri dev` 报 bun 不存在~~ | 已修复（v2.0.0 对齐 npm）；如仍报错检查 tauri.conf.json 的 beforeDevCommand |
 | 1420 端口被占用 | `strictPort` 直接失败；释放端口后重启 |
 | cargo 首次编译慢 | rusqlite bundled 首次编译 sqlite3 源码较慢（一次性） |
 | git 命令报「不是 git 仓库」 | 待办绑定的 repoPath 必须是 git 仓库根目录 |

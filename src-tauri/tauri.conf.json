@@ -1,20 +1,22 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "todo-kanban",
-  "version": "0.1.0",
-  "identifier": "com.tauri-app.todo-kanban",
+  "version": "2.0.0",
+  "identifier": "com.todo-kanban.app",
   "build": {
-    "beforeDevCommand": "bun run dev",
+    "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "bun run build",
+    "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },
   "app": {
     "windows": [
       {
         "title": "todo-kanban",
-        "width": 800,
-        "height": 600
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1024,
+        "minHeight": 700
       }
     ],
     "security": {

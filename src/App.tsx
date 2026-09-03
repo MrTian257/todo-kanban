@@ -1,51 +1,60 @@
-import { useState } from "react";
-import reactLogo from "./assets/react.svg";
-import { invoke } from "@tauri-apps/api/core";
-import "./App.css";
+// 路由根：HashRouter + ThemeProvider + TooltipProvider + Toaster + SidebarLayout
+// 副作用集中：initAppStore / startExternalSync / startGitCacheWarm / 皮肤初始化
 
-function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
+import { useEffect } from "react";
+import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
+import { ThemeProvider } from "next-themes";
+import { Toaster } from "sonner";
+import { SidebarLayout } from "@/components/layout/SidebarLayout";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { useAppStore, startExternalSync, startGitCacheWarm } from "@/lib/store";
+import { initSkin } from "@/lib/theme";
+import { BoardPage } from "@/pages/BoardPage";
+import { FocusPage } from "@/pages/FocusPage";
+import { ProjectListPage } from "@/pages/ProjectListPage";
+import { SettingsPage } from "@/pages/SettingsPage";
+import { TodoDetailPage } from "@/pages/TodoDetailPage";
+import { TodoListPage } from "@/pages/TodoListPage";
 
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
+function RootRedirect() {
+  const { projects, loaded } = useAppStore();
+  if (!loaded) {
+    return <div className="flex h-full items-center justify-center text-muted-foreground">加载中…</div>;
   }
-
-  return (
-    <main className="container">
-      <h1>Welcome to Tauri + React</h1>
-
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
-
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
-        />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
-    </main>
-  );
+  if (projects.length === 0) return <Navigate to="/projects" replace />;
+  return <Navigate to="/focus" replace />;
 }
 
-export default App;
+export default function App() {
+  const initAppStore = useAppStore((s) => s.initAppStore);
+
+  useEffect(() => {
+    initSkin();
+    void initAppStore().then(() => {
+      startExternalSync();
+      startGitCacheWarm();
+    });
+  }, [initAppStore]);
+
+  return (
+    <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
+      <TooltipProvider delayDuration={0}>
+        <Toaster position="top-center" richColors />
+        <HashRouter>
+          <SidebarLayout>
+            <Routes>
+              <Route path="/" element={<RootRedirect />} />
+              <Route path="/focus" element={<FocusPage />} />
+              <Route path="/todos" element={<TodoListPage />} />
+              <Route path="/projects" element={<ProjectListPage />} />
+              <Route path="/project/:projectId" element={<BoardPage />} />
+              <Route path="/project/:projectId/todo/:todoId" element={<TodoDetailPage />} />
+              <Route path="/settings" element={<SettingsPage />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </SidebarLayout>
+        </HashRouter>
+      </TooltipProvider>
+    </ThemeProvider>
+  );
+}
