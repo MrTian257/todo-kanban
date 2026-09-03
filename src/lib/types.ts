@@ -75,6 +75,8 @@ export interface Todo {
   startedAt: number | null;
   doneAt: number | null;
   commits: CommitInfo[];
+  /** 泳道内排序（v6；同泳道升序，重载保留） */
+  sortOrder: number;
   createdAt: number;
   updatedAt: number;
 }

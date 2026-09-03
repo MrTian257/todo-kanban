@@ -42,6 +42,7 @@ export function SwimlaneBoard({ projectId, onManageLanes }: Props) {
 
   const [draft, setDraft] = React.useState<Record<string, string[]> | null>(null);
   const [activeTodo, setActiveTodo] = React.useState<Todo | null>(null);
+  const todoById = React.useMemo(() => new Map(todos.map((t) => [t.id, t])), [todos]);
 
   const derive = React.useCallback((): Record<string, string[]> => {
     const out: Record<string, string[]> = {};
@@ -52,11 +53,20 @@ export function SwimlaneBoard({ projectId, onManageLanes }: Props) {
       if (laneId === undefined) continue;
       (out[laneId] ??= []).push(t.id);
     }
+    // 泳道内按 sortOrder 升序（同序按创建时间兜底）——拖拽排序持久化后重载可保留
+    for (const lane of lanes) {
+      const ids = out[lane.id] ?? [];
+      ids.sort((a, b) => {
+        const ta = todoById.get(a);
+        const tb = todoById.get(b);
+        if (!ta || !tb) return 0;
+        return (ta.sortOrder ?? 0) - (tb.sortOrder ?? 0) || ta.createdAt - tb.createdAt;
+      });
+    }
     return out;
-  }, [lanes, laneById, todos, projectId]);
+  }, [lanes, laneById, todos, projectId, todoById]);
 
   const items = draft ?? derive();
-  const todoById = React.useMemo(() => new Map(todos.map((t) => [t.id, t])), [todos]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),

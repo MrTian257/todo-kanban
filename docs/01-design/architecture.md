@@ -62,7 +62,7 @@
 | `tool/git_cli.rs` | `run_git` 执行器、`parse_commit_lines`（`%H%x1f%s%x1f%cI`，≤200 行）、`parse_branch_list`、`commit_branches`、`validate_branch_name` |
 | `tool/proc.rs` | `quiet_command`：构造子进程 Command；**Windows 附加 `CREATE_NO_WINDOW`（0x0800_0000）**——release GUI 壳下 spawn git/curl 不闪控制台黑框（std 默认不加该标志）；**统一超时：git 30s / curl 10s**（超时 kill 并返回中文错误，见非功能约定） |
 | `db/mod.rs` | `open`（WAL）、`init`（幂等建表，主路径）、`init_and_migrate`（旧 JSON 迁移，仅测试/参考）、`load_state` / `save_state`（**差异写** + seq/tag 收敛 + 提交全局去重 + `app_meta.next_seq` 全局取号）、`storage_fingerprint`（版本信号） |
-| `db/schema.rs` | DDL + 迁移（`user_version=5`：v2 `app_meta` 全局序号源；v3 `git_repo_cache`；v4 projects 增加 GitLab Token 两列；v5 projects 加 `swimlanes`、todos 加 `swimlane_id`） |
+| `db/schema.rs` | DDL + 迁移（`user_version=6`：v2 `app_meta`；v3 `git_repo_cache`；v4 GitLab Token 两列；v5 泳道列；v6 todos 加 `sort_order`） |
 | `db/row.rs` | 行 ↔ Db* 映射（commits/branch_rule 为 JSON 文本列；NULL 默认化） |
 | `db/legacy.rs` | 旧 `todo-git.state.json` 读取（仅首次迁移参考） |
 | `db/repo_cache.rs` | `git_repo_cache` 表行访问（upsert/get，含单测） |
@@ -92,7 +92,7 @@ App.tsx useEffect → initAppStore()
   → loadState()（lib/storage；仅 Tauri 环境有数据）
     → invoke("db_load_state") → svc/db_cmds::load_state(exe_dir)
       → resolve_db_path（db-config.txt 首行）→ 无数据源 → Ok(None) → 前端空态（提示生成数据文件）
-      → db::open(WAL) → db::init(user_version=5 迁移) → 指纹缓存命中即回 / 全量 SELECT → DbState
+      → db::open(WAL) → db::init(user_version=6 迁移) → 指纹缓存命中即回 / 全量 SELECT → DbState
       → normalize（lib/normalize.ts：字段补默认 + 提交全局去重兜底）
   → startExternalSync（2s 轮询 + focus 立即同步）
   → startGitCacheWarm（60s 预热 git 仓库信息缓存，仅桌面端）
@@ -155,6 +155,7 @@ App 启动后 startGitCacheWarm（60s）：收集项目/待办的所有仓库路
 | 提交唯一性全局去重 | 时间窗/标记/手动三条路径收敛，避免重复归属 |
 | 归档不展示（无恢复 UI） | 外部改库可恢复，2s 轮询感知（有意取舍） |
 | 泳道看板替换四象限（列=泳道绑状态、行=待办、项目自定义增删） | 状态是唯一事实源、泳道仅为状态分组容器；跨泳道拖拽 = swimlaneId+status 联动，避免双真相；quadrant 字段保留仅兼容 |
+| 泳道内排序持久化（todos.sort_order，v6） | 拖拽排序 0..n 分配落库；重载按 sortOrder 还原，同序按 createdAt 兜底 |
 | 补录时间窗从 createdAt 起 | 「从创建任务开始」收录该分支提交，不依赖是否点过开始 |
 | 浏览器模式无存储（空态） | 曾有 localStorage 双通道，已移除——桌面端 SQLite 是唯一存储 |
 | MCP 手写逐行 JSON-RPC（零 SDK） | 少依赖约定；stdout 仅协议帧、日志走 stderr |

@@ -159,6 +159,9 @@ pub struct DbTodo {
     pub done_at: Option<i64>,
     #[serde(default)]
     pub commits: Vec<DbCommitInfo>,
+    /// 泳道内排序（v6 新增；同泳道内升序，迁移按创建时间回填）
+    #[serde(default)]
+    pub sort_order: i64,
     pub created_at: i64,
     pub updated_at: i64,
 }

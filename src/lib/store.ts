@@ -76,6 +76,7 @@ function demoState(): AppState {
     startedAt: status === "doing" || status === "done" ? now - daysAgo * day : null,
     doneAt: status === "done" ? now - daysAgo * day + day : null,
     commits: [],
+    sortOrder: 0,
     createdAt: now - daysAgo * day,
     updatedAt: now - daysAgo * day,
   });
@@ -181,7 +182,14 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const newLane = [...ordered, ...rest];
     const ids = new Set(newLane.map((t) => t.id));
     const others = current.filter((t) => !ids.has(t.id));
-    set({ todos: [...others, ...newLane] });
+    // 排序持久化：按序分配 sortOrder（0..n），updatedAt 刷新触发差异写
+    const now = Date.now();
+    const withOrder = newLane.map((t, i) => ({
+      ...t,
+      sortOrder: i,
+      updatedAt: t.updatedAt !== now ? now : t.updatedAt,
+    }));
+    set({ todos: [...others, ...withOrder] });
   },
 
   saveSwimlanes: (projectId, lanes) => {

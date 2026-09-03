@@ -1,9 +1,9 @@
-//! DDL + 迁移。USER_VERSION = 5。
+//! DDL + 迁移。USER_VERSION = 6。
 //! 注意：SQLite 列序是硬契约——schema ↔ row ↔ mod 的 SELECT/INSERT 三处同步。
 
-pub const USER_VERSION: i64 = 5;
+pub const USER_VERSION: i64 = 6;
 
-/// 建表（新库直接完整 v5 形态；旧库缺列由 migrate 补）
+/// 建表（新库直接完整 v6 形态；旧库缺列由 migrate 补）
 pub fn create_tables(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
         "
@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS todos (
   started_at INTEGER,
   done_at INTEGER,
   commits TEXT NOT NULL DEFAULT '[]',
+  sort_order INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -116,6 +117,15 @@ pub fn migrate(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
             )?;
         }
     }
+    if version < 6 {
+        // v5 → v6：todos 补 sort_order（泳道内排序持久化）；存量按插入顺序回填
+        if !column_exists(conn, "todos", "sort_order")? {
+            conn.execute_batch(
+                "ALTER TABLE todos ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
+                 UPDATE todos SET sort_order = rowid WHERE sort_order = 0;",
+            )?;
+        }
+    }
 
     conn.execute_batch(&format!("PRAGMA user_version = {USER_VERSION};"))
 }
@@ -165,5 +175,45 @@ mod tests {
             })
             .unwrap();
         assert_eq!(lane, "swim-doing");
+    }
+
+    #[test]
+    fn migrate_v5_db_adds_sort_order() {
+        let conn = open_in_memory().unwrap();
+        // 模拟 v5 库
+        conn.execute_batch(
+            "CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL,
+               project_dir TEXT, frontend_dir TEXT, backend_dir TEXT,
+               frontend_repo_url TEXT, backend_repo_url TEXT, production_branch TEXT,
+               branch_rule TEXT, archived INTEGER, created_at INTEGER, updated_at INTEGER,
+               frontend_repo_token TEXT, backend_repo_token TEXT, swimlanes TEXT);
+             CREATE TABLE todos (id TEXT PRIMARY KEY, project_id TEXT, title TEXT,
+               note TEXT, repo_path TEXT, branch TEXT, status TEXT, swimlane_id TEXT,
+               quadrant TEXT, seq INTEGER, tag TEXT, start_date TEXT, end_date TEXT,
+               blocker TEXT, archived INTEGER, started_at INTEGER, done_at INTEGER,
+               commits TEXT, created_at INTEGER, updated_at INTEGER);
+             CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE git_repo_cache (repo_path TEXT PRIMARY KEY, repo_exists INTEGER,
+               is_repo INTEGER, current_branch TEXT, branches TEXT, error TEXT, fetched_at INTEGER);
+             INSERT INTO todos (id, project_id, title, created_at, updated_at)
+               VALUES ('t1','p1','任务A',1,1), ('t2','p1','任务B',2,2);
+             PRAGMA user_version = 5;",
+        )
+        .unwrap();
+        migrate(&conn).unwrap();
+        assert!(column_exists(&conn, "todos", "sort_order").unwrap());
+        let orders: Vec<i64> = conn
+            .prepare("SELECT sort_order FROM todos ORDER BY created_at")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(orders.len(), 2);
+        assert!(orders[0] > 0, "存量应回填非零 rowid 序");
+        let v: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, USER_VERSION);
     }
 }

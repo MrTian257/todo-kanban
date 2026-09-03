@@ -47,6 +47,7 @@ export function normalizeTodo(raw: Partial<Todo>, project?: Project): Todo {
     startedAt: raw.startedAt ?? null,
     doneAt: raw.doneAt ?? null,
     commits: Array.isArray(raw.commits) ? raw.commits : [],
+    sortOrder: raw.sortOrder ?? 0,
     createdAt: raw.createdAt ?? Date.now(),
     updatedAt: raw.updatedAt ?? Date.now(),
   };

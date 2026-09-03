@@ -13,8 +13,8 @@ fn parse_json_or<T: serde::de::DeserializeOwned>(raw: Option<String>, default: T
     }
 }
 
-/// todos 全字段 SELECT（20 列，列序勿动）
-pub const TODO_SELECT: &str = "SELECT id, project_id, title, note, repo_path, branch, status, swimlane_id, quadrant, seq, tag, start_date, end_date, blocker, archived, started_at, done_at, commits, created_at, updated_at FROM todos";
+/// todos 全字段 SELECT（21 列，列序勿动）
+pub const TODO_SELECT: &str = "SELECT id, project_id, title, note, repo_path, branch, status, swimlane_id, quadrant, seq, tag, start_date, end_date, blocker, archived, started_at, done_at, commits, sort_order, created_at, updated_at FROM todos";
 
 pub fn row_to_todo(row: &Row) -> AppResult<DbTodo> {
     Ok(DbTodo {
@@ -40,8 +40,9 @@ pub fn row_to_todo(row: &Row) -> AppResult<DbTodo> {
         started_at: row.get(15)?,
         done_at: row.get(16)?,
         commits: parse_json_or::<Vec<DbCommitInfo>>(row.get(17)?, Vec::new()),
-        created_at: row.get(18)?,
-        updated_at: row.get(19)?,
+        sort_order: row.get(18)?,
+        created_at: row.get(19)?,
+        updated_at: row.get(20)?,
     })
 }
 
@@ -69,19 +70,20 @@ pub fn todo_params(t: &DbTodo) -> Vec<Box<dyn rusqlite::ToSql>> {
         Box::new(t.started_at),
         Box::new(t.done_at),
         Box::new(serde_json::to_string(&t.commits).unwrap_or_else(|_| "[]".into())),
+        Box::new(t.sort_order),
         Box::new(t.created_at),
         Box::new(t.updated_at),
     ]
 }
 
-pub const TODO_UPSERT: &str = "INSERT INTO todos (id, project_id, title, note, repo_path, branch, status, swimlane_id, quadrant, seq, tag, start_date, end_date, blocker, archived, started_at, done_at, commits, created_at, updated_at)
-  VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)
+pub const TODO_UPSERT: &str = "INSERT INTO todos (id, project_id, title, note, repo_path, branch, status, swimlane_id, quadrant, seq, tag, start_date, end_date, blocker, archived, started_at, done_at, commits, sort_order, created_at, updated_at)
+  VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)
   ON CONFLICT(id) DO UPDATE SET title=excluded.title, note=excluded.note, repo_path=excluded.repo_path,
     branch=excluded.branch, status=excluded.status, swimlane_id=excluded.swimlane_id,
     quadrant=excluded.quadrant, seq=excluded.seq, tag=excluded.tag,
     start_date=excluded.start_date, end_date=excluded.end_date, blocker=excluded.blocker,
     archived=excluded.archived, started_at=excluded.started_at, done_at=excluded.done_at,
-    commits=excluded.commits, updated_at=excluded.updated_at
+    commits=excluded.commits, sort_order=excluded.sort_order, updated_at=excluded.updated_at
   WHERE excluded.updated_at >= todos.updated_at";
 
 /// projects 全字段 SELECT（15 列，列序勿动）

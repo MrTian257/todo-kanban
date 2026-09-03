@@ -14,7 +14,7 @@
 | --- | --- | --- |
 | [01-design/product-design.md](01-design/product-design.md) | 产品/需求 | 产品定位、需求演进、功能清单、关键交互流程、主题皮肤 |
 | [01-design/architecture.md](01-design/architecture.md) | 架构 | 技术栈、前后端分层、Cargo workspace、进程模型（含 MCP）、数据流、关键决策（ADR） |
-| [01-design/data-model.md](01-design/data-model.md) | 数据 | 前端类型 ↔ Rust Db* 对齐、SQLite schema（v5 全量）、存取语义、迁移策略 |
+| [01-design/data-model.md](01-design/data-model.md) | 数据 | 前端类型 ↔ Rust Db* 对齐、SQLite schema（v6 全量）、存取语义、迁移策略 |
 | [01-design/ui-design.md](01-design/ui-design.md) | UI | 路由（6 页）、侧边导航、泳道看板、待办详情页、表单、主题机制 |
 | [02-development/quick-start.md](02-development/quick-start.md) | 新人 | 环境准备、常用命令、首次运行（数据源生成）、常见问题 |
 | [02-development/directory-map.md](02-development/directory-map.md) | 开发者 | 前端/后端/MCP 目录与文件地图、「去哪里改」速查 |
@@ -38,7 +38,7 @@
 
 - **前端**：React 19 + TypeScript(strict)、Vite 7、shadcn/ui（radix-nova，基元勿手改）、Tailwind CSS v4（`@tailwindcss/vite`，无 tailwind.config）、zustand v5、React Router 7（**HashRouter**）、dnd-kit（core/sortable/utilities）、react-resizable-panels v4、react-hook-form + zod、react-day-picker v10、next-themes、sonner、lucide-react、markdown-it + turndown（WYSIWYG 备注）
 - **后端**：Tauri 2、Rust（workspace：薄壳 crate `todo-git` + 纯逻辑库 `todo-git-core` + `mcp-server`）、rusqlite（bundled，WAL）、系统 git CLI、系统 curl（GitLab API）
-- **存储**：桌面端 SQLite（位置由**程序运行目录 `db-config.txt` 指示文件**指定，schema `user_version=5`）；浏览器预览模式**无本地存储**（空态展示；旧 localStorage 双通道已移除）
+- **存储**：桌面端 SQLite（位置由**程序运行目录 `db-config.txt` 指示文件**指定，schema `user_version=6`）；浏览器预览模式**无本地存储**（空态展示；旧 localStorage 双通道已移除）
 - **扩展**：`src-tauri/mcp-server`（stdio MCP server）：9 tools + 3 resources，复用 `todo-git-core::svc`，零 tauri 依赖，`MCP_TODO_READONLY=1` 一键只读
 
 ## 与 todo-git 原文档的映射
