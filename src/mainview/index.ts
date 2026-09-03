@@ -13,6 +13,18 @@ interface Project {
 	updated_at: string;
 }
 
+interface ProjectWithStats extends Project {
+	total: number;
+	todo: number;
+	doing: number;
+	done: number;
+}
+
+interface Snapshot {
+	projects: ProjectWithStats[];
+	tasks: Task[];
+}
+
 interface Task {
 	id: number;
 	project_id: number;
@@ -111,14 +123,21 @@ type TodoRPC = {
 	};
 	webview: {
 		requests: {};
-		messages: {};
+		messages: {
+			dataChanged: Snapshot;
+		};
 	};
 };
 
 function createRpcApi(): KanbanApi {
 	const rpc = Electroview.defineRPC<TodoRPC>({
 		maxRequestTime: 5000,
-		handlers: { requests: {}, messages: {} },
+		handlers: {
+			requests: {},
+			messages: {
+				dataChanged: (snap) => applySnapshot(snap),
+			},
+		},
 	});
 	const electrobun = new Electrobun.Electroview({ rpc });
 	const req = electrobun.rpc!.request;
@@ -537,6 +556,22 @@ async function reload(): Promise<void> {
 		tasks = await api.getTasks({ projectId: currentProjectId });
 		countsByProject.set(currentProjectId, tasks.length);
 	}
+	renderHeader();
+	renderSidebar();
+	renderBoard();
+}
+
+// Live data push from the bun main process (MCP writes land in the same DB
+// behind the view's back). Rebuild local state from the snapshot and render.
+function applySnapshot(snap: Snapshot): void {
+	// Never clobber the DOM mid-drag; the next poll catches up.
+	if (draggedId !== null) return;
+	projects = snap.projects;
+	countsByProject = new Map(snap.projects.map((p) => [p.id, p.total] as const));
+	if (currentProjectId !== null && !snap.projects.some((p) => p.id === currentProjectId)) {
+		currentProjectId = snap.projects.length > 0 ? snap.projects[0]!.id : null;
+	}
+	tasks = currentProjectId !== null ? snap.tasks.filter((t) => t.project_id === currentProjectId) : [];
 	renderHeader();
 	renderSidebar();
 	renderBoard();

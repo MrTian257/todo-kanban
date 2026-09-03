@@ -1,5 +1,13 @@
 import { BrowserView, BrowserWindow, type RPCSchema } from "electrobun/bun";
-import { createStore, openKanbanDb, resolveDbPath, type Project, type Stats, type Task } from "../../shared/db";
+import {
+	createStore,
+	openKanbanDb,
+	resolveDbPath,
+	type Project,
+	type Snapshot,
+	type Stats,
+	type Task,
+} from "../../shared/db";
 
 // Shared SQLite database — same file the MCP server uses (see shared/db.ts)
 const db = openKanbanDb(resolveDbPath());
@@ -52,7 +60,9 @@ type TodoRPC = {
 	}>;
 	webview: RPCSchema<{
 		requests: {};
-		messages: {};
+		messages: {
+			dataChanged: Snapshot;
+		};
 	}>;
 };
 
@@ -90,6 +100,26 @@ const todoRPC = BrowserView.defineRPC<TodoRPC>({
 		messages: {},
 	},
 });
+
+// ─── Live push: poll the DB and push snapshots to the webview on change ───
+// MCP writes land in the same SQLite file behind the app's back, so the
+// view has no way to know about them. Poll for changes and push them over
+// the RPC `dataChanged` message; nothing is sent when the data is unchanged.
+const pushIntervalMs = Number(process.env["KANBAN_PUSH_INTERVAL_MS"] ?? 3000);
+let lastSnapshotSig = "";
+
+setInterval(() => {
+	try {
+		const snap = store.snapshot();
+		const sig = JSON.stringify(snap);
+		if (sig !== lastSnapshotSig) {
+			lastSnapshotSig = sig;
+			todoRPC.send.dataChanged(snap);
+		}
+	} catch (err) {
+		console.error("[push] failed:", err);
+	}
+}, pushIntervalMs);
 
 const mainWindow = new BrowserWindow({
 	title: "可拖拽项目看板",

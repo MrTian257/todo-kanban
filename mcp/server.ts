@@ -8,7 +8,6 @@
  * Run:  bun run mcp/server.ts
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import {
 	createStore,
@@ -298,9 +297,108 @@ server.registerTool(
 	(args) => guard(() => store.getStats(args.project_id)),
 );
 
+// ─── Encoding-aware stdio transport ───────────────────────────────────────
+//
+// JSON-RPC over stdio is UTF-8 by spec, but MCP clients spawned from a
+// Chinese-Windows console (codepage 936) sometimes emit GBK bytes on stdin
+// (this used to corrupt every non-ASCII char into U+FFFD before it hit the
+// DB). We read raw bytes and decode each newline-delimited message with
+// strict UTF-8 first, falling back to GBK. Outgoing messages escape every
+// non-ASCII char as \uXXXX so the byte stream is pure ASCII — decoded
+// correctly by both UTF-8 and GBK clients alike.
+
+const utf8Strict = new TextDecoder("utf-8", { fatal: true });
+const gbkDecoder = new TextDecoder("gbk");
+
+// Per-message detection (no session state): a strict UTF-8 decode is always
+// tried first; GBK bytes fail it and fall back to GBK. A GBK message whose
+// bytes all happen to form valid UTF-8 is the only blind spot — effectively
+// impossible once the line contains any Chinese text.
+function decodeIncoming(bytes: Uint8Array): string {
+	try {
+		return utf8Strict.decode(bytes);
+	} catch {
+		return gbkDecoder.decode(bytes);
+	}
+}
+
+function escapeNonAscii(s: string): string {
+	let out = "";
+	for (let i = 0; i < s.length; i++) {
+		const code = s.charCodeAt(i);
+		out += code >= 0x20 && code <= 0x7e ? s[i]! : `\\u${code.toString(16).padStart(4, "0")}`;
+	}
+	return out;
+}
+
+/** Minimal structural match of the SDK's Transport (not exported via package map). */
+interface MinimalTransport {
+	start(): Promise<void>;
+	send(message: unknown): Promise<void>;
+	close(): Promise<void>;
+	onclose?: () => void;
+	onerror?: (error: Error) => void;
+	onmessage?: (message: unknown) => void;
+}
+
+class EncodingAwareStdioTransport implements MinimalTransport {
+	onclose?: () => void;
+	onerror?: (error: Error) => void;
+	onmessage?: (message: unknown) => void;
+
+	private buf = Buffer.alloc(0);
+	private started = false;
+
+	start(): Promise<void> {
+		if (this.started) throw new Error("transport already started");
+		this.started = true;
+		process.stdin.on("data", (chunk: Buffer) => {
+			this.buf = Buffer.concat([this.buf, chunk]);
+			this.drain();
+		});
+		process.stdin.on("end", () => this.onclose?.());
+		return Promise.resolve();
+	}
+
+	private drain(): void {
+		let idx: number;
+		while ((idx = this.buf.indexOf(0x0a)) !== -1) {
+			const line = this.buf.subarray(0, idx);
+			this.buf = this.buf.subarray(idx + 1);
+			if (line.length > 0 && line[line.length - 1] === 0x0d) {
+				// strip trailing \r for CRLF clients
+				this.dispatch(line.subarray(0, line.length - 1));
+			} else {
+				this.dispatch(line);
+			}
+		}
+	}
+
+	private dispatch(line: Uint8Array): void {
+		if (line.length === 0) return;
+		try {
+			this.onmessage?.(JSON.parse(decodeIncoming(line)));
+		} catch (error) {
+			this.onerror?.(error instanceof Error ? error : new Error(String(error)));
+		}
+	}
+
+	send(message: unknown): Promise<void> {
+		// Pure-ASCII output: JSON with every non-ASCII char escaped as \uXXXX.
+		process.stdout.write(escapeNonAscii(JSON.stringify(message)) + "\n");
+		return Promise.resolve();
+	}
+
+	close(): Promise<void> {
+		process.stdin.removeAllListeners("data");
+		this.onclose?.();
+		return Promise.resolve();
+	}
+}
+
 // ─── Boot ─────────────────────────────────────────────────────────────────
 
-const transport = new StdioServerTransport();
+const transport = new EncodingAwareStdioTransport();
 await server.connect(transport);
 
 // eslint-disable-next-line no-console

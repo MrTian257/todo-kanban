@@ -336,7 +336,12 @@ var browser_default = Electrobun;
 function createRpcApi() {
   const rpc = Electroview.defineRPC({
     maxRequestTime: 5000,
-    handlers: { requests: {}, messages: {} }
+    handlers: {
+      requests: {},
+      messages: {
+        dataChanged: (snap) => applySnapshot(snap)
+      }
+    }
   });
   const electrobun = new browser_default.Electroview({ rpc });
   const req = electrobun.rpc.request;
@@ -696,6 +701,19 @@ async function reload() {
     tasks = await api.getTasks({ projectId: currentProjectId });
     countsByProject.set(currentProjectId, tasks.length);
   }
+  renderHeader();
+  renderSidebar();
+  renderBoard();
+}
+function applySnapshot(snap) {
+  if (draggedId !== null)
+    return;
+  projects = snap.projects;
+  countsByProject = new Map(snap.projects.map((p) => [p.id, p.total]));
+  if (currentProjectId !== null && !snap.projects.some((p) => p.id === currentProjectId)) {
+    currentProjectId = snap.projects.length > 0 ? snap.projects[0].id : null;
+  }
+  tasks = currentProjectId !== null ? snap.tasks.filter((t) => t.project_id === currentProjectId) : [];
   renderHeader();
   renderSidebar();
   renderBoard();

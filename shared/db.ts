@@ -71,6 +71,12 @@ export interface Stats {
 	done: number;
 }
 
+/** Full DB snapshot used by the app's live-push (dataChanged) RPC message. */
+export interface Snapshot {
+	projects: ProjectWithStats[];
+	tasks: Task[];
+}
+
 export type KanbanStore = ReturnType<typeof createStore>;
 
 // ─── DB path resolution (shared by app process AND MCP server) ───────────
@@ -454,6 +460,11 @@ export function createStore(db: Database) {
 		return { success: deleteTaskStmt.run(id).changes > 0 };
 	}
 
+	/** Full snapshot for the app's live-push polling (projects + all tasks). */
+	function snapshot(): Snapshot {
+		return { projects: listProjects(), tasks: listTasks() };
+	}
+
 	function getStats(projectId?: number): Stats {
 		const projects = countProjectsStmt.get()?.n ?? 0;
 		let total: number;
@@ -489,6 +500,7 @@ export function createStore(db: Database) {
 		moveTask,
 		deleteTask,
 		getStats,
+		snapshot,
 		// helpers used by RPC/view layer
 		columnFields: PROJECT_FIELDS,
 		ensureSeed: () => seedIfEmpty(db),

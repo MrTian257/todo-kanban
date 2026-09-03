@@ -13,13 +13,13 @@
 
 ## 技术栈
 
-| 层 | 技术 |
-|---|---|
-| 视图 | 原生 HTML/CSS/TS + `electrobun/view` RPC |
-| 桌面主进程 | `electrobun/bun` + `BrowserView.defineRPC` |
-| 数据层 | Bun 内置 `bun:sqlite`(WAL + 外键) |
-| MCP | `@modelcontextprotocol/sdk` + `zod`(stdio 传输) |
-| 测试 | `bun test`(DB / MCP / 视图 harness) |
+| 层     | 技术                                            |
+| ----- | --------------------------------------------- |
+| 视图    | 原生 HTML/CSS/TS + `electrobun/view` RPC        |
+| 桌面主进程 | `electrobun/bun` + `BrowserView.defineRPC`    |
+| 数据层   | Bun 内置 `bun:sqlite`(WAL + 外键)                 |
+| MCP   | `@modelcontextprotocol/sdk` + `zod`(stdio 传输) |
+| 测试    | `bun test`(DB / MCP / 视图 harness)             |
 
 ## 架构
 
@@ -96,25 +96,25 @@ tasks(id, project_id FK→projects ON DELETE CASCADE,
 
 **数据库路径**(`shared/db.ts` 解析):
 
-| 环境 | 路径 |
-|---|---|
-| `KANBAN_DB_PATH` 已设置 | 使用该路径 |
-| Windows | `%APPDATA%\todo-kanban\kanban.db` |
-| macOS | `~/Library/Application Support/todo-kanban/kanban.db` |
-| Linux | `$XDG_DATA_HOME/todo-kanban/kanban.db` |
+| 环境                   | 路径                                                    |
+| -------------------- | ----------------------------------------------------- |
+| `KANBAN_DB_PATH` 已设置 | 使用该路径                                                 |
+| Windows              | `%APPDATA%\todo-kanban\kanban.db`                     |
+| macOS                | `~/Library/Application Support/todo-kanban/kanban.db` |
+| Linux                | `$XDG_DATA_HOME/todo-kanban/kanban.db`                |
 
 ## MCP 集成
 
 MCP 服务器提供 12 个工具,与桌面应用**共享同一数据库**,AI 的增删改查实时反映在看板上。详见 [`mcp/README.md`](mcp/README.md)。
 
-| 工具 | 关键参数 |
-|---|---|
-| `list_projects` / `create_project` / `update_project` / `delete_project` | `name`(必填)/ `id` |
-| `list_tasks` / `get_task` | `project_id` **或** `project_name`(二选一)/ `id` |
-| `create_task` / `update_task` | 项目标识 + `title`(必填非空)/ `id` |
-| `update_task_status` | **`id`**(不是 `task_id`)+ `status` |
-| `move_task` | `id` + `status?` + `before_id?`(列内排序) |
-| `delete_task` / `get_stats` | `id` / `project_id?` |
+| 工具                                                                       | 关键参数                                         |
+| ------------------------------------------------------------------------ | -------------------------------------------- |
+| `list_projects` / `create_project` / `update_project` / `delete_project` | `name`(必填)/ `id`                             |
+| `list_tasks` / `get_task`                                                | `project_id` **或** `project_name`(二选一)/ `id` |
+| `create_task` / `update_task`                                            | 项目标识 + `title`(必填非空)/ `id`                   |
+| `update_task_status`                                                     | **`id`**(不是 `task_id`)+ `status`             |
+| `move_task`                                                              | `id` + `status?` + `before_id?`(列内排序)        |
+| `delete_task` / `get_stats`                                              | `id` / `project_id?`                         |
 
 ### opencode 注册
 
@@ -125,7 +125,7 @@ MCP 服务器提供 12 个工具,与桌面应用**共享同一数据库**,AI 的
   "mcp": {
     "todo-kanban": {
       "type": "local",
-      "command": ["bun", "run", "C:/workspace/desktop/可拖拽代办/todo-kanban/mcp/server.ts"],
+      "command": ["bun", "run", "C:/workspace/desktop/todo-kanban/mcp/server.ts"],
       "enabled": true
     }
   }

@@ -187,3 +187,30 @@ describe("schema + seed (S5)", () => {
 		expect(stats.total).toBe(2);
 	});
 });
+
+describe("snapshot (S6)", () => {
+	test("snapshot returns projects with stats and all tasks", () => {
+		const p = store.createProject({ name: "快照项目" });
+		store.createTask({ projectId: p.id, title: "任务甲" });
+		const t2 = store.createTask({ projectId: p.id, title: "任务乙", status: "done" });
+		store.createTask({ projectId: p.id, title: "任务丙", assignee: "张三" });
+
+		const snap = store.snapshot();
+		const proj = snap.projects.find((x) => x.id === p.id);
+		expect(proj).toBeDefined();
+		expect(proj!.total).toBe(3);
+		expect(proj!.todo).toBe(2);
+		expect(proj!.done).toBe(1);
+		const mine = snap.tasks.filter((t) => t.project_id === p.id);
+		expect(mine.length).toBe(3);
+		expect(mine.some((t) => t.id === t2.id && t.status === "done")).toBe(true);
+	});
+
+	test("snapshot is stable across calls when data is unchanged", () => {
+		const p = store.createProject({ name: "稳定快照" });
+		store.createTask({ projectId: p.id, title: "A" });
+		const s1 = store.snapshot();
+		const s2 = store.snapshot();
+		expect(JSON.stringify(s1)).toBe(JSON.stringify(s2));
+	});
+});

@@ -54,6 +54,7 @@ function startServer(): Promise<void> {
 
 let nextId = 1;
 const pending = new Map<number, (r: RpcResponse) => void>();
+const rawLines: string[] = [];
 
 function request(method: string, params: unknown): Promise<RpcResponse> {
 	const id = nextId++;
@@ -89,6 +90,7 @@ beforeAll(async () => {
 				const line = buf.slice(0, nl).trim();
 				buf = buf.slice(nl + 1);
 				if (!line) continue;
+				rawLines.push(line);
 				try {
 					const msg = JSON.parse(line) as RpcResponse;
 					if (typeof msg.id === "number") {
@@ -334,5 +336,77 @@ describe("move/delete/stats (S2/S4)", () => {
 		const result = res.result as { isError?: boolean; content?: Array<{ text?: string }> };
 		expect(result.isError).toBe(true);
 		expect(result.content?.[0]?.text ?? "").toMatch(/not found/i);
+	});
+});
+
+// ── GBK encoding helper: invert the GBK decoder (Bun has no GBK encoder) ──
+
+function buildGbkEncoder(): (s: string) => Uint8Array {
+	const dec = new TextDecoder("gbk");
+	const map = new Map<string, Uint8Array>();
+	for (let b = 0; b < 256; b++) map.set(dec.decode(Uint8Array.of(b)), Uint8Array.of(b));
+	for (let hi = 0x81; hi <= 0xfe; hi++) {
+		for (let lo = 0x40; lo <= 0xfe; lo++) {
+			if (lo === 0x7f) continue;
+			const bytes = Uint8Array.of(hi, lo);
+			const ch = dec.decode(bytes);
+			if (ch.length === 1 && !map.has(ch)) map.set(ch, bytes);
+		}
+	}
+	return (s: string): Uint8Array => {
+		const parts: Uint8Array[] = [];
+		for (const ch of s) parts.push(map.get(ch) ?? new TextEncoder().encode(ch));
+		let total = 0;
+		for (const p of parts) total += p.length;
+		const out = new Uint8Array(total);
+		let off = 0;
+		for (const p of parts) {
+			out.set(p, off);
+			off += p.length;
+		}
+		return out;
+	};
+}
+
+describe("GBK input (Chinese-Windows clients) (S7)", () => {
+	const gbkEncode = buildGbkEncoder();
+	const GBK_ID = 9001;
+
+	test("GBK-encoded create_project round-trips correctly; response is pure ASCII", async () => {
+		const name = "GBK中文项目";
+		const description = "来自GBK客户端的描述";
+		const msg = JSON.stringify({
+			jsonrpc: "2.0",
+			id: GBK_ID,
+			method: "tools/call",
+			params: { name: "create_project", arguments: { name, description } },
+		});
+		const line = Buffer.concat([Buffer.from(gbkEncode(msg)), Buffer.from("\n")]);
+		proc.stdin.write(line);
+
+		const res = await new Promise<RpcResponse>((resolve, reject) => {
+			pending.set(GBK_ID, resolve);
+			setTimeout(() => {
+				if (pending.delete(GBK_ID)) reject(new Error("timeout waiting for GBK create_project"));
+			}, 15000);
+		});
+		expect(res.error).toBeUndefined();
+		const text = (res.result as { content: Array<{ type: string; text?: string }> }).content[0]!.text ?? "";
+		const project = parseJson<{ id: number; name: string; description: string }>(text);
+		expect(project.name).toBe(name);
+		expect(project.description).toBe(description);
+
+		// The raw bytes on the wire must be pure ASCII (every non-ASCII char
+		// escaped as \uXXXX), so both UTF-8 and GBK clients decode them fine.
+		const raw = rawLines.find((l) => l.includes(`"id":${GBK_ID}`));
+		expect(raw).toBeDefined();
+		expect(raw!).not.toMatch(/[^\x20-\x7E]/);
+		expect(raw!).toContain("\\u4e2d"); // 中 escaped (lowercase hex)
+
+		// and the stored data is clean in the DB via a normal UTF-8 client
+		const list = parseJson<Array<{ id: number; name: string }>>(
+			(await callTool("list_projects", {})).text,
+		);
+		expect(list.some((p) => p.id === project.id && p.name === name)).toBe(true);
 	});
 });
