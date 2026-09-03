@@ -40,6 +40,7 @@ fn resolve_db_path() -> AppResult<Option<PathBuf>> {
             if cfg_file.exists() {
                 let content = std::fs::read_to_string(&cfg_file)?;
                 let first = content.lines().next().map(|l| l.trim()).unwrap_or("");
+                let first = first.trim_start_matches('\u{feff}'); // 兼容 UTF-8 BOM
                 if !first.is_empty() {
                     let p = PathBuf::from(first);
                     return Ok(Some(if p.is_absolute() { p } else { dir.join(p) }));

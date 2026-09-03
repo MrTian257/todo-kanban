@@ -34,7 +34,7 @@
   - 默认三列：待办 / 进行中 / 已完成（依次绑定 todo / doing / done）；一状态可拆多泳道（如「已完成 / 已发布」）；列顺序 = `sortOrder`
   - 泳道列配色随绑定状态（status 色条），皮肤变量驱动（不用硬编码色）
 - 拖拽：dnd-kit（PointerSensor 激活距离 6px）——`SwimlaneBoard` 本地 `items: Record<swimlaneId, string[]>` 驱动渲染与拖拽定位
-  - 泳道内重排：`commit()` 经 `commitOrder` 落库（保留相对顺序）；**跨泳道拖拽 = `patchTodo({ swimlaneId, status })`**（status 取目标泳道绑定状态）落库
+  - 泳道内重排：`commit()` 经 `commitOrder` 落库（保留相对顺序，**sortOrder 0..n 持久化，重载还原**）；**跨泳道拖拽 = `patchTodo({ swimlaneId, status })`**（status 取目标泳道绑定状态）落库
   - DragOverlay 拖拽浮层；已归档不展示；禁止只改本地状态不落库
 - 新建/编辑待办：**跳转待办详情页**（`navigate("/project/:id/todo/new?swimlane=x" | "/project/:id/todo/:todoId")`）
 - **泳道管理对话框**：新增（名称 + 绑定状态）/ 改名 / 拖拽排序 / 删除（其下待办迁移至同状态剩余第一个泳道，删除需二次确认）；保存即 `projects.swimlanes` 落库

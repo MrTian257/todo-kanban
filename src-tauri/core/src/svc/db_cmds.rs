@@ -36,6 +36,9 @@ pub fn resolve_db_path() -> AppResult<Option<PathBuf>> {
     }
     let content = std::fs::read_to_string(&cfg).map_err(AppError::Io)?;
     let first = content.lines().next().map(|l| l.trim()).unwrap_or("");
+    // 兼容 UTF-8 BOM（Windows 记事本/PowerShell Set-Content 默认带 BOM 写入）
+    let first = first.trim_start_matches('\u{feff}');
+    let first = first.trim();
     if first.is_empty() {
         return Ok(None);
     }
