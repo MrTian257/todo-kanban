@@ -18,7 +18,7 @@ import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable"
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAppStore } from "@/lib/store";
-import { STATUS_LABEL, Todo, TodoStatus } from "@/lib/types";
+import { Todo, TodoStatus } from "@/lib/types";
 import { TodoRow } from "./TodoRow";
 import { cn } from "@/lib/utils";
 
@@ -28,9 +28,9 @@ interface Props {
 }
 
 const LANE_COLOR: Record<TodoStatus, string> = {
-  todo: "border-t-blue-500",
-  doing: "border-t-amber-500",
-  done: "border-t-emerald-500",
+  todo: "text-node-todo",
+  doing: "text-node-doing",
+  done: "text-node-done",
 };
 
 export function SwimlaneBoard({ projectId, onManageLanes }: Props) {
@@ -42,6 +42,9 @@ export function SwimlaneBoard({ projectId, onManageLanes }: Props) {
 
   const [draft, setDraft] = React.useState<Record<string, string[]> | null>(null);
   const [activeTodo, setActiveTodo] = React.useState<Todo | null>(null);
+  // 拖拽起始泳道（dragStart 时记录；dragOver 会把 item 移入 draft 的目标泳道，
+  // dragEnd 时再查 findLaneOf 会得到目标泳道 → 源/目标相同 → 跨泳道 patchTodo 永不执行）
+  const [originLane, setOriginLane] = React.useState<string | null>(null);
   const todoById = React.useMemo(() => new Map(todos.map((t) => [t.id, t])), [todos]);
 
   const derive = React.useCallback((): Record<string, string[]> => {
@@ -81,6 +84,7 @@ export function SwimlaneBoard({ projectId, onManageLanes }: Props) {
 
   const handleDragStart = (e: DragStartEvent) => {
     setActiveTodo(todoById.get(String(e.active.id)) ?? null);
+    setOriginLane(findLaneOf(String(e.active.id)));
   };
 
   const handleDragOver = (e: DragOverEvent) => {
@@ -107,19 +111,23 @@ export function SwimlaneBoard({ projectId, onManageLanes }: Props) {
     setActiveTodo(null);
     if (!over) {
       setDraft(null);
+      setOriginLane(null);
       return;
     }
     const overId = String(over.id);
-    const fromLane = findLaneOf(activeId);
+    // 源泳道取拖拽起点记录（draft 中 item 已被 dragOver 移到目标泳道，不可靠）
+    const fromLane = originLane;
     let toLane: string | null = overId.startsWith("lane-") ? overId.slice(5) : findLaneOf(overId);
     if (!fromLane) {
       setDraft(null);
+      setOriginLane(null);
       return;
     }
     const targetLane = toLane ? laneById.get(toLane) : undefined;
     const todo = todoById.get(activeId);
     if (!todo) {
       setDraft(null);
+      setOriginLane(null);
       return;
     }
     // 落定顺序（在 draft 或源 items 上操作）
@@ -129,7 +137,8 @@ export function SwimlaneBoard({ projectId, onManageLanes }: Props) {
     const moved = list.filter((id) => id !== activeId);
     const overIndex = list.indexOf(overId);
     if (toLane && toLane !== fromLane) {
-      const targetList = [...(next[toLane] ?? [])];
+      // dragOver 阶段可能已把 activeId 插入 targetList → 先移除再插入，避免重复
+      const targetList = [...(next[toLane] ?? [])].filter((id) => id !== activeId);
       const idx = targetList.indexOf(overId);
       targetList.splice(idx >= 0 ? idx : targetList.length, 0, activeId);
       next[toLane] = targetList;
@@ -139,6 +148,7 @@ export function SwimlaneBoard({ projectId, onManageLanes }: Props) {
       next[fromLane] = moved;
     }
     setDraft(null);
+    setOriginLane(null);
 
     // 跨泳道 = 修改归属（泳道绑定状态 → 同步 status），落库
     if (toLane && toLane !== fromLane && targetLane) {
@@ -163,6 +173,7 @@ export function SwimlaneBoard({ projectId, onManageLanes }: Props) {
       onDragCancel={() => {
         setDraft(null);
         setActiveTodo(null);
+        setOriginLane(null);
       }}
     >
       <div className="flex h-full gap-3 overflow-x-auto p-1">
@@ -228,18 +239,50 @@ function LaneColumn({
     <div
       ref={setNodeRef}
       className={cn(
-        "flex h-full w-72 shrink-0 flex-col rounded-lg border bg-muted/30 border-t-2",
-        LANE_COLOR[status],
+        "flex h-full w-72 shrink-0 flex-col rounded-lg border bg-muted/25",
         isOver && "ring-2 ring-primary/50",
       )}
     >
-      <div className="flex items-center justify-between px-3 py-2">
-        <span className="text-sm font-semibold">{title}</span>
-        <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-          {count} · {STATUS_LABEL[status]}
+      <div className="flex items-baseline justify-between px-3 pb-1.5 pt-2.5">
+        <span className="flex items-center gap-1.5 text-sm font-medium">
+          <StatusNode status={status} className="h-2 w-2" />
+          {title}
+        </span>
+        <span className="font-mono text-xs tabular-nums text-muted-foreground">
+          {String(count).padStart(2, "0")}
         </span>
       </div>
       <div className="flex-1 overflow-y-auto px-2 pb-2">{children}</div>
     </div>
+  );
+}
+
+/** git graph 状态节点：空心=待办，实心=进行中，叉=完成 */
+export function StatusNode({ status, className }: { status: TodoStatus; className?: string }) {
+  if (status === "done") {
+    return (
+      <svg viewBox="0 0 8 8" className={cn(LANE_COLOR[status], className)} aria-hidden>
+        <path
+          d="M1 1 L7 7 M7 1 L1 7"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          strokeLinecap="round"
+          fill="none"
+        />
+      </svg>
+    );
+  }
+  return (
+    <svg viewBox="0 0 8 8" className={cn(LANE_COLOR[status], className)} aria-hidden>
+      {status === "doing" && <circle cx="4" cy="4" r="3" fill="currentColor" />}
+      <circle
+        cx="4"
+        cy="4"
+        r="3"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={status === "doing" ? 0 : 1.6}
+      />
+    </svg>
   );
 }

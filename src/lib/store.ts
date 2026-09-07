@@ -5,7 +5,7 @@
 import { create } from "zustand";
 import { AppState, Project, Swimlane, Todo } from "./types";
 import { isTauri, loadState, saveState } from "./storage";
-import { normalizeState } from "./normalize";
+import { normalizeProject, normalizeState } from "./normalize";
 import { gitInfoCached } from "./git";
 
 // ── 串行写链 ───────────────────────────────────────────
@@ -137,7 +137,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
 
   upsertProject: (p) => {
-    const projects = [...get().projects.filter((x) => x.id !== p.id), p];
+    // normalize 兜底：新建项目 swimlanes=null → 默认三泳道，避免看板/待办页空列
+    const norm = normalizeProject(p);
+    const projects = [...get().projects.filter((x) => x.id !== p.id), norm];
     set({ projects });
   },
 

@@ -22,22 +22,21 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
       {/* 侧栏 */}
       <aside className="flex h-full w-56 shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground">
         <div
-          className="flex h-14 cursor-pointer items-center gap-2 border-b px-4 font-semibold"
+          className="flex h-14 cursor-pointer items-center gap-2.5 border-b px-4"
           onClick={() => navigate("/")}
         >
-          <KanbanSquare className="h-5 w-5 text-sidebar-primary" />
-          <span>todo-kanban</span>
+          <KanbanSquare className="h-4 w-4 text-sidebar-primary" />
+          <span className="font-mono text-sm font-medium tracking-tight">todo-kanban</span>
         </div>
 
-        <nav className="flex-1 space-y-1 p-2">
-          <div className="px-3 pb-1 text-xs font-medium text-muted-foreground">工作台</div>
+        <nav className="flex-1 space-y-0.5 p-2">
           {NAV_ITEMS.map(({ to, label, icon: Icon }) => (
             <NavLink
               key={to}
               to={to}
               className={({ isActive }) =>
                 cn(
-                  "flex items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors",
+                  "flex items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors",
                   isActive
                     ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
                     : "hover:bg-sidebar-accent/60",

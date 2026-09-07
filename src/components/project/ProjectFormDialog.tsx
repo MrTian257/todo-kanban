@@ -245,11 +245,11 @@ export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
                       ))}
                     </SelectContent>
                   </Select>
-                  <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setSteps(steps.filter((x) => x.id !== s.id))}>
+                  <Button type="button" variant="ghost" size="icon" className="h-8 w-8" onClick={() => setSteps(steps.filter((x) => x.id !== s.id))}>
                     <Trash2 className="h-3.5 w-3.5 text-destructive" />
                   </Button>
                   {i > 0 && (
-                    <Button variant="ghost" size="sm" className="h-8 px-2 text-xs" onClick={() => {
+                    <Button type="button" variant="ghost" size="sm" className="h-8 px-2 text-xs" onClick={() => {
                       const next = [...steps];
                       [next[i - 1], next[i]] = [next[i], next[i - 1]];
                       setSteps(next);
@@ -257,7 +257,7 @@ export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
                   )}
                 </div>
               ))}
-              <Button variant="outline" size="sm" className="gap-1" onClick={() =>
+              <Button type="button" variant="outline" size="sm" className="gap-1" onClick={() =>
                 setSteps([...steps, { id: newId(), from: "develop", action: "merge", to: "production", note: "" }])
               }>
                 <Plus className="h-3.5 w-3.5" /> 添加步骤

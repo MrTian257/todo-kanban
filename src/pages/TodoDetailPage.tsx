@@ -92,7 +92,6 @@ export function TodoDetailPage() {
     handleSubmit,
     watch,
     setValue,
-    getValues,
     formState: { errors },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -117,6 +116,9 @@ export function TodoDetailPage() {
 
   const repoPath = watch("repoPath");
   const createBranch = watch("createBranch");
+  const branchValue = watch("branch");
+  const branchFromSource = watch("branchFrom");
+  const swimlaneValue = watch("swimlaneId");
 
   // 泳道预选（?swimlane=）
   React.useEffect(() => {
@@ -166,8 +168,6 @@ export function TodoDetailPage() {
       if (reqSeq.current === seq) setGitLoading(false);
     }
   };
-
-  const branchFromSource = getValues("branchFrom");
 
   const onSubmit = async (values: FormValues) => {
     if (!project) return;
@@ -319,7 +319,7 @@ export function TodoDetailPage() {
             <Label>分支</Label>
             <BranchSelect
               branches={gitInfo?.branches ?? []}
-              value={getValues("branch")}
+              value={branchValue}
               onChange={(b) => setValue("branch", b)}
               productionBranch={project.productionBranch || undefined}
               currentBranch={gitInfo?.current_branch}
@@ -356,7 +356,7 @@ export function TodoDetailPage() {
 
           <div className="space-y-2">
             <Label>所属泳道（切换 = 同步状态）</Label>
-            <Select value={getValues("swimlaneId")} onValueChange={(v) => setValue("swimlaneId", v)}>
+            <Select value={swimlaneValue} onValueChange={(v) => setValue("swimlaneId", v)}>
               <SelectTrigger className="w-full">
                 <SelectValue placeholder="选择泳道" />
               </SelectTrigger>

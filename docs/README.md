@@ -25,6 +25,8 @@
 | [02-development/theme-guide.md](02-development/theme-guide.md) | 前端 | 明暗 + 5 套皮肤机制、新增皮肤方法 |
 | [02-development/quality.md](02-development/quality.md) | 全员 | 质量门禁、单测清单、反模式清单、数据安全 |
 | [03-refactor/refactor-notes.md](03-refactor/refactor-notes.md) | 重构 | **重构必读**：整理时的漂移修正清单、必须保持的决策、已知坑、建议 |
+| [软件设计文档.md](软件设计文档.md) | 全员 | **整合视图（推荐入口）**：产品 / 架构 / 数据 / 接口 / UI / 流程 / ADR 摘要 + 实现状态 |
+| [decisions/](decisions/) | 全员 | 架构决策记录 ADR-001 ~ ADR-010（背景 / 备选方案 / 后果完整版） |
 
 ## 阅读顺序建议
 
@@ -37,9 +39,9 @@
 ## 技术栈速览
 
 - **前端**：React 19 + TypeScript(strict)、Vite 7、shadcn/ui（radix-nova，基元勿手改）、Tailwind CSS v4（`@tailwindcss/vite`，无 tailwind.config）、zustand v5、React Router 7（**HashRouter**）、dnd-kit（core/sortable/utilities）、react-resizable-panels v4、react-hook-form + zod、react-day-picker v10、next-themes、sonner、lucide-react、markdown-it + turndown（WYSIWYG 备注）
-- **后端**：Tauri 2、Rust（workspace：薄壳 crate `todo-git` + 纯逻辑库 `todo-git-core` + `mcp-server`）、rusqlite（bundled，WAL）、系统 git CLI、系统 curl（GitLab API）
+- **后端**：Tauri 2、Rust（workspace：薄壳 crate `todo-kanban` + 纯逻辑库 `todo-kanban-core` + `mcp-server`）、rusqlite（bundled，WAL）、系统 git CLI、系统 curl（GitLab API）
 - **存储**：桌面端 SQLite（位置由**程序运行目录 `db-config.txt` 指示文件**指定，schema `user_version=6`）；浏览器预览模式**无本地存储**（空态展示；旧 localStorage 双通道已移除）
-- **扩展**：`src-tauri/mcp-server`（stdio MCP server）：9 tools + 3 resources，复用 `todo-git-core::svc`，零 tauri 依赖，`MCP_TODO_READONLY=1` 一键只读
+- **扩展**：`src-tauri/mcp-server`（stdio MCP server）：9 tools + 3 resources，复用 `todo-kanban-core::svc`，零 tauri 依赖，`MCP_TODO_READONLY=1` 一键只读
 
 ## 与 todo-git 原文档的映射
 

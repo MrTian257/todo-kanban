@@ -9,7 +9,6 @@ import {
   CheckCircle2,
   Copy,
   FolderOpen,
-  GripVertical,
   History,
   MoreHorizontal,
   Play,
@@ -56,6 +55,7 @@ import {
   invalidateGitInfo,
 } from "@/lib/git";
 import { MarkdownView } from "@/components/todo/MarkdownView";
+import { StatusNode } from "./SwimlaneBoard";
 import { cn } from "@/lib/utils";
 import { openPath } from "@tauri-apps/plugin-opener";
 
@@ -64,12 +64,6 @@ interface Props {
   projectName?: string;
   showProjectName?: boolean;
 }
-
-const STATUS_COLOR: Record<string, string> = {
-  todo: "bg-blue-500",
-  doing: "bg-amber-500",
-  done: "bg-emerald-500",
-};
 
 export function TodoRow({ todo, projectName, showProjectName }: Props) {
   const navigate = useNavigate();
@@ -188,21 +182,24 @@ export function TodoRow({ todo, projectName, showProjectName }: Props) {
       ref={setNodeRef}
       style={{ transform: CSS.Transform.toString(transform), transition }}
       className={cn(
-        "group flex items-start gap-2 rounded-md border bg-card p-2 shadow-sm hover:shadow-md",
+        "group relative flex items-start gap-2 rounded-md border border-transparent bg-transparent px-2 py-1.5",
+        "hover:border-border hover:bg-card",
+        "cursor-grab active:cursor-grabbing",
         isDragging && "opacity-50",
       )}
+      {...attributes}
+      {...listeners}
     >
-      {/* 拖拽把手 */}
-      <button
-        className="mt-1 cursor-grab text-muted-foreground/60 hover:text-foreground focus:outline-none"
-        {...attributes}
-        {...listeners}
+      {/* 状态节点 + 竖向连线（git graph 语言）；节点为视觉锚点。
+          整卡绑定拖拽（把手热区仅 16×10px，抓卡片主体时拖拽无法启动）；
+          touch 场景仍以本节点为锚（touch-none） */}
+      <div
+        className="relative mt-1 flex w-4 shrink-0 cursor-grab touch-none justify-center"
+        title="拖拽移动"
       >
-        <GripVertical className="h-4 w-4" />
-      </button>
-
-      {/* 状态色条 */}
-      <div className={cn("mt-1.5 h-4 w-1 shrink-0 rounded-full", STATUS_COLOR[todo.status])} />
+        <StatusNode status={todo.status} className="h-2.5 w-2.5" />
+        <span className="pointer-events-none absolute top-2.5 h-[calc(100%-0.5rem)] w-px bg-rail group-hover:bg-transparent" />
+      </div>
 
       <div className="min-w-0 flex-1">
         {/* 标题行 */}
@@ -224,7 +221,10 @@ export function TodoRow({ todo, projectName, showProjectName }: Props) {
           {urgency === "soon" && <Badge variant="secondary" className="shrink-0">临近截止</Badge>}
           {todo.tag && (
             <button onClick={copyTag} className="shrink-0" title="复制提交标记">
-              <Badge variant="secondary" className="font-mono text-xs hover:bg-accent">
+              <Badge
+                variant="outline"
+                className="font-mono text-xs tabular-nums hover:bg-accent"
+              >
                 {todo.tag} <Copy className="ml-0.5 h-3 w-3" />
               </Badge>
             </button>
@@ -287,17 +287,20 @@ export function TodoRow({ todo, projectName, showProjectName }: Props) {
           </div>
         )}
 
-        {/* 元信息行 */}
-        <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+        {/* 元信息行（mono 声部：日期/时间/提交数） */}
+        <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-xs text-muted-foreground">
           {todo.startDate && (
-            <span>
+            <span className="tabular-nums">
               {todo.startDate} ～ {todo.endDate ?? "…"}
             </span>
           )}
-          {todo.startedAt && <span>开始 {fmtDateTime(todo.startedAt)}</span>}
-          {todo.doneAt && <span>完成 {fmtDateTime(todo.doneAt)}</span>}
-          <button className="hover:text-foreground" onClick={() => setExpanded((v) => !v)}>
-            {todo.commits.length > 0 ? `提交 ${todo.commits.length}` : "无提交"}
+          {todo.startedAt && <span className="tabular-nums">开始 {fmtDateTime(todo.startedAt)}</span>}
+          {todo.doneAt && <span className="tabular-nums">完成 {fmtDateTime(todo.doneAt)}</span>}
+          <button
+            className="tabular-nums transition-colors hover:text-foreground"
+            onClick={() => setExpanded((v) => !v)}
+          >
+            {todo.commits.length > 0 ? `提交 ×${todo.commits.length}` : "无提交"}
           </button>
         </div>
       </div>
