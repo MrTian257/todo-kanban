@@ -2,6 +2,7 @@
 // 写链：action → useAppStore.subscribe → writeChain 串行队列 → saveState（浏览器模式 no-op）
 // 外部同步：startExternalSync 2s 轮询 + focus 立即同步（磁盘优先整体覆盖）
 
+import { moveTask } from "./boardOrder";
 import { create } from "zustand";
 import { AppState, Project, Swimlane, Todo } from "./types";
 import { isTauri, loadState, saveState } from "./storage";
@@ -23,7 +24,7 @@ function demoState(): AppState {
   const day = 86_400_000;
   const project: Project = {
     id: "demo-project",
-    name: "演示项目",
+    name: "研发工作台",
     projectDir: "",
     frontendDir: "",
     backendDir: "",
@@ -31,7 +32,7 @@ function demoState(): AppState {
     backendRepoUrl: "",
     frontendRepoToken: "",
     backendRepoToken: "",
-    productionBranch: "main",
+    productionBranch: "master",
     branchRule: {
       enabled: true,
       steps: [
@@ -43,7 +44,8 @@ function demoState(): AppState {
     swimlanes: [
       { id: "swim-todo", name: "待办", status: "todo", sortOrder: 0 },
       { id: "swim-doing", name: "进行中", status: "doing", sortOrder: 1 },
-      { id: "swim-done", name: "已完成", status: "done", sortOrder: 2 },
+      { id: "swim-release", name: "待发版", status: "doing", sortOrder: 2 },
+      { id: "swim-done", name: "已完成", status: "done", sortOrder: 3 },
     ],
     archived: false,
     createdAt: now - 30 * day,
@@ -74,7 +76,7 @@ function demoState(): AppState {
     blocker: "",
     archived: false,
     startedAt: status === "doing" || status === "done" ? now - daysAgo * day : null,
-    doneAt: status === "done" ? now - daysAgo * day + day : null,
+    doneAt: status === "done" ? now - daysAgo * day : null,
     commits: [],
     sortOrder: 0,
     createdAt: now - daysAgo * day,
@@ -83,11 +85,15 @@ function demoState(): AppState {
   return {
     projects: [project],
     todos: [
-      mk("demo-1", "实现泳道看板拖拽", "列 = 泳道、行 = 待办，跨泳道拖拽自动联动状态。", "doing", "swim-doing", 1, 2),
-      mk("demo-2", "泳道管理：增删/改名/排序", "项目维度自定义泳道，新增须绑定状态。", "todo", "swim-todo", 2, 1),
-      mk("demo-3", "完成时自动补录提交", "创建 ~ 完成时间窗内绑定分支的提交自动收录。", "todo", "swim-todo", 3, 1),
-      mk("demo-4", "迁移 schema v5", "projects.swimlanes + todos.swimlane_id，存量数据无损。", "done", "swim-done", 4, 5),
-      mk("demo-5", "MCP server 9 tools", "stdio JSON-RPC，MCP_TODO_READONLY=1 一键只读。", "done", "swim-done", 5, 6),
+      {...mk("demo-1", "优化项目列表布局", "整理项目概况，让任务与进度更容易查看。", "todo", "swim-todo", 1, 0), branch:"feature/ui-polish", sortOrder:0},
+      {...mk("demo-2", "完善空状态提示", "为新项目提供清晰的开始入口。", "todo", "swim-todo", 2, 0), branch:"feature/empty-state", sortOrder:1},
+      {...mk("demo-3", "调整日期选择交互", "选择计划日期并保持范围高亮。", "todo", "swim-todo", 3, 0), branch:"feature/date-range", sortOrder:2},
+      {...mk("demo-4", "重构任务卡片样式", "统一任务信息与操作区域。", "doing", "swim-doing", 4, 1), branch:"refactor/task-card", blocker:"等待接口联调", sortOrder:0},
+      {...mk("demo-5", "优化分支选择体验", "区分关联分支与工作区当前分支。", "doing", "swim-doing", 5, 1), branch:"feature/branch-selector", sortOrder:1},
+      {...mk("demo-6", "修复跨泳道拖拽", "验证状态同步与排序持久化。", "doing", "swim-release", 6, 1), branch:"fix/drag-drop", sortOrder:0},
+      {...mk("demo-7", "完善提交记录展示", "优化提交信息层级。", "doing", "swim-release", 7, 1), branch:"feature/commit-log", sortOrder:1},
+      {...mk("demo-8", "新增项目归档入口", "收纳已结束的项目。", "done", "swim-done", 8, 0), branch:"feature/archive-entry", sortOrder:0},
+      {...mk("demo-9", "统一主题配色", "适配浅色与深色主题。", "done", "swim-done", 9, 0), branch:"chore/theme-color", sortOrder:1},
     ],
   };
 }
@@ -105,6 +111,7 @@ interface AppStore extends AppState {
   patchTodo: (id: string, patch: Partial<Todo>) => void;
   /** 泳道内排序落库（memory 态；重载后按创建时间兜底） */
   commitLaneOrder: (projectId: string, laneId: string, orderedIds: string[]) => void;
+  moveTodo: (projectId: string, todoId: string, laneId: string, index: number) => void;
   /** 保存项目泳道配置 */
   saveSwimlanes: (projectId: string, lanes: Swimlane[]) => void;
   /** 删除泳道：其下待办迁移至同状态剩余第一个泳道 */
@@ -126,7 +133,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       const disk = await loadState();
       state = normalizeState(disk ?? { projects: [], todos: [] });
     } else {
-      state = demoState();
+      state = normalizeState((await loadState()) ?? demoState());
     }
     set({ ...state, loaded: true });
   },
@@ -151,8 +158,13 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
 
   upsertTodo: (t) => {
-    const todos = [...get().todos.filter((x) => x.id !== t.id), t];
-    set({ todos });
+    const current = get().todos.find(x => x.id === t.id);
+    const next = { ...t };
+    if (!current || current.swimlaneId !== t.swimlaneId) {
+      const target = get().todos.filter(x=>x.id!==t.id && x.projectId===t.projectId && x.swimlaneId===t.swimlaneId && !x.archived);
+      next.sortOrder = target.length ? Math.max(...target.map(x=>x.sortOrder))+1 : 0;
+    }
+    set({todos:[...get().todos.filter(x=>x.id!==t.id),next]});
   },
 
   removeTodo: (id) => {
@@ -160,13 +172,19 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
 
   patchTodo: (id, patch) => {
-    set({
-      todos: get().todos.map((t) =>
-        t.id === id
-          ? { ...t, ...patch, updatedAt: Date.now(), swimlaneId: patch.swimlaneId ?? t.swimlaneId }
-          : t,
-      ),
-    });
+    const current = get().todos.find(t => t.id === id);
+    if (!current) return;
+    const lanes = get().projects.find(p => p.id === current.projectId)?.swimlanes ?? [];
+    const explicit = patch.swimlaneId ? lanes.find(l => l.id === patch.swimlaneId) : undefined;
+    const oldLane = lanes.find(l => l.id === current.swimlaneId);
+    const target = explicit ?? (patch.status && oldLane?.status !== patch.status
+      ? [...lanes].sort((a,b) => a.sortOrder-b.sortOrder).find(l => l.status === patch.status) : oldLane);
+    const now = Date.now();
+    const updated = get().todos.map(t => t.id === id ? { ...t, ...patch, status: explicit?.status ?? patch.status ?? t.status, updatedAt:now } : t);
+    if (target && target.id !== current.swimlaneId) {
+      const index = updated.filter(t => t.projectId === current.projectId && t.swimlaneId === target.id && !t.archived).length;
+      set({todos:moveTask(updated, current.projectId, id, target, index, now)});
+    } else set({todos:updated});
   },
 
   commitLaneOrder: (projectId, laneId, orderedIds) => {
@@ -194,12 +212,24 @@ export const useAppStore = create<AppStore>((set, get) => ({
     set({ todos: [...others, ...withOrder] });
   },
 
+  moveTodo: (projectId, todoId, laneId, index) => {
+    const lane = get().projects.find(p => p.id === projectId)?.swimlanes?.find(l => l.id === laneId);
+    if (lane) set({ todos: moveTask(get().todos, projectId, todoId, lane, index) });
+  },
+
   saveSwimlanes: (projectId, lanes) => {
-    set({
-      projects: get().projects.map((p) =>
-        p.id === projectId ? { ...p, swimlanes: lanes, updatedAt: Date.now() } : p,
-      ),
-    });
+    const normalized = lanes.map((l,i)=>({...l,sortOrder:i}));
+    const now=Date.now();
+    let next=get().todos;
+    for (const t of get().todos.filter(t=>t.projectId===projectId)) {
+      const current=normalized.find(l=>l.id===t.swimlaneId);
+      const target=current ?? normalized.find(l=>l.status===t.status);
+      if (!target) continue;
+      if (t.archived) next=next.map(x=>x.id===t.id?{...x,swimlaneId:target.id,status:target.status,updatedAt:now}:x);
+      else if (!current) next=moveTask(next,projectId,t.id,target,next.filter(x=>x.projectId===projectId&&x.swimlaneId===target.id&&!x.archived).length,now);
+      else if (t.status!==current.status) next=next.map(x=>x.id===t.id?{...x,status:current.status,updatedAt:now}:x);
+    }
+    set({projects:get().projects.map(p=>p.id===projectId?{...p,swimlanes:normalized,updatedAt:now}:p),todos:next});
   },
 
   deleteSwimlane: (projectId, laneId) => {
@@ -229,7 +259,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
 // 写链：任何 state 变化 → 串行落库
 useAppStore.subscribe((state) => {
-  enqueueSave({ projects: state.projects, todos: state.todos });
+  if (state.loaded) enqueueSave({ projects: state.projects, todos: state.todos });
 });
 
 // ── 外部变更感知：2s 轮询 + focus 立即同步 ──────────────────
@@ -237,6 +267,7 @@ export function startExternalSync() {
   if (!isTauri()) return;
   const sync = async () => {
     try {
+      await writeChain;
       const disk = await loadState();
       if (!disk) return;
       const current = useAppStore.getState();

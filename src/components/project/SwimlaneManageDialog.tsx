@@ -32,7 +32,7 @@ interface Props {
 }
 
 export function SwimlaneManageDialog({ projectId, open, onOpenChange }: Props) {
-  const { projects, saveSwimlanes, deleteSwimlane } = useAppStore();
+  const { projects, saveSwimlanes } = useAppStore();
   const project = projects.find((p) => p.id === projectId);
   const [lanes, setLanes] = React.useState<Swimlane[]>([]);
   const [newName, setNewName] = React.useState("");
@@ -53,20 +53,14 @@ export function SwimlaneManageDialog({ projectId, open, onOpenChange }: Props) {
       toast.error("至少保留一个泳道");
       return;
     }
+    if (lanes.some(l => !l.name.trim())) {toast.error("泳道名称不能为空");return;}
+    if (STATUS_ORDER.some(status => !lanes.some(l => l.status === status))) {toast.error("每个状态至少保留一个泳道");return;}
     const names = new Set(lanes.map((l) => l.name.trim()));
     if (names.size !== lanes.length) {
       toast.error("泳道名称不能重复");
       return;
     }
-    // 被删除的泳道：其下待办迁移至同状态剩余第一个泳道（保存时统一生效）
-    const oldIds = new Set((project?.swimlanes ?? []).map((l) => l.id));
-    const newIds = new Set(lanes.map((l) => l.id));
-    for (const id of oldIds) {
-      if (!newIds.has(id)) {
-        deleteSwimlane(projectId, id);
-      }
-    }
-    saveSwimlanes(projectId, lanes.map((l, i) => ({ ...l, sortOrder: i })));
+    saveSwimlanes(projectId, lanes.map((l, i) => ({ ...l, name:l.name.trim(), sortOrder: i })));
     toast.success("泳道配置已保存");
     onOpenChange(false);
   };
@@ -111,7 +105,7 @@ export function SwimlaneManageDialog({ projectId, open, onOpenChange }: Props) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-h-[85vh] max-w-xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle>管理泳道</DialogTitle>
           <DialogDescription>
@@ -125,21 +119,21 @@ export function SwimlaneManageDialog({ projectId, open, onOpenChange }: Props) {
               <div className="flex flex-col">
                 <button
                   className="text-muted-foreground hover:text-foreground disabled:opacity-30"
-                  disabled={i === 0}
+                  aria-label={`上移泳道 ${lane.name}`} disabled={i === 0}
                   onClick={() => move(i, -1)}
                 >
                   <ArrowUp className="h-3.5 w-3.5" />
                 </button>
                 <button
                   className="text-muted-foreground hover:text-foreground disabled:opacity-30"
-                  disabled={i === lanes.length - 1}
+                  aria-label={`下移泳道 ${lane.name}`} disabled={i === lanes.length - 1}
                   onClick={() => move(i, 1)}
                 >
                   <ArrowDown className="h-3.5 w-3.5" />
                 </button>
               </div>
               <Input
-                value={lane.name}
+                aria-label={`泳道名称 ${i+1}`} value={lane.name}
                 className="h-8 flex-1"
                 onChange={(e) => update(lane.id, { name: e.target.value })}
               />
@@ -158,7 +152,7 @@ export function SwimlaneManageDialog({ projectId, open, onOpenChange }: Props) {
                   ))}
                 </SelectContent>
               </Select>
-              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => remove(lane.id)}>
+              <Button variant="ghost" size="icon" className="h-8 w-8" aria-label={`删除泳道 ${lane.name}`} onClick={() => remove(lane.id)}>
                 <Trash2 className="h-3.5 w-3.5 text-destructive" />
               </Button>
             </div>
@@ -187,7 +181,7 @@ export function SwimlaneManageDialog({ projectId, open, onOpenChange }: Props) {
               ))}
             </SelectContent>
           </Select>
-          <Button variant="outline" size="icon" className="h-9 w-9" onClick={add}>
+          <Button variant="outline" size="icon" className="h-9 w-9" aria-label="添加泳道" onClick={add}>
             <Plus className="h-4 w-4" />
           </Button>
         </div>

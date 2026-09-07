@@ -6,7 +6,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { toast } from "sonner";
-import { Plus, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, Eye, EyeOff, FolderKanban, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -38,7 +38,7 @@ import { useAppStore } from "@/lib/store";
 import { newId } from "@/lib/utils";
 
 const schema = z.object({
-  name: z.string().min(1, "项目名称必填"),
+  name: z.string().trim().min(1, "项目名称必填"),
   projectDir: z.string().optional().default(""),
   frontendDir: z.string().optional().default(""),
   backendDir: z.string().optional().default(""),
@@ -67,6 +67,7 @@ export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
   const { upsertProject } = useAppStore();
   const isEdit = !!project;
 
+  const [showToken, setShowToken] = React.useState(false);
   const [ruleEnabled, setRuleEnabled] = React.useState(true);
   const [steps, setSteps] = React.useState<BranchRuleStep[]>(BRANCH_RULE_TEMPLATE.map((s) => ({ ...s })));
 
@@ -92,6 +93,7 @@ export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
 
   React.useEffect(() => {
     if (open) {
+      setShowToken(false);
       reset({
         name: project?.name ?? "",
         projectDir: project?.projectDir ?? "",
@@ -105,7 +107,7 @@ export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
       });
       setRuleEnabled(project?.branchRule?.enabled ?? true);
       setSteps(
-        project?.branchRule?.steps?.length
+        project?.branchRule
           ? project.branchRule.steps.map((s) => ({ ...s }))
           : BRANCH_RULE_TEMPLATE.map((s) => ({ ...s })),
       );
@@ -146,21 +148,23 @@ export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[85vh] max-w-xl overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>{isEdit ? "编辑项目" : "新建项目"}</DialogTitle>
-          <DialogDescription>项目是待办的外层组织；可配置仓库地址、生产分支与分支规则。</DialogDescription>
+      <DialogContent className="flex h-[min(90vh,820px)] max-h-[90vh] w-[calc(100%-32px)] max-w-2xl flex-col gap-0 overflow-clip rounded-2xl bg-card p-0">
+        <DialogHeader className="shrink-0 border-b px-7 py-6">
+          <DialogTitle className="flex items-center gap-3 text-xl"><FolderKanban className="h-5 w-5 text-primary"/>{isEdit ? "编辑项目" : "新建项目"}</DialogTitle>
+          <DialogDescription>为任务建立一个空间，按需关联代码仓库与分支流程。</DialogDescription>
         </DialogHeader>
 
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+        <form onSubmit={handleSubmit(onSubmit)} className="flex min-h-0 flex-1 flex-col">
+        <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-7 py-6">
+          <h3 className="tk-section-title">基础信息</h3>
           <div className="space-y-2">
             <Label htmlFor="name">项目名称 *</Label>
             <Input id="name" placeholder="如：商城前端" {...register("name")} />
             {errors.name && <p className="text-xs text-destructive">{errors.name.message}</p>}
           </div>
 
-          <div className="grid grid-cols-3 gap-3">
-            <div className="space-y-2 col-span-3">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className="space-y-2 sm:col-span-2">
               <Label htmlFor="projectDir">项目根目录</Label>
               <Input id="projectDir" placeholder="C:\work\project" {...register("projectDir")} />
             </div>
@@ -178,14 +182,15 @@ export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3 border-t pt-3">
+          <details className="rounded-xl border p-4"><summary className="cursor-pointer text-sm font-semibold">代码仓库 <span className="ml-2 text-xs font-normal text-muted-foreground">可选配置</span></summary>
+          <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="space-y-2">
               <Label htmlFor="frontendRepoUrl">前端仓库地址（http(s)）</Label>
               <Input id="frontendRepoUrl" placeholder="https://gitlab.example.com/group/web.git" {...register("frontendRepoUrl")} />
             </div>
             <div className="space-y-2">
               <Label htmlFor="frontendRepoToken">前端仓库 GitLab Token</Label>
-              <Input id="frontendRepoToken" type="password" placeholder="可选，启用远端分支" {...register("frontendRepoToken")} />
+              <Input id="frontendRepoToken" type={showToken ? "text" : "password"} placeholder="可选，启用远端分支" {...register("frontendRepoToken")} />
             </div>
             <div className="space-y-2">
               <Label htmlFor="backendRepoUrl">后端仓库地址（http(s)）</Label>
@@ -193,16 +198,18 @@ export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
             </div>
             <div className="space-y-2">
               <Label htmlFor="backendRepoToken">后端仓库 GitLab Token</Label>
-              <Input id="backendRepoToken" type="password" placeholder="可选，启用远端分支" {...register("backendRepoToken")} />
+              <Input id="backendRepoToken" type={showToken ? "text" : "password"} placeholder="可选，启用远端分支" {...register("backendRepoToken")} />
             </div>
           </div>
 
+          <button type="button" className="mt-3 flex items-center gap-2 text-xs text-muted-foreground" onClick={()=>setShowToken(v=>!v)}>{showToken ? <EyeOff className="h-3.5 w-3.5"/> : <Eye className="h-3.5 w-3.5"/>}{showToken ? "隐藏 Token" : "显示 Token"}</button>
+          </details>
           {/* 分支规则（可视化） */}
-          <div className="space-y-2 border-t pt-3">
+          <details className="rounded-xl border p-4"><summary className="cursor-pointer text-sm font-semibold">分支流程 <span className="ml-2 text-xs font-normal text-muted-foreground">{steps.length} 个步骤</span></summary><div className="mt-4 space-y-4">
             <div className="flex items-center justify-between">
-              <Label>分支规则（可视化流转）</Label>
+              <Label htmlFor="rule-enabled">启用分支规则</Label>
               <div className="flex items-center gap-2">
-                <Switch checked={ruleEnabled} onCheckedChange={setRuleEnabled} />
+                <Switch id="rule-enabled" checked={ruleEnabled} onCheckedChange={setRuleEnabled} />
                 <span className="text-xs text-muted-foreground">{ruleEnabled ? "启用" : "暂停"}</span>
               </div>
             </div>
@@ -218,12 +225,13 @@ export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
               ))}
               {steps.length === 0 && <span className="text-muted-foreground">（空）暂不配置</span>}
             </div>
-            <div className="space-y-2">
+            <div className="overflow-x-auto"><div className="min-w-[490px] space-y-2">
+              <div className="grid grid-cols-[16px_1fr_90px_1fr_104px] gap-2 text-xs text-muted-foreground"><span/><span>来源分支</span><span>操作</span><span>目标分支</span><span>调整顺序</span></div>
               {steps.map((s, i) => (
-                <div key={s.id} className="flex items-center gap-2">
+                <div key={s.id} className="grid grid-cols-[16px_1fr_90px_1fr_104px] items-center gap-2">
                   <span className="w-4 text-xs text-muted-foreground">{i + 1}</span>
                   <Select value={s.from} onValueChange={(v) => updateStep(s.id, { from: v })}>
-                    <SelectTrigger className="h-8 w-28"><SelectValue /></SelectTrigger>
+                    <SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       {BRANCH_ROLES.map((r) => (
                         <SelectItem key={r} value={r}>{BRANCH_ROLE_LABEL[r]}</SelectItem>
@@ -231,30 +239,25 @@ export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
                     </SelectContent>
                   </Select>
                   <Select value={s.action} onValueChange={(v) => updateStep(s.id, { action: v as "checkout" | "merge" })}>
-                    <SelectTrigger className="h-8 w-24"><SelectValue /></SelectTrigger>
+                    <SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="checkout">切出</SelectItem>
                       <SelectItem value="merge">合并</SelectItem>
                     </SelectContent>
                   </Select>
                   <Select value={s.to} onValueChange={(v) => updateStep(s.id, { to: v })}>
-                    <SelectTrigger className="h-8 w-28"><SelectValue /></SelectTrigger>
+                    <SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       {BRANCH_ROLES.map((r) => (
                         <SelectItem key={r} value={r}>{BRANCH_ROLE_LABEL[r]}</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
-                  <Button type="button" variant="ghost" size="icon" className="h-8 w-8" onClick={() => setSteps(steps.filter((x) => x.id !== s.id))}>
-                    <Trash2 className="h-3.5 w-3.5 text-destructive" />
-                  </Button>
-                  {i > 0 && (
-                    <Button type="button" variant="ghost" size="sm" className="h-8 px-2 text-xs" onClick={() => {
-                      const next = [...steps];
-                      [next[i - 1], next[i]] = [next[i], next[i - 1]];
-                      setSteps(next);
-                    }}>上移</Button>
-                  )}
+                  <div className="flex">
+                    <Button type="button" variant="ghost" size="icon" className="h-8 w-8" aria-label={`上移步骤 ${i+1}`} disabled={i===0} onClick={()=>setSteps(prev=>{const next=[...prev];[next[i-1],next[i]]=[next[i],next[i-1]];return next;})}><ArrowUp className="h-3.5 w-3.5"/></Button>
+                    <Button type="button" variant="ghost" size="icon" className="h-8 w-8" aria-label={`下移步骤 ${i+1}`} disabled={i===steps.length-1} onClick={()=>setSteps(prev=>{const next=[...prev];[next[i+1],next[i]]=[next[i],next[i+1]];return next;})}><ArrowDown className="h-3.5 w-3.5"/></Button>
+                    <Button type="button" variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive" aria-label={`删除步骤 ${i+1}`} onClick={()=>setSteps(prev=>prev.filter(x=>x.id!==s.id))}><Trash2 className="h-3.5 w-3.5"/></Button>
+                  </div>
                 </div>
               ))}
               <Button type="button" variant="outline" size="sm" className="gap-1" onClick={() =>
@@ -265,7 +268,8 @@ export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
             </div>
           </div>
 
-          <DialogFooter>
+          </div></details></div>
+          <DialogFooter className="shrink-0 border-t bg-muted/30 px-7 py-4">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               取消
             </Button>

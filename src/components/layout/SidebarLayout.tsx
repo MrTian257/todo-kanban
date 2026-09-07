@@ -1,61 +1,67 @@
 // 全局侧边导航壳（shadcn sidebar 简化版）：品牌 + 工作台导航 + 明暗切换 + 设置入口
 
-import { useNavigate, NavLink } from "react-router-dom";
+import { useNavigate, useLocation, NavLink } from "react-router-dom";
 import { useTheme } from "next-themes";
 import { CalendarDays, KanbanSquare, ListTodo, Moon, Settings, Sun, FolderKanban } from "lucide-react";
+import { isTauri } from "@/lib/storage";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 const NAV_ITEMS = [
   { to: "/focus", label: "今日焦点", icon: CalendarDays },
-  { to: "/todos", label: "Todo List", icon: ListTodo },
+  { to: "/todos", label: "全部待办", icon: ListTodo },
   { to: "/projects", label: "项目资料", icon: FolderKanban },
 ];
 
 export function SidebarLayout({ children }: { children: React.ReactNode }) {
   const { resolvedTheme, setTheme } = useTheme();
   const navigate = useNavigate();
+  const location = useLocation();
 
   return (
     <div className="flex h-full w-full">
       {/* 侧栏 */}
-      <aside className="flex h-full w-56 shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground">
-        <div
-          className="flex h-14 cursor-pointer items-center gap-2.5 border-b px-4"
+      <aside className="flex h-full w-56 max-[800px]:w-[76px] shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground">
+        <button
+          aria-label="回到首页"
+          className="flex h-24 shrink-0 items-center gap-2.5 px-5 text-primary"
           onClick={() => navigate("/")}
         >
-          <KanbanSquare className="h-4 w-4 text-sidebar-primary" />
-          <span className="font-mono text-sm font-medium tracking-tight">todo-kanban</span>
-        </div>
+          <span className="rounded-lg bg-primary p-1.5 text-primary-foreground"><KanbanSquare className="h-4 w-4" /></span>
+          <span className="text-base font-semibold tracking-tight max-[800px]:hidden">todo-kanban</span>
+        </button>
 
-        <nav className="flex-1 space-y-0.5 p-2">
+        <nav className="flex-1 space-y-2 px-3 py-4">
           {NAV_ITEMS.map(({ to, label, icon: Icon }) => (
             <NavLink
               key={to}
               to={to}
+              title={label}
               className={({ isActive }) =>
                 cn(
-                  "flex items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors",
-                  isActive
-                    ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
+                  "flex items-center gap-2.5 rounded-md px-3 py-3 text-sm transition-colors",
+                  (isActive || (to === "/projects" && location.pathname.startsWith("/project/")))
+                    ? "bg-primary/8 font-semibold text-primary"
                     : "hover:bg-sidebar-accent/60",
                 )
               }
             >
               <Icon className="h-4 w-4" />
-              {label}
+              <span className="max-[800px]:hidden">{label}</span>
             </NavLink>
           ))}
         </nav>
 
-        <div className="flex items-center gap-1 border-t p-2">
+        {!isTauri() && <p className="px-5 pb-3 text-[11px] text-muted-foreground max-[800px]:hidden">浏览器预览 · 示例数据</p>}
+        <div className="flex flex-wrap items-center gap-2 border-t p-4">
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
                 variant="ghost"
                 size="icon"
                 className="h-8 w-8"
+                aria-label="切换明暗"
                 onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
               >
                 {resolvedTheme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
@@ -65,7 +71,7 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
           </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => navigate("/settings")}>
+              <Button aria-label="设置" variant="ghost" size="icon" className="h-8 w-8" onClick={() => navigate("/settings")}>
                 <Settings className="h-4 w-4" />
               </Button>
             </TooltipTrigger>

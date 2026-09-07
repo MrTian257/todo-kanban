@@ -1,147 +1,30 @@
-// 项目列表：卡片展示（名称、生产分支、分支规则流程条、统计与状态）；新增/编辑/归档/删除
-// 泳道配置入口在看板（SwimlaneManageDialog）
-
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { toast } from "sonner";
-import { Archive, FolderKanban, Pencil, Plus, Trash2 } from "lucide-react";
+import { Archive, ArchiveRestore, ArrowRight, FolderKanban, GitBranch, MoreHorizontal, Pencil, Plus, Search, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { EmptyState } from "@/components/board/EmptyState";
+import { Input } from "@/components/ui/input";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { ProjectFormDialog } from "@/components/project/ProjectFormDialog";
 import { useAppStore } from "@/lib/store";
-import { BRANCH_ACTION_LABEL, BRANCH_ROLE_LABEL, Project } from "@/lib/types";
-
+import { BRANCH_ACTION_LABEL, BRANCH_ROLE_LABEL, type Project } from "@/lib/types";
 export function ProjectListPage() {
-  const navigate = useNavigate();
-  const { projects, todos, upsertProject, removeProject } = useAppStore();
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [editing, setEditing] = useState<Project | null>(null);
-
-  const stats = (projectId: string) => {
-    const list = todos.filter((t) => t.projectId === projectId && !t.archived);
-    return {
-      total: list.length,
-      done: list.filter((t) => t.status === "done").length,
-      doing: list.filter((t) => t.status === "doing").length,
-    };
-  };
-
-  const archive = (p: Project) => {
-    upsertProject({ ...p, archived: true, updatedAt: Date.now() });
-    toast.success(`已归档「${p.name}」`);
-  };
-
-  const del = (p: Project) => {
-    if (!window.confirm(`删除项目「${p.name}」？其全部待办将级联删除，不可恢复。`)) return;
-    removeProject(p.id);
-    toast.success("项目已删除");
-  };
-
-  const visible = projects.filter((p) => !p.archived);
-
-  return (
-    <div className="h-full w-full overflow-y-auto bg-background p-6">
-      <div className="mb-4 flex items-center justify-between">
-        <h1 className="text-xl font-semibold">项目资料</h1>
-        <Button
-          className="gap-1"
-          onClick={() => {
-            setEditing(null);
-            setDialogOpen(true);
-          }}
-        >
-          <Plus className="h-4 w-4" /> 新建项目
-        </Button>
-      </div>
-
-      {visible.length === 0 ? (
-        <EmptyState text="还没有项目，点击「新建项目」创建第一个项目" />
-      ) : (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {visible.map((p) => {
-            const s = stats(p.id);
-            const rule = p.branchRule;
-            return (
-              <Card
-                key={p.id}
-                className="cursor-pointer transition-shadow hover:shadow-md"
-                onClick={() => navigate(`/project/${p.id}`)}
-              >
-                <CardHeader className="pb-2">
-                  <CardTitle className="flex items-center gap-2">
-                    <FolderKanban className="h-4 w-4 text-primary" />
-                    {p.name}
-                  </CardTitle>
-                  <CardDescription className="flex items-center gap-2">
-                    生产分支：<Badge variant="outline" className="font-mono">{p.productionBranch || "未设置"}</Badge>
-                    {p.archived && <Badge variant="secondary">已归档</Badge>}
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  {/* 分支规则流程条 */}
-                  {rule && rule.enabled && rule.steps.length > 0 && (
-                    <div className="flex flex-wrap items-center gap-1 rounded-md bg-muted/50 p-2 text-xs">
-                      {rule.steps.map((st, i) => (
-                        <span key={st.id} className="flex items-center gap-1">
-                          {i > 0 && <Arrow />}
-                          <span className="rounded bg-background px-1.5 py-0.5 shadow-sm">
-                            {BRANCH_ROLE_LABEL[st.from] ?? st.from} {BRANCH_ACTION_LABEL[st.action]}{" "}
-                            {BRANCH_ROLE_LABEL[st.to] ?? st.to}
-                          </span>
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <Badge variant="secondary">{s.total} 项待办</Badge>
-                    <Badge variant="secondary">{s.doing} 进行中</Badge>
-                    <Badge variant="secondary">{s.done} 已完成</Badge>
-                  </div>
-                  {/* 操作 */}
-                  <div className="flex items-center gap-1 border-t pt-2" onClick={(e) => e.stopPropagation()}>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-7 gap-1 text-xs"
-                      onClick={() => {
-                        setEditing(p);
-                        setDialogOpen(true);
-                      }}
-                    >
-                      <Pencil className="h-3 w-3" /> 编辑
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-7 gap-1 text-xs"
-                      onClick={() => archive(p)}
-                      disabled={p.archived}
-                    >
-                      <Archive className="h-3 w-3" /> 归档
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-7 gap-1 text-xs text-destructive hover:text-destructive"
-                      onClick={() => del(p)}
-                    >
-                      <Trash2 className="h-3 w-3" /> 删除
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            );
-          })}
-        </div>
-      )}
-
-      <ProjectFormDialog open={dialogOpen} onOpenChange={setDialogOpen} project={editing} />
-    </div>
-  );
-}
-
-function Arrow() {
-  return <span className="text-muted-foreground">→</span>;
+  const {projects,todos,upsertProject,removeProject}=useAppStore();
+  const [open,setOpen]=useState(false),[editing,setEditing]=useState<Project|null>(null),[query,setQuery]=useState(""),[archived,setArchived]=useState(false);
+  const visible=projects.filter(p=>p.archived===archived&&p.name.toLowerCase().includes(query.trim().toLowerCase()));
+  const create=()=>{setEditing(null);setOpen(true);};
+  return <div className="tk-page h-full overflow-y-auto"><div className="mx-auto max-w-7xl">
+    <div className="tk-eyebrow">工作空间 / 项目管理</div>
+    <header className="mb-7 flex items-center justify-between gap-4"><div><h1 className="tk-page-heading">项目资料</h1><p className="mt-2 text-sm text-muted-foreground">把任务、代码与进展，整理在一起。</p></div><Button className="gap-2" onClick={create}><Plus className="h-4 w-4"/>新建项目</Button></header>
+    <div className="mb-6 flex flex-wrap items-center gap-3"><div className="flex gap-1 rounded-lg bg-muted p-1">{[false,true].map(v=><button key={String(v)} onClick={()=>setArchived(v)} className={`rounded-md px-4 py-1.5 text-sm ${v===archived?'bg-card font-medium text-primary shadow-sm':'text-muted-foreground'}`}>{v?'已归档':'活跃项目'} <span className="ml-1 text-xs">{projects.filter(p=>p.archived===v).length}</span></button>)}</div><div className="relative ml-auto w-64 max-w-full"><Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground"/><Input aria-label="搜索项目" placeholder="搜索项目…" className="h-10 bg-card pl-9" value={query} onChange={e=>setQuery(e.target.value)}/></div></div>
+    <div className="grid grid-cols-1 gap-5 lg:grid-cols-2 2xl:grid-cols-3">{visible.map(p=>{const tasks=todos.filter(t=>t.projectId===p.id&&!t.archived);return <article key={p.id} className="tk-panel p-6 transition-shadow hover:shadow-md">
+      <div className="mb-5 flex items-start gap-3"><span className="rounded-xl bg-primary/8 p-3 text-primary"><FolderKanban className="h-5 w-5"/></span><div className="min-w-0 flex-1 pt-1"><Link to={`/project/${p.id}`} className="block truncate text-base font-semibold hover:text-primary">{p.name}</Link><div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground"><GitBranch className="h-3 w-3"/><span className="truncate font-mono">{p.productionBranch||"未设置生产分支"}</span></div></div>
+      <DropdownMenu><DropdownMenuTrigger asChild><Button aria-label={`管理项目 ${p.name}`} variant="ghost" size="icon" className="h-8 w-8"><MoreHorizontal className="h-4 w-4"/></Button></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuItem onClick={()=>{setEditing(p);setOpen(true);}}><Pencil className="h-4 w-4"/>编辑项目</DropdownMenuItem><DropdownMenuItem onClick={()=>{upsertProject({...p,archived:!p.archived,updatedAt:Date.now()});toast.success(p.archived?"项目已恢复":"项目已归档");}}>{p.archived?<ArchiveRestore className="h-4 w-4"/>:<Archive className="h-4 w-4"/>}{p.archived?'恢复项目':'归档项目'}</DropdownMenuItem><DropdownMenuSeparator/><DropdownMenuItem className="text-destructive" onClick={()=>{if(window.confirm(`删除项目「${p.name}」及其全部任务？此操作无法恢复。`)){removeProject(p.id);toast.success("项目已删除");}}}><Trash2 className="h-4 w-4"/>删除项目</DropdownMenuItem></DropdownMenuContent></DropdownMenu></div>
+      <div className="grid grid-cols-3 gap-3 rounded-lg bg-muted/45 p-4">{[['任务总数',tasks.length],['进行中',tasks.filter(t=>t.status==='doing').length],['已完成',tasks.filter(t=>t.status==='done').length]].map(([label,n])=><div key={label}><div className="text-2xl font-semibold tabular-nums">{n}</div><div className="mt-1 text-xs text-muted-foreground">{label}</div></div>)}</div>
+      {p.branchRule?.enabled&&!!p.branchRule.steps.length&&<details className="mt-4 text-xs text-muted-foreground"><summary className="cursor-pointer">分支流程 · {p.branchRule.steps.length} 个步骤</summary><ol className="mt-3 space-y-2">{p.branchRule.steps.map((s,i)=><li key={s.id}>{i+1}. {BRANCH_ROLE_LABEL[s.from]??s.from} {BRANCH_ACTION_LABEL[s.action]} {BRANCH_ROLE_LABEL[s.to]??s.to}</li>)}</ol></details>}
+      <div className="mt-5 flex items-center justify-between border-t pt-4 text-xs"><span className="text-muted-foreground">{p.swimlanes?.length??0} 个泳道</span><Link to={`/project/${p.id}`} className="flex items-center gap-1.5 font-medium text-primary">进入看板<ArrowRight className="h-3.5 w-3.5"/></Link></div>
+    </article>;})}</div>
+    {!visible.length&&<div className="tk-panel flex flex-col items-center gap-4 py-20"><FolderKanban className="h-9 w-9 text-primary/50"/><p className="text-sm text-muted-foreground">{query?'没有匹配的项目':archived?'暂无归档项目':'创建第一个项目，开始整理任务'}</p>{!query&&!archived&&<Button onClick={create}>创建项目</Button>}</div>}
+    <ProjectFormDialog open={open} onOpenChange={setOpen} project={editing}/>
+  </div></div>;
 }

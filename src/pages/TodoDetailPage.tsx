@@ -7,18 +7,11 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { toast } from "sonner";
-import { ArrowLeft, RefreshCw } from "lucide-react";
+import { ArrowLeft, GitBranch, ListTodo, RefreshCw, Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { BranchSelect } from "@/components/board/BranchSelect";
 import { DateRangePicker, type DateRangeValue } from "@/components/board/DateRangePicker";
 import { MarkdownEditor } from "@/components/todo/MarkdownEditor";
@@ -30,7 +23,7 @@ import {
   invalidateGitInfo,
   peekGitInfo,
 } from "@/lib/git";
-import { GitInfo, STATUS_LABEL, STATUS_ORDER, Todo, TodoStatus } from "@/lib/types";
+import { GitInfo, STATUS_LABEL, Todo, TodoStatus } from "@/lib/types";
 import { normalizeTodo } from "@/lib/normalize";
 import { newId } from "@/lib/utils";
 
@@ -43,7 +36,7 @@ const branchNameSchema = z
 
 const schema = z
   .object({
-    title: z.string().min(1, "标题必填"),
+    title: z.string().trim().min(1, "标题必填"),
     note: z.string(),
     repoPath: z.string().min(1, "请选择代码目录"),
     branch: z.string().min(1, "请选择分支"),
@@ -92,21 +85,21 @@ export function TodoDetailPage() {
     handleSubmit,
     watch,
     setValue,
-    formState: { errors },
+    formState: { errors, isDirty, isSubmitting },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
     defaultValues: {
       title: editing?.title ?? "",
       note: editing?.note ?? "",
-      repoPath: editing?.repoPath ?? project?.frontendDir ?? "",
+      repoPath: editing?.repoPath ?? (project?.frontendDir || project?.backendDir || project?.projectDir || ""),
       branch: editing?.branch ?? project?.productionBranch ?? "",
       createBranch: false,
       newBranchName: "",
       branchFrom: project?.productionBranch ?? "",
       swimlaneId:
         editing?.swimlaneId ??
-        lanes.find((l) => l.status === "todo")?.id ??
         searchParams.get("swimlane") ??
+        lanes.find((l) => l.status === "todo")?.id ??
         "swim-todo",
       startDate: editing?.startDate ?? null,
       endDate: editing?.endDate ?? null,
@@ -114,6 +107,20 @@ export function TodoDetailPage() {
     },
   });
 
+  const [customRepo, setCustomRepo] = React.useState(false);
+  const [saveError, setSaveError] = React.useState("");
+  const submitLock = React.useRef(false);
+  React.useEffect(() => {
+    if (!isDirty) return;
+    const guard = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ""; };
+    const guardLink = (e: MouseEvent) => {
+      if ((e.target as HTMLElement).closest("a[href]") && !window.confirm("还有未保存的修改，确定离开？")) {e.preventDefault(); e.stopPropagation();}
+    };
+    window.addEventListener("beforeunload",guard);
+    document.addEventListener("click",guardLink,true);
+    return () => {window.removeEventListener("beforeunload",guard);document.removeEventListener("click",guardLink,true);};
+  },[isDirty]);
+  const leave = () => {if (!isDirty || window.confirm("还有未保存的修改，确定离开？")) navigate(`/project/${projectId}`);};
   const repoPath = watch("repoPath");
   const createBranch = watch("createBranch");
   const branchValue = watch("branch");
@@ -170,7 +177,9 @@ export function TodoDetailPage() {
   };
 
   const onSubmit = async (values: FormValues) => {
-    if (!project) return;
+    if (!project || submitLock.current) return;
+    submitLock.current=true; setSaveError("");
+    try {
     // 新建分支：同步进 branch 字段（纳 zod 校验已在 superRefine）
     let branch = values.branch;
     if (values.createBranch) {
@@ -184,7 +193,7 @@ export function TodoDetailPage() {
         invalidateGitInfo(values.repoPath);
         branch = newBranch;
       } catch (e) {
-        toast.error(String(e));
+        setSaveError(String(e)); toast.error(String(e));
         return;
       }
     }
@@ -219,6 +228,7 @@ export function TodoDetailPage() {
     upsertTodo(todo);
     toast.success(isNew ? "待办已创建" : "待办已保存");
     navigate(`/project/${project.id}`);
+    } catch(e) {setSaveError(String(e));toast.error("保存失败，请重试");} finally {submitLock.current=false;}
   };
 
   if (!project) {
@@ -233,23 +243,24 @@ export function TodoDetailPage() {
   }
 
   return (
-    <div className="flex h-full w-full flex-col bg-background p-6">
+    <div className="tk-page flex h-full w-full flex-col">
       {/* 顶栏 */}
-      <div className="mb-4 flex items-center gap-3">
-        <Button variant="ghost" size="icon" onClick={() => navigate(`/project/${project.id}`)}>
+      <div className="mb-6 flex flex-wrap items-center gap-3">
+        <Button variant="ghost" size="icon" aria-label="返回看板" onClick={leave}>
           <ArrowLeft className="h-4 w-4" />
         </Button>
-        <h1 className="text-lg font-semibold">{isNew ? "新建待办" : "编辑待办"}</h1>
+        <h1 className="text-xl font-semibold">{isNew ? "新建待办" : "编辑待办"}</h1>
         {editing?.tag && <span className="font-mono text-xs text-muted-foreground">{editing.tag}</span>}
-        <Button className="ml-auto" onClick={handleSubmit(onSubmit)}>保存</Button>
+        <span className="ml-auto text-xs text-muted-foreground">{isSubmitting ? "正在保存…" : isDirty ? "有未保存的修改" : isNew ? "填写任务内容" : "所有修改已保存"}</span><Button className="gap-2" disabled={isSubmitting} onClick={handleSubmit(onSubmit)}><Save className="h-4 w-4"/>{isSubmitting ? "保存中…" : "保存任务"}</Button>
       </div>
 
-      <form className="flex min-h-0 flex-1 gap-4" onSubmit={handleSubmit(onSubmit)}>
+      {saveError && <p role="alert" className="mb-3 text-sm text-destructive">{saveError}</p>}
+      <form className="tk-editor-layout" onSubmit={handleSubmit(onSubmit)}>
         {/* 中间主体 */}
-        <div className="flex min-w-0 flex-1 flex-col gap-3">
+        <div className="tk-editor-document">
           <Input
             placeholder="待办标题…"
-            className="h-10 text-base font-medium"
+            aria-label="任务标题" className="m-5 h-12 w-[calc(100%-40px)] border-0 bg-transparent px-2 text-xl font-semibold shadow-none md:text-2xl"
             {...register("title")}
           />
           {errors.title && <p className="text-xs text-destructive">{errors.title.message}</p>}
@@ -262,33 +273,51 @@ export function TodoDetailPage() {
         </div>
 
         {/* 右侧字段栏 */}
-        <div className="w-80 shrink-0 space-y-4 overflow-y-auto">
+        <div className="tk-editor-props flex flex-col gap-5">
+          <h2 className="tk-section-title order-0"><ListTodo className="h-4 w-4 text-primary"/>任务安排</h2>
+          <div className="space-y-2">
+            <Label>所属泳道</Label><p className="text-xs text-muted-foreground">移动泳道时同步任务状态。</p>
+            <select aria-label="所属泳道" value={swimlaneValue} className="h-10 w-full rounded-lg border bg-background/50 px-3 text-sm" onChange={e=>setValue("swimlaneId",e.target.value,{shouldDirty:true,shouldValidate:true})}>
+              {lanes.map(l=><option key={l.id} value={l.id}>{l.name}（{STATUS_LABEL[l.status]}）</option>)}
+            </select>
+            {errors.swimlaneId && <p className="text-xs text-destructive">{errors.swimlaneId.message}</p>}
+          </div>
+
+          <div className="space-y-2">
+            <Label>计划时间</Label>
+            <DateRangePicker
+              value={{
+                from: watch("startDate"),
+                to: watch("endDate"),
+              }}
+              onChange={(v: DateRangeValue) => {
+                setValue("startDate", v.from, {shouldDirty:true,shouldValidate:true});
+                setValue("endDate", v.to, {shouldDirty:true,shouldValidate:true});
+              }}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="blocker">阻塞原因 <span className="text-xs text-muted-foreground">（可选）</span></Label>
+            <Input id="blocker" placeholder="例如：等待接口联调" {...register("blocker")} />
+          </div>
+          <h2 className="tk-section-title border-t pt-5"><GitBranch className="h-4 w-4 text-primary"/>代码关联</h2>
           <div className="space-y-2">
             <Label>代码目录</Label>
-            <Select value={repoPath} onValueChange={(v) => setValue("repoPath", v)}>
-              <SelectTrigger className="w-full">
-                <SelectValue placeholder="选择代码目录" />
-              </SelectTrigger>
-              <SelectContent>
-                {project.frontendDir && (
-                  <SelectItem value={project.frontendDir}>前端：{project.frontendDir}</SelectItem>
-                )}
-                {project.backendDir && (
-                  <SelectItem value={project.backendDir}>后端：{project.backendDir}</SelectItem>
-                )}
-                {project.projectDir && project.projectDir !== project.frontendDir && project.projectDir !== project.backendDir && (
-                  <SelectItem value={project.projectDir}>项目目录：{project.projectDir}</SelectItem>
-                )}
-                <SelectItem value="__custom__">自定义路径…</SelectItem>
-              </SelectContent>
-            </Select>
-            {repoPath === "__custom__" && (
+            <select aria-label="代码目录" value={customRepo ? "__custom__" : repoPath} className="h-10 w-full truncate rounded-lg border bg-background/50 px-3 text-sm" onChange={e=>{const v=e.target.value;setCustomRepo(v==="__custom__");if(v!=="__custom__")setValue("repoPath",v,{shouldDirty:true,shouldValidate:true});}}>
+              <option value="" disabled>选择代码目录</option>
+              {[...new Set([project.frontendDir,project.backendDir,project.projectDir].filter(Boolean))].map(path=><option key={path} value={path}>{path}</option>)}
+              {repoPath && ![project.frontendDir,project.backendDir,project.projectDir].includes(repoPath) && <option value={repoPath}>{repoPath}</option>}
+              <option value="__custom__">自定义路径…</option>
+            </select>
+            {customRepo && (
               <Input
                 placeholder="输入自定义代码目录（git 仓库根目录）"
-                onChange={(e) => setValue("repoPath", e.target.value)}
+                value={repoPath} onChange={(e) => setValue("repoPath", e.target.value, {shouldDirty:true,shouldValidate:true})}
                 autoFocus
               />
             )}
+            {repoPath && <p className="break-all text-xs leading-relaxed text-muted-foreground" title={repoPath}>{repoPath}</p>}
             {errors.repoPath && <p className="text-xs text-destructive">{errors.repoPath.message}</p>}
             {/* 仓库状态条 */}
             {repoPath && repoPath !== "__custom__" && (
@@ -298,15 +327,15 @@ export function TodoDetailPage() {
                 ) : gitInfo?.is_repo ? (
                   <>
                     <span className="h-2 w-2 rounded-full bg-emerald-500" />
-                    <span className="truncate">当前分支 {gitInfo.current_branch ?? "-"} · {gitInfo.branches.length} 分支</span>
-                    <button onClick={refreshGit} className="ml-auto text-muted-foreground hover:text-foreground">
+                    <span className="truncate">工作区当前分支 {gitInfo.current_branch ?? "-"} · {gitInfo.branches.length} 分支</span>
+                    <button type="button" aria-label="刷新仓库信息" onClick={refreshGit} className="ml-auto text-muted-foreground hover:text-foreground">
                       <RefreshCw className="h-3 w-3" />
                     </button>
                   </>
                 ) : (
                   <span className="text-destructive">
                     {gitInfo?.error ?? "仓库读取失败"}
-                    <button onClick={refreshGit} className="ml-1">
+                    <button type="button" aria-label="刷新仓库信息" onClick={refreshGit} className="ml-1">
                       <RefreshCw className="h-3 w-3" />
                     </button>
                   </span>
@@ -316,11 +345,11 @@ export function TodoDetailPage() {
           </div>
 
           <div className="space-y-2">
-            <Label>分支</Label>
+            <Label>任务关联分支</Label>
             <BranchSelect
               branches={gitInfo?.branches ?? []}
               value={branchValue}
-              onChange={(b) => setValue("branch", b)}
+              onChange={(b) => setValue("branch", b, {shouldDirty:true,shouldValidate:true})}
               productionBranch={project.productionBranch || undefined}
               currentBranch={gitInfo?.current_branch}
             />
@@ -329,7 +358,7 @@ export function TodoDetailPage() {
               <Checkbox
                 id="createBranch"
                 checked={createBranch}
-                onCheckedChange={(v) => setValue("createBranch", !!v)}
+                onCheckedChange={(v) => setValue("createBranch", !!v, {shouldDirty:true,shouldValidate:true})}
               />
               <Label htmlFor="createBranch" className="cursor-pointer text-sm">新建分支</Label>
             </div>
@@ -344,7 +373,7 @@ export function TodoDetailPage() {
                   <BranchSelect
                     branches={gitInfo?.branches ?? []}
                     value={branchFromSource || project.productionBranch || ""}
-                    onChange={(b) => setValue("branchFrom", b)}
+                    onChange={(b) => setValue("branchFrom", b, {shouldDirty:true,shouldValidate:true})}
                     productionBranch={project.productionBranch || undefined}
                     placeholder="选择切出源"
                   />
@@ -354,49 +383,7 @@ export function TodoDetailPage() {
             )}
           </div>
 
-          <div className="space-y-2">
-            <Label>所属泳道（切换 = 同步状态）</Label>
-            <Select value={swimlaneValue} onValueChange={(v) => setValue("swimlaneId", v)}>
-              <SelectTrigger className="w-full">
-                <SelectValue placeholder="选择泳道" />
-              </SelectTrigger>
-              <SelectContent>
-                {STATUS_ORDER.map((s) => {
-                  const group = lanes.filter((l) => l.status === s);
-                  if (group.length === 0) return null;
-                  return (
-                    <React.Fragment key={s}>
-                      {group.map((l) => (
-                        <SelectItem key={l.id} value={l.id}>
-                          {l.name}（{STATUS_LABEL[s]}）
-                        </SelectItem>
-                      ))}
-                    </React.Fragment>
-                  );
-                })}
-              </SelectContent>
-            </Select>
-            {errors.swimlaneId && <p className="text-xs text-destructive">{errors.swimlaneId.message}</p>}
-          </div>
 
-          <div className="space-y-2">
-            <Label>计划时间</Label>
-            <DateRangePicker
-              value={{
-                from: watch("startDate"),
-                to: watch("endDate"),
-              }}
-              onChange={(v: DateRangeValue) => {
-                setValue("startDate", v.from);
-                setValue("endDate", v.to);
-              }}
-            />
-          </div>
-
-          <div className="space-y-2">
-            <Label>卡点</Label>
-            <Input placeholder="卡点描述（如：等待接口联调）" {...register("blocker")} />
-          </div>
         </div>
       </form>
     </div>

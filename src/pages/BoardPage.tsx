@@ -1,74 +1,39 @@
-// 项目详情：泳道看板（列=泳道、行=待办）+ 头部仓库信息 + 泳道管理 + 项目编辑
-
-import { useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
-import { Pencil, Plus, Settings2 } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { GitBranch, Pencil, Plus, Search, Settings2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { EmptyState } from "@/components/board/EmptyState";
+import { Input } from "@/components/ui/input";
 import { SwimlaneBoard } from "@/components/board/SwimlaneBoard";
 import { ProjectFormDialog } from "@/components/project/ProjectFormDialog";
 import { SwimlaneManageDialog } from "@/components/project/SwimlaneManageDialog";
 import { useAppStore } from "@/lib/store";
 
 export function BoardPage() {
-  const { projectId = "" } = useParams();
-  const navigate = useNavigate();
-  const { projects } = useAppStore();
-  const [manageLanes, setManageLanes] = useState(false);
-  const [editProject, setEditProject] = useState(false);
-
-  const project = projects.find((p) => p.id === projectId);
-
-  if (!project) {
-    return (
-      <div className="h-full w-full bg-background p-6">
-        <EmptyState text="项目不存在或已删除" />
-        <Button className="mt-4" onClick={() => navigate("/projects")}>返回项目列表</Button>
+  const {projectId=""}=useParams(), navigate=useNavigate();
+  const projects=useAppStore(s=>s.projects), todos=useAppStore(s=>s.todos);
+  const [manage,setManage]=useState(false), [edit,setEdit]=useState(false), [query,setQuery]=useState(""), [branch,setBranch]=useState("");
+  const project=projects.find(p=>p.id===projectId);
+  const branches=useMemo(()=>[...new Set(todos.filter(t=>t.projectId===projectId && !t.archived).map(t=>t.branch).filter(Boolean))].sort(),[todos,projectId]);
+  if (!project) return <div className="tk-page">项目不存在。<Link to="/projects" className="text-primary">返回项目资料</Link></div>;
+  return <div className="tk-page flex h-full min-h-0 flex-col">
+    <div className="tk-eyebrow flex gap-3"><Link to="/projects" className="hover:text-primary">项目资料</Link><span>/</span><span>项目看板</span></div>
+    <header className="mb-6 flex flex-wrap items-center gap-4">
+      <h1 className="tk-page-heading">{project.name}</h1>
+      <span className="flex items-center gap-2 rounded-lg border bg-card px-3 py-1.5 font-mono text-xs" title="生产分支"><GitBranch className="h-3.5 w-3.5 text-muted-foreground"/>{project.productionBranch||"未设置"}</span>
+      <div className="ml-auto flex flex-wrap gap-2">
+        <Button variant="outline" className="gap-2 bg-card" onClick={()=>setManage(true)}><Settings2 className="h-4 w-4"/>管理泳道</Button>
+        <Button variant="outline" className="gap-2 bg-card" onClick={()=>setEdit(true)}><Pencil className="h-4 w-4"/>编辑项目</Button>
+        <Button className="gap-2" onClick={()=>navigate(`/project/${project.id}/todo/new`)}><Plus className="h-4 w-4"/>新建待办</Button>
       </div>
-    );
-  }
-
-  return (
-    <div className="flex h-full w-full flex-col bg-background p-6">
-      {/* 头部 */}
-      <div className="mb-3 flex flex-wrap items-center gap-3">
-        <h1 className="text-xl font-semibold">{project.name}</h1>
-        <span className="text-xs text-muted-foreground">生产分支：{project.productionBranch || "未设置"}</span>
-        <div className="ml-auto flex items-center gap-2">
-          {project.frontendDir && <RepoChip label="前端" repo={project.frontendDir} color="text-blue-500" />}
-          {project.backendDir && <RepoChip label="后端" repo={project.backendDir} color="text-emerald-500" />}
-          <Button variant="outline" size="sm" className="h-8 gap-1" onClick={() => setManageLanes(true)}>
-            <Settings2 className="h-3.5 w-3.5" /> 管理泳道
-          </Button>
-          <Button variant="outline" size="sm" className="h-8 gap-1" onClick={() => setEditProject(true)}>
-            <Pencil className="h-3.5 w-3.5" /> 编辑项目
-          </Button>
-          <Button
-            size="sm"
-            className="h-8 gap-1"
-            onClick={() => navigate(`/project/${project.id}/todo/new`)}
-          >
-            <Plus className="h-3.5 w-3.5" /> 新建待办
-          </Button>
-        </div>
-      </div>
-
-      {/* 看板 */}
-      <div className="min-h-0 flex-1">
-        <SwimlaneBoard projectId={project.id} onManageLanes={() => setManageLanes(true)} />
-      </div>
-
-      <SwimlaneManageDialog projectId={project.id} open={manageLanes} onOpenChange={setManageLanes} />
-      <ProjectFormDialog open={editProject} onOpenChange={setEditProject} project={project} />
+    </header>
+    <div className="mb-5 flex flex-wrap items-center gap-3">
+      <div className="relative w-72 max-w-full"><Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-muted-foreground"/><Input className="h-10 bg-card pl-9 shadow-none" aria-label="搜索任务" placeholder="搜索待办标题或编号…" value={query} onChange={e=>setQuery(e.target.value)}/></div>
+      <select className="h-10 max-w-60 rounded-lg border bg-card px-3 text-sm" aria-label="分支筛选" value={branch} onChange={e=>setBranch(e.target.value)}><option value="">全部分支</option>{branches.map(b=><option key={b}>{b}</option>)}</select>
+      {(query||branch)&&<Button variant="ghost" size="sm" onClick={()=>{setQuery("");setBranch("");}}><X className="mr-1 h-3 w-3"/>清除筛选</Button>}
+      {(project.frontendDir||project.backendDir)&&<span title={[project.frontendDir,project.backendDir].filter(Boolean).join('\n')} className="ml-auto max-w-64 truncate text-xs text-muted-foreground">{project.frontendDir||project.backendDir}</span>}
     </div>
-  );
-}
-
-function RepoChip({ label, repo, color }: { label: string; repo: string; color: string }) {
-  return (
-    <span className="flex items-center gap-1.5 rounded-md bg-muted/60 px-2 py-1 text-xs">
-      <span className={`font-medium ${color}`}>{label}</span>
-      <span className="max-w-40 truncate text-muted-foreground">{repo}</span>
-    </span>
-  );
+    <div className="min-h-0 flex-1"><SwimlaneBoard key={project.id} projectId={project.id} query={query} branch={branch}/></div>
+    <SwimlaneManageDialog projectId={project.id} open={manage} onOpenChange={setManage}/>
+    <ProjectFormDialog open={edit} onOpenChange={setEdit} project={project}/>
+  </div>;
 }

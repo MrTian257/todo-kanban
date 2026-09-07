@@ -27,6 +27,7 @@ function RootRedirect() {
 
 export default function App() {
   const initAppStore = useAppStore((s) => s.initAppStore);
+  const loaded = useAppStore((s) => s.loaded);
 
   useEffect(() => {
     initSkin();
@@ -39,10 +40,10 @@ export default function App() {
   return (
     <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
       <TooltipProvider delayDuration={0}>
-        <Toaster position="top-center" richColors />
+        <Toaster position="bottom-right" richColors />
         <HashRouter>
           <SidebarLayout>
-            <Routes>
+            {loaded ? <Routes>
               <Route path="/" element={<RootRedirect />} />
               <Route path="/focus" element={<FocusPage />} />
               <Route path="/todos" element={<TodoListPage />} />
@@ -51,7 +52,7 @@ export default function App() {
               <Route path="/project/:projectId/todo/:todoId" element={<TodoDetailPage />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
+            </Routes> : <div className="flex h-full items-center justify-center text-sm text-muted-foreground">正在加载工作空间…</div>}
           </SidebarLayout>
         </HashRouter>
       </TooltipProvider>

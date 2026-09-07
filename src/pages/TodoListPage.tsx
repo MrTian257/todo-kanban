@@ -1,4 +1,4 @@
-// Todo List：全部待办一览（状态/项目筛选，支持快捷创建）
+// 全部待办：全部待办一览（状态/项目筛选，支持快捷创建）
 
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -34,9 +34,9 @@ export function TodoListPage() {
   }, [todos, status, projectId, showArchived]);
 
   return (
-    <div className="h-full w-full bg-background p-6">
+    <div className="h-full w-full bg-background tk-page">
       <div className="mb-4 flex flex-wrap items-center gap-3">
-        <h1 className="text-xl font-semibold">Todo List</h1>
+        <h1 className="tk-page-heading">全部待办</h1>
         <div className="ml-auto flex flex-wrap items-center gap-2">
           <Select value={status} onValueChange={setStatus}>
             <SelectTrigger className="h-8 w-32">
@@ -80,7 +80,7 @@ export function TodoListPage() {
       {list.length === 0 ? (
         <EmptyState text="没有符合条件的待办" />
       ) : (
-        <div className="flex flex-col gap-2">
+        <div className="tk-panel mx-auto max-w-5xl overflow-hidden">
           {list.map((t) => (
             <TodoRow
               key={t.id}

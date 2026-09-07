@@ -1,288 +1,107 @@
-// 泳道看板核心：列=泳道、行=待办；泳道内排序 + 跨泳道拖拽（= 修改 swimlaneId，联动 status）经 store 落库
-
 import * as React from "react";
 import { useNavigate } from "react-router-dom";
-import {
-  DndContext,
-  DragOverlay,
-  PointerSensor,
-  closestCorners,
-  useDroppable,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-  type DragOverEvent,
-  type DragStartEvent,
-} from "@dnd-kit/core";
-import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
-import { Plus } from "lucide-react";
+import { DndContext, DragOverlay, PointerSensor, KeyboardSensor, useSensor, useSensors, useDroppable, pointerWithin, closestCenter, type CollisionDetection, type DragMoveEvent, type DragEndEvent } from "@dnd-kit/core";
+import { SortableContext, useSortable, horizontalListSortingStrategy, verticalListSortingStrategy, sortableKeyboardCoordinates } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import { GripVertical, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAppStore } from "@/lib/store";
-import { Todo, TodoStatus } from "@/lib/types";
+import type { Swimlane, Todo } from "@/lib/types";
+import { reorderLanes } from "@/lib/boardOrder";
 import { TodoRow } from "./TodoRow";
+import { StatusNode } from "./StatusNode";
 import { cn } from "@/lib/utils";
 
-interface Props {
-  projectId: string;
-  onManageLanes: () => void;
+// Buttons, inputs and menus must never activate a whole-card drag.
+class CardPointerSensor extends PointerSensor {
+  static activators = [{ eventName: "onPointerDown" as const, handler: ({nativeEvent:e}: React.PointerEvent) => {
+    const target = e.target as HTMLElement;
+    return e.isPrimary && e.button === 0 && (!target.closest("button,a,input,textarea,[role=menuitem],[role=combobox]") || !!target.closest("[data-drag-handle]"));
+  }}];
 }
-
-const LANE_COLOR: Record<TodoStatus, string> = {
-  todo: "text-node-todo",
-  doing: "text-node-doing",
-  done: "text-node-done",
+const collision: CollisionDetection = args => {
+  const laneDrag = args.active.data.current?.kind === "lane";
+  const containers = args.droppableContainers.filter(c => laneDrag ? c.data.current?.kind === "lane" : c.data.current?.kind !== "lane" && c.id !== args.active.id);
+  const hits = pointerWithin({...args, droppableContainers:containers});
+  if (hits.length) return [...hits].sort((a,b) => Number(String(a.id).startsWith("body:"))-Number(String(b.id).startsWith("body:")));
+  // Pointer outside the board cancels instead of snapping to a distant task.
+  return args.pointerCoordinates ? [] : closestCenter({...args,droppableContainers:containers});
 };
+type Target = {laneId:string; index:number};
 
-export function SwimlaneBoard({ projectId, onManageLanes }: Props) {
+export function SwimlaneBoard({projectId, query = "", branch = ""}: {projectId:string; query?:string; branch?:string}) {
   const navigate = useNavigate();
-  const { projects, todos, patchTodo, commitLaneOrder } = useAppStore();
-  const project = projects.find((p) => p.id === projectId);
-  const lanes = project?.swimlanes && project.swimlanes.length > 0 ? project.swimlanes : [];
-  const laneById = React.useMemo(() => new Map(lanes.map((l) => [l.id, l])), [lanes]);
-
-  const [draft, setDraft] = React.useState<Record<string, string[]> | null>(null);
-  const [activeTodo, setActiveTodo] = React.useState<Todo | null>(null);
-  // 拖拽起始泳道（dragStart 时记录；dragOver 会把 item 移入 draft 的目标泳道，
-  // dragEnd 时再查 findLaneOf 会得到目标泳道 → 源/目标相同 → 跨泳道 patchTodo 永不执行）
-  const [originLane, setOriginLane] = React.useState<string | null>(null);
-  const todoById = React.useMemo(() => new Map(todos.map((t) => [t.id, t])), [todos]);
-
-  const derive = React.useCallback((): Record<string, string[]> => {
-    const out: Record<string, string[]> = {};
-    for (const lane of lanes) out[lane.id] = [];
-    for (const t of todos) {
-      if (t.projectId !== projectId || t.archived) continue;
-      const laneId = laneById.has(t.swimlaneId) ? t.swimlaneId : laneById.keys().next().value;
-      if (laneId === undefined) continue;
-      (out[laneId] ??= []).push(t.id);
-    }
-    // 泳道内按 sortOrder 升序（同序按创建时间兜底）——拖拽排序持久化后重载可保留
-    for (const lane of lanes) {
-      const ids = out[lane.id] ?? [];
-      ids.sort((a, b) => {
-        const ta = todoById.get(a);
-        const tb = todoById.get(b);
-        if (!ta || !tb) return 0;
-        return (ta.sortOrder ?? 0) - (tb.sortOrder ?? 0) || ta.createdAt - tb.createdAt;
-      });
-    }
-    return out;
-  }, [lanes, laneById, todos, projectId, todoById]);
-
-  const items = draft ?? derive();
-
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
-  );
-
-  const findLaneOf = (id: string): string | null => {
-    for (const [laneId, ids] of Object.entries(items)) {
-      if (ids.includes(id)) return laneId;
-    }
-    return null;
+  const projects = useAppStore(s => s.projects), todos = useAppStore(s => s.todos);
+  const moveTodo = useAppStore(s => s.moveTodo), saveSwimlanes = useAppStore(s => s.saveSwimlanes);
+  const lanes = React.useMemo(() => [...(projects.find(p => p.id === projectId)?.swimlanes ?? [])].sort((a,b)=>a.sortOrder-b.sortOrder),[projects,projectId]);
+  const filtered = !!query.trim() || !!branch;
+  const items = React.useMemo(() => new Map(lanes.map(l => [l.id,todos.filter(t => t.projectId===projectId && !t.archived && t.swimlaneId===l.id && (!branch || t.branch===branch) && (!query.trim() || `${t.title} ${t.tag}`.toLowerCase().includes(query.trim().toLowerCase()))).sort((a,b)=>a.sortOrder-b.sortOrder || a.createdAt-b.createdAt)])),[lanes,todos,projectId,query,branch]);
+  const [active,setActive] = React.useState<{kind:string; id:string}|null>(null);
+  const [target,setTarget] = React.useState<Target|null>(null);
+  const [laneOver,setLaneOver] = React.useState<string|null>(null);
+  const targetRef = React.useRef<Target|null>(null);
+  const sensors = useSensors(useSensor(CardPointerSensor,{activationConstraint:{distance:6}}),useSensor(KeyboardSensor,{coordinateGetter:sortableKeyboardCoordinates}));
+  const reset = () => {setActive(null);setTarget(null);targetRef.current=null;setLaneOver(null);};
+  const locate = (e:DragMoveEvent):Target|null => {
+    if (!e.over) return null;
+    const data = e.over.data.current;
+    const laneId = data?.laneId as string | undefined;
+    if (!laneId) return null;
+    const list = (items.get(laneId)??[]).filter(t=>t.id!==String(e.active.id));
+    if (data?.kind === "body") return {laneId,index:list.length};
+    const index = list.findIndex(t=>t.id===String(e.over!.id));
+    if (index < 0) return null;
+    const rect=e.active.rect.current.translated;
+    const after=!!rect && rect.top+rect.height/2 > e.over.rect.top+e.over.rect.height/2;
+    return {laneId,index:index+Number(after)};
   };
-
-  const handleDragStart = (e: DragStartEvent) => {
-    setActiveTodo(todoById.get(String(e.active.id)) ?? null);
-    setOriginLane(findLaneOf(String(e.active.id)));
+  const over = (e:DragMoveEvent) => {
+    if (e.active.data.current?.kind === "lane") {setLaneOver(e.over ? String(e.over.id).slice(5):null);return;}
+    const next=locate(e);targetRef.current=next;setTarget(next);
   };
-
-  const handleDragOver = (e: DragOverEvent) => {
-    const { active, over } = e;
-    if (!over) return;
-    const activeId = String(active.id);
-    const overId = String(over.id);
-    const fromLane = findLaneOf(activeId);
-    // over 可能为泳道容器 id（lane-xxx）或 todo id
-    let toLane: string | null = overId.startsWith("lane-") ? overId.slice(5) : findLaneOf(overId);
-    if (!fromLane || !toLane || fromLane === toLane) return;
-    const next = { ...items };
-    next[fromLane] = next[fromLane].filter((id) => id !== activeId);
-    const overIndex = next[toLane].indexOf(overId);
-    next[toLane] = overIndex >= 0
-      ? [...next[toLane].slice(0, overIndex), activeId, ...next[toLane].slice(overIndex)]
-      : [...next[toLane], activeId];
-    setDraft(next);
+  const end = (e:DragEndEvent) => {
+    if (e.over && active?.kind === "lane") saveSwimlanes(projectId,reorderLanes(lanes,active.id,String(e.over.id).slice(5)));
+    else if (e.over && active && targetRef.current && !filtered) moveTodo(projectId,active.id,targetRef.current.laneId,targetRef.current.index);
+    reset();
   };
-
-  const handleDragEnd = (e: DragEndEvent) => {
-    const { active, over } = e;
-    const activeId = String(active.id);
-    setActiveTodo(null);
-    if (!over) {
-      setDraft(null);
-      setOriginLane(null);
-      return;
-    }
-    const overId = String(over.id);
-    // 源泳道取拖拽起点记录（draft 中 item 已被 dragOver 移到目标泳道，不可靠）
-    const fromLane = originLane;
-    let toLane: string | null = overId.startsWith("lane-") ? overId.slice(5) : findLaneOf(overId);
-    if (!fromLane) {
-      setDraft(null);
-      setOriginLane(null);
-      return;
-    }
-    const targetLane = toLane ? laneById.get(toLane) : undefined;
-    const todo = todoById.get(activeId);
-    if (!todo) {
-      setDraft(null);
-      setOriginLane(null);
-      return;
-    }
-    // 落定顺序（在 draft 或源 items 上操作）
-    const base = draft ?? items;
-    const next = { ...base };
-    const list = [...(next[fromLane] ?? [])];
-    const moved = list.filter((id) => id !== activeId);
-    const overIndex = list.indexOf(overId);
-    if (toLane && toLane !== fromLane) {
-      // dragOver 阶段可能已把 activeId 插入 targetList → 先移除再插入，避免重复
-      const targetList = [...(next[toLane] ?? [])].filter((id) => id !== activeId);
-      const idx = targetList.indexOf(overId);
-      targetList.splice(idx >= 0 ? idx : targetList.length, 0, activeId);
-      next[toLane] = targetList;
-      next[fromLane] = moved;
-    } else {
-      moved.splice(overIndex >= 0 ? overIndex : moved.length, 0, activeId);
-      next[fromLane] = moved;
-    }
-    setDraft(null);
-    setOriginLane(null);
-
-    // 跨泳道 = 修改归属（泳道绑定状态 → 同步 status），落库
-    if (toLane && toLane !== fromLane && targetLane) {
-      patchTodo(activeId, {
-        swimlaneId: targetLane.id,
-        status: targetLane.status as TodoStatus,
-      });
-    }
-    // 顺序落库（memory 态；重载后按创建时间兜底）
-    for (const [laneId, ids] of Object.entries(next)) {
-      commitLaneOrder(projectId, laneId, ids);
-    }
-  };
-
-  return (
-    <DndContext
-      sensors={sensors}
-      collisionDetection={closestCorners}
-      onDragStart={handleDragStart}
-      onDragOver={handleDragOver}
-      onDragEnd={handleDragEnd}
-      onDragCancel={() => {
-        setDraft(null);
-        setActiveTodo(null);
-        setOriginLane(null);
-      }}
-    >
-      <div className="flex h-full gap-3 overflow-x-auto p-1">
-        {lanes.map((lane) => (
-          <LaneColumn
-            key={lane.id}
-            laneId={lane.id}
-            title={lane.name}
-            status={lane.status as TodoStatus}
-            count={(items[lane.id] ?? []).length}
-          >
-            <SortableContext items={items[lane.id] ?? []} strategy={verticalListSortingStrategy}>
-              <div className="flex flex-col gap-2">
-                {(items[lane.id] ?? []).map((id) => {
-                  const t = todoById.get(id);
-                  return t ? <TodoRow key={t.id} todo={t} /> : null;
-                })}
-              </div>
-            </SortableContext>
-          </LaneColumn>
-        ))}
-        {/* 新建待办按钮列 */}
-        <div className="flex w-36 shrink-0 flex-col items-center justify-center gap-2 rounded-md border border-dashed">
-          <Button
-            variant="ghost"
-            className="gap-2"
-            onClick={() => navigate(`/project/${projectId}/todo/new`)}
-          >
-            <Plus className="h-4 w-4" /> 新建待办
-          </Button>
-          <Button variant="ghost" size="sm" onClick={onManageLanes}>
-            管理泳道
-          </Button>
-        </div>
-      </div>
-
-      <DragOverlay>
-        {activeTodo ? (
-          <div className="w-80 opacity-90">
-            <TodoRow todo={activeTodo} />
-          </div>
-        ) : null}
-      </DragOverlay>
-    </DndContext>
-  );
-}
-
-function LaneColumn({
-  laneId,
-  title,
-  status,
-  count,
-  children,
-}: {
-  laneId: string;
-  title: string;
-  status: TodoStatus;
-  count: number;
-  children: React.ReactNode;
-}) {
-  const { setNodeRef, isOver } = useDroppable({ id: `lane-${laneId}` });
-  return (
-    <div
-      ref={setNodeRef}
-      className={cn(
-        "flex h-full w-72 shrink-0 flex-col rounded-lg border bg-muted/25",
-        isOver && "ring-2 ring-primary/50",
-      )}
-    >
-      <div className="flex items-baseline justify-between px-3 pb-1.5 pt-2.5">
-        <span className="flex items-center gap-1.5 text-sm font-medium">
-          <StatusNode status={status} className="h-2 w-2" />
-          {title}
-        </span>
-        <span className="font-mono text-xs tabular-nums text-muted-foreground">
-          {String(count).padStart(2, "0")}
-        </span>
-      </div>
-      <div className="flex-1 overflow-y-auto px-2 pb-2">{children}</div>
+  const draggingTask=active?.kind === "todo" ? todos.find(t=>t.id===active.id):null;
+  const draggingLane=active?.kind === "lane" ? lanes.find(l=>l.id===active.id):null;
+  return <DndContext sensors={sensors} collisionDetection={collision} onDragStart={e=>{setActive({kind:e.active.data.current?.kind,id:String(e.active.id).replace(/^lane:/,"")});}} onDragOver={over} onDragMove={over} onDragEnd={end} onDragCancel={reset}>
+    {filtered && <p className="mb-2 text-xs text-muted-foreground">筛选结果中暂不调整任务顺序，清除筛选后即可拖拽。</p>}
+    <div className="flex h-full items-stretch gap-5 overflow-x-auto pb-3" data-testid="kanban">
+      <SortableContext items={lanes.map(l=>`lane:${l.id}`)} strategy={horizontalListSortingStrategy}>
+        {lanes.map(lane=><Lane key={lane.id} lane={lane} tasks={items.get(lane.id)??[]} activeId={active?.kind==="todo"?active.id:null} target={target?.laneId===lane.id?target:null} laneTarget={laneOver===lane.id && draggingLane?.id!==lane.id} disabled={filtered} onAdd={()=>navigate(`/project/${projectId}/todo/new?swimlane=${encodeURIComponent(lane.id)}`)} />)}
+      </SortableContext>
+      {lanes.length===0 && <div className="tk-panel flex-1 p-10 text-center text-muted-foreground">暂无泳道，请通过“管理泳道”添加。</div>}
     </div>
-  );
+    <DragOverlay dropAnimation={null}>{draggingTask ? <div className="w-[280px] rotate-1 shadow-xl rounded-xl"><TodoRow todo={draggingTask} variant="card" /></div> : draggingLane ? <div className="tk-panel w-[300px] p-5 shadow-xl"><div className="flex gap-2 font-semibold"><GripVertical className="h-5 w-5 text-primary"/>{draggingLane.name}</div><p className="mt-2 text-xs text-muted-foreground">{items.get(draggingLane.id)?.length ?? 0} 个任务</p></div>:null}</DragOverlay>
+  </DndContext>;
 }
-
-/** git graph 状态节点：空心=待办，实心=进行中，叉=完成 */
-export function StatusNode({ status, className }: { status: TodoStatus; className?: string }) {
-  if (status === "done") {
-    return (
-      <svg viewBox="0 0 8 8" className={cn(LANE_COLOR[status], className)} aria-hidden>
-        <path
-          d="M1 1 L7 7 M7 1 L1 7"
-          stroke="currentColor"
-          strokeWidth="1.6"
-          strokeLinecap="round"
-          fill="none"
-        />
-      </svg>
-    );
-  }
-  return (
-    <svg viewBox="0 0 8 8" className={cn(LANE_COLOR[status], className)} aria-hidden>
-      {status === "doing" && <circle cx="4" cy="4" r="3" fill="currentColor" />}
-      <circle
-        cx="4"
-        cy="4"
-        r="3"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={status === "doing" ? 0 : 1.6}
-      />
-    </svg>
-  );
+function Lane({lane,tasks,activeId,target,laneTarget,disabled,onAdd}:{lane:Swimlane;tasks:Todo[];activeId:string|null;target:Target|null;laneTarget:boolean;disabled:boolean;onAdd:()=>void}) {
+  const sortable=useSortable({id:`lane:${lane.id}`,data:{kind:"lane",laneId:lane.id}});
+  const body=useDroppable({id:`body:${lane.id}`,data:{kind:"body",laneId:lane.id},disabled});
+  const destination=tasks.filter(t=>t.id!==activeId);
+  let visibleIndex=0;
+  return <section ref={sortable.setNodeRef} style={{transform:CSS.Transform.toString(sortable.transform),transition:sortable.transition}} className={cn("tk-lane",sortable.isDragging&&"opacity-30",laneTarget&&"tk-lane-target")} aria-label={`${lane.name}泳道`} data-lane-id={lane.id}>
+    <header className="tk-lane-header">
+      <button {...sortable.attributes} {...sortable.listeners} data-drag-handle aria-label={`拖动泳道 ${lane.name}`} className="touch-none cursor-grab rounded p-1 text-muted-foreground/60 hover:text-primary"><GripVertical className="h-4 w-4"/></button>
+      <StatusNode status={lane.status}/><h2 className="min-w-0 truncate text-sm font-semibold" title={lane.name}>{lane.name}</h2>
+      <span className="rounded-md border bg-background/50 px-2 py-0.5 text-xs tabular-nums text-muted-foreground">{tasks.length}</span>
+      <Button aria-label={`在${lane.name}中添加任务`} variant="ghost" size="icon" className="ml-auto h-7 w-7" onClick={onAdd}><Plus className="h-4 w-4"/></Button>
+    </header>
+    <div ref={body.setNodeRef} className={cn("tk-lane-scroll",target&&"bg-primary/4")}>
+      <SortableContext items={tasks.map(t=>t.id)} strategy={verticalListSortingStrategy}>
+        <div className="flex min-h-full flex-col gap-3">
+          {tasks.map(t=>{const line=t.id!==activeId && target?.index===visibleIndex; if(t.id!==activeId) visibleIndex++;return <React.Fragment key={t.id}>{line&&<div className="tk-drop-line"/>}<SortableTask todo={t} disabled={disabled}/></React.Fragment>;})}
+          {target && target.index>=destination.length && <div className="tk-drop-line"/>}
+          {!tasks.length && <p className="py-12 text-center text-xs text-muted-foreground">{target?"松开以移动到这里":"暂无任务，拖动任务到这里"}</p>}
+        </div>
+      </SortableContext>
+    </div>
+    <div className="mx-3 border-t py-2"><Button variant="ghost" className="w-full gap-2 text-xs text-muted-foreground" onClick={onAdd}><Plus className="h-3.5 w-3.5"/>添加任务</Button></div>
+  </section>;
+}
+function SortableTask({todo,disabled}:{todo:Todo;disabled:boolean}) {
+  const s=useSortable({id:todo.id,data:{kind:"todo",laneId:todo.swimlaneId},disabled});
+  return <div ref={s.setNodeRef} {...s.attributes} {...s.listeners} aria-label={`拖动任务 ${todo.title}`} style={{transform:CSS.Transform.toString(s.transform),transition:s.transition}} className={cn(!disabled&&"cursor-grab active:cursor-grabbing",s.isDragging&&"opacity-25")} data-task-id={todo.id}><TodoRow todo={todo} variant="card"/></div>;
 }

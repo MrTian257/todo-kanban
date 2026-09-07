@@ -10,7 +10,10 @@ export function isTauri(): boolean {
 
 /** 加载全量状态；非 Tauri / 无数据源 → null（前端空态） */
 export async function loadState(): Promise<AppState | null> {
-  if (!isTauri()) return null;
+  if (!isTauri()) {
+    try { const raw = sessionStorage.getItem("todo-kanban-preview-v1"); return raw ? JSON.parse(raw) : null; }
+    catch { return null; }
+  }
   try {
     const state = await invoke<AppState | null>("db_load_state");
     return state ?? null;
@@ -22,7 +25,13 @@ export async function loadState(): Promise<AppState | null> {
 
 /** 保存全量状态；浏览器模式直接返回 */
 export async function saveState(state: AppState): Promise<void> {
-  if (!isTauri()) return;
+  if (!isTauri()) {
+    // Preview data is tab-local. Never store repository credentials in browser storage.
+    sessionStorage.setItem("todo-kanban-preview-v1", JSON.stringify({
+      ...state, projects: state.projects.map(p => ({ ...p, frontendRepoToken:"", backendRepoToken:"" }))
+    }));
+    return;
+  }
   try {
     await invoke("db_save_state", { payload: state });
   } catch (e) {

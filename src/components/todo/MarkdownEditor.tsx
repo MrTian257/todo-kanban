@@ -146,9 +146,9 @@ export function MarkdownEditor({ value, onChange, className }: Props) {
   };
 
   return (
-    <div className={cn("flex h-full flex-col overflow-hidden rounded-md border", className)}>
+    <div className={cn("flex h-full flex-col overflow-hidden", className)}>
       {/* 工具栏 */}
-      <div className="flex flex-wrap items-center gap-0.5 border-b bg-muted/40 p-1">
+      <div className="flex flex-wrap items-center gap-1 border-y bg-muted/25 px-6 py-2">
         <ToolButton title="加粗" onClick={() => exec("bold")}><Bold className="h-3.5 w-3.5" /></ToolButton>
         <ToolButton title="斜体" onClick={() => exec("italic")}><Italic className="h-3.5 w-3.5" /></ToolButton>
         <ToolButton title="标题 2" onClick={() => wrap("## ", "\n")}><Heading2 className="h-3.5 w-3.5" /></ToolButton>
@@ -163,10 +163,13 @@ export function MarkdownEditor({ value, onChange, className }: Props) {
       {/* 编辑区 */}
       <div
         ref={ref}
+        role="textbox"
+        aria-label="任务描述"
+        aria-multiline="true"
         contentEditable
         suppressContentEditableWarning
-        className="md-editor flex-1 overflow-y-auto p-3 text-sm focus:outline-none"
-        data-placeholder="支持 Markdown 备注（可直接粘贴图片）…"
+        className="md-editor flex-1 min-h-48 overflow-y-auto px-7 py-6 text-sm leading-7 focus:outline-none"
+        data-placeholder="描述任务目标、实现要点或验收条件…"
         onInput={handleInput}
         onPaste={onPaste}
       />
@@ -176,7 +179,7 @@ export function MarkdownEditor({ value, onChange, className }: Props) {
 
 function ToolButton({ title, onClick, children }: { title: string; onClick: () => void; children: React.ReactNode }) {
   return (
-    <Button type="button" variant="ghost" size="icon" className="h-7 w-7" title={title} onClick={onClick}>
+    <Button type="button" variant="ghost" size="icon" className="h-7 w-7" title={title} aria-label={title} onClick={onClick}>
       {children}
     </Button>
   );
