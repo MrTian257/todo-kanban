@@ -5,11 +5,14 @@ import { useNavigate } from "react-router-dom";
 import {
   DndContext,
   DragOverlay,
+  MeasuringStrategy,
   PointerSensor,
   closestCorners,
+  pointerWithin,
   useDroppable,
   useSensor,
   useSensors,
+  type CollisionDetection,
   type DragEndEvent,
   type DragOverEvent,
   type DragStartEvent,
@@ -31,6 +34,20 @@ const LANE_COLOR: Record<TodoStatus, string> = {
   todo: "text-node-todo",
   doing: "text-node-doing",
   done: "text-node-done",
+};
+
+/**
+ * 指针优先碰撞检测：指针所在的 droppable 优先，指针不在任何容器内时回退最近角。
+ * 相比默认 closestCorners（整卡矩形四角 vs 目标四角配对求距离）：
+ * - 落点即指针位置，不受拖拽卡片尺寸/窗口形状影响（大窗口下卡片四角可能更靠近错误泳道）
+ * - 泳道容器矩形远大于卡片矩形，closestCorners 在大窗口下容易误判
+ */
+const laneCollisionDetection: CollisionDetection = (args) => {
+  const pointerHits = pointerWithin(args);
+  if (pointerHits.length > 0) {
+    return pointerHits;
+  }
+  return closestCorners(args);
 };
 
 export function SwimlaneBoard({ projectId, onManageLanes }: Props) {
@@ -166,7 +183,13 @@ export function SwimlaneBoard({ projectId, onManageLanes }: Props) {
   return (
     <DndContext
       sensors={sensors}
-      collisionDetection={closestCorners}
+      collisionDetection={laneCollisionDetection}
+      measuring={{
+        droppable: {
+          strategy: MeasuringStrategy.WhileDragging,
+          frequency: 50,
+        },
+      }}
       onDragStart={handleDragStart}
       onDragOver={handleDragOver}
       onDragEnd={handleDragEnd}
