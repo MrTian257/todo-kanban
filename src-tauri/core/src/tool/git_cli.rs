@@ -121,28 +121,20 @@ pub fn commit_branches(repo: &str, hash: &str) -> AppResult<Vec<String>> {
     Ok(parse_branch_list(&out))
 }
 
-/// 分支名校验（与前端 zod 同规则）
+/// 分支名校验（与前端 zod 同规则）：放宽为允许任意合法字符，
+/// 仅拒绝空白/控制字符及 # @ % & * 等符号
 pub fn validate_branch_name(name: &str) -> AppResult<()> {
     if name.trim().is_empty() {
         return Err(AppError::invalid("分支名不能为空"));
     }
-    if name.trim() != name {
-        return Err(AppError::invalid("分支名首尾不能有空格"));
-    }
-    let invalid = [' ', '~', '^', ':', '?', '*', '[', '\\'];
-    if name.chars().any(|c| invalid.contains(&c) || c.is_control()) {
-        return Err(AppError::invalid(
-            "分支名含非法字符（空格 ~ ^ : ? * [ \\ 等）",
-        ));
-    }
-    if name.starts_with('-')
-        || name.ends_with('/')
-        || name.ends_with('.')
-        || name.contains("..")
-        || name.contains("//")
-        || name.contains("@{")
+    let invalid = ['#', '@', '%', '&', '*'];
+    if name
+        .chars()
+        .any(|c| c.is_whitespace() || c.is_control() || invalid.contains(&c))
     {
-        return Err(AppError::invalid("分支名格式非法"));
+        return Err(AppError::invalid(
+            "分支名不能包含空格及 # @ % & * 等符号",
+        ));
     }
     Ok(())
 }
@@ -178,13 +170,27 @@ mod tests {
 
     #[test]
     fn validate_branch_name_cases() {
+        // 合法：常规 git 分支名
         assert!(validate_branch_name("feature/todo-12").is_ok());
         assert!(validate_branch_name("main").is_ok());
+        // 放宽后合法：.. // 前导 - : ~ ^ 等任意合法字符
+        assert!(validate_branch_name("a..b").is_ok());
+        assert!(validate_branch_name("a//b").is_ok());
+        assert!(validate_branch_name("-leading").is_ok());
+        assert!(validate_branch_name("hotfix:wip").is_ok());
+        assert!(validate_branch_name("v1.0.x").is_ok());
+        assert!(validate_branch_name("修复登录问题").is_ok());
+        // 非法：空 / 空白
         assert!(validate_branch_name("").is_err());
+        assert!(validate_branch_name("   ").is_err());
         assert!(validate_branch_name("bad name").is_err());
-        assert!(validate_branch_name("bad^name").is_err());
-        assert!(validate_branch_name("a..b").is_err());
-        assert!(validate_branch_name("a//b").is_err());
-        assert!(validate_branch_name("-leading").is_err());
+        assert!(validate_branch_name("bad\nname").is_err());
+        assert!(validate_branch_name("bad\tname").is_err());
+        // 非法：指定符号
+        assert!(validate_branch_name("bad#name").is_err());
+        assert!(validate_branch_name("bad@name").is_err());
+        assert!(validate_branch_name("bad%name").is_err());
+        assert!(validate_branch_name("bad&name").is_err());
+        assert!(validate_branch_name("bad*name").is_err());
     }
 }

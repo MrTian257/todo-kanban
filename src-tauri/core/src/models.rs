@@ -80,12 +80,28 @@ pub struct DbBranchRuleStep {
     pub note: String,
 }
 
+/// 分支流程中的单分支定义：角色 + 显示名称 + 分支编码（git 分支名）
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DbBranchDef {
+    pub role: String,
+    /// 显示名称（如「生产」「开发」），空则回退角色默认名
+    #[serde(default)]
+    pub name: String,
+    /// 分支编码（git 分支名，如 main / dev / release/1.0）
+    #[serde(default)]
+    pub code: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct DbBranchRule {
     pub enabled: bool,
     #[serde(default)]
     pub steps: Vec<DbBranchRuleStep>,
+    /// 每分支定义（名称 + 分支编码）；steps 通过 role 引用。旧数据缺失时为空
+    #[serde(default)]
+    pub branches: Vec<DbBranchDef>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]

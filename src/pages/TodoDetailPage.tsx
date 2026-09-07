@@ -27,12 +27,13 @@ import { GitInfo, STATUS_LABEL, Todo, TodoStatus } from "@/lib/types";
 import { normalizeTodo } from "@/lib/normalize";
 import { newId } from "@/lib/utils";
 
-// 分支名校验（与后端 validate_branch_name 同规则）
-const INVALID_BRANCH_CHARS = /[\s~^:?*[\]\\/]|\.\.|\/\/|@{|^-|(^|\/)\.$/;
+// 分支名校验（与后端 validate_branch_name 同规则）：放宽为允许任意合法字符，
+// 仅拒绝空白/控制字符及 # @ % & * 等符号
+const INVALID_BRANCH_CHARS = /[\s#%@&*]|[\x00-\x1f\x7f-\x9f]/;
 const branchNameSchema = z
   .string()
   .min(1, "分支名不能为空")
-  .refine((v) => !INVALID_BRANCH_CHARS.test(v.trim()) && v.trim() === v, "分支名含非法字符");
+  .refine((v) => !INVALID_BRANCH_CHARS.test(v), "分支名不能包含空格及 # @ % & * 等符号");
 
 const schema = z
   .object({

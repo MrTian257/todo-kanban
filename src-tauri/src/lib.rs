@@ -1,23 +1,43 @@
 // 应用入口：注册 11 命令 + opener/log 插件 + 启动自举（数据文件初始化 + 演示数据种子）。
+// 日志：运行目录 kanban.log（追加写，超限轮转只保留一份）。
 
 pub mod commands;
 
+use tauri_plugin_log::{Target, TargetKind, TimezoneStrategy};
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 运行目录：日志与数据文件均落于此（提前解析，log 插件初始化需用）
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+
+    let log_targets = match &exe_dir {
+        Some(dir) => vec![
+            Target::new(TargetKind::Folder {
+                path: dir.clone(),
+                file_name: Some("kanban".into()),
+            }),
+            Target::new(TargetKind::Stdout),
+        ],
+        None => vec![Target::new(TargetKind::Stdout)],
+    };
+
     tauri::Builder::default()
-        .plugin(tauri_plugin_log::Builder::new().build())
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .targets(log_targets)
+                .timezone_strategy(TimezoneStrategy::UseLocal)
+                .build(),
+        )
         .plugin(tauri_plugin_opener::init())
-        .setup(|_app| {
+        .setup(move |_app| {
             // 启动自举：无 db-config.txt → 初始化运行目录 todo-kanban.db 并写演示数据
-            match std::env::current_exe()
-                .ok()
-                .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-            {
-                Some(dir) => {
-                    if let Err(e) = todo_kanban_core::svc::db_cmds::ensure_db_at(&dir) {
-                        log::error!("数据文件初始化失败：{e}");
-                    }
-                }
+            match &exe_dir {
+                Some(dir) => match todo_kanban_core::svc::db_cmds::ensure_db_at(dir) {
+                    Ok(path) => log::info!("数据文件就绪：{}", path.display()),
+                    Err(e) => log::error!("数据文件初始化失败：{e}"),
+                },
                 None => log::error!("数据文件初始化失败：无法定位程序目录"),
             }
             Ok(())

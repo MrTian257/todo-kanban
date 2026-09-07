@@ -33,9 +33,18 @@ export interface BranchRuleStep {
   note: string;
 }
 
+/** 分支流程中的单分支定义：角色 + 显示名称 + 分支编码（git 分支名） */
+export interface BranchDef {
+  role: string;
+  name: string;
+  code: string;
+}
+
 export interface BranchRule {
   enabled: boolean;
   steps: BranchRuleStep[];
+  /** 每分支定义（名称 + 分支编码）；steps 通过 role 引用。旧数据缺失时为空数组 */
+  branches: BranchDef[];
 }
 
 export interface Project {
@@ -132,6 +141,17 @@ export const BRANCH_ACTION_LABEL: Record<string, string> = {
   checkout: "切出",
   merge: "合并",
 };
+
+/** 角色 → 显示名：优先 branches 自定义名称，回退角色默认名 */
+export function branchDisplayName(rule: Pick<BranchRule, "branches"> | null | undefined, role: string): string {
+  const name = rule?.branches?.find((b) => b.role === role)?.name?.trim();
+  return name ? name : (BRANCH_ROLE_LABEL[role] ?? role);
+}
+
+/** 角色 → 分支编码（git 分支名）；未定义返回空串 */
+export function branchCodeOf(rule: Pick<BranchRule, "branches"> | null | undefined, role: string): string {
+  return rule?.branches?.find((b) => b.role === role)?.code?.trim() ?? "";
+}
 
 // ── 表单值类型 ──────────────────────────────────────────
 export interface TodoFormValues {

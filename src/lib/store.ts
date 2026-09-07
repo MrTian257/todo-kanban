@@ -11,8 +11,13 @@ import { gitInfoCached } from "./git";
 
 // ── 串行写链 ───────────────────────────────────────────
 let writeChain: Promise<void> = Promise.resolve();
+// 写后冷却：本地写落库完成后短暂窗口内，外部同步不得用磁盘态覆盖内存
+// （防竞态：轮询 loadState 可能读到写链在途的旧快照，覆盖会丢刚保存的数据）
+let lastWriteAt = 0;
+const WRITE_COOLDOWN_MS = 3000;
 
 function enqueueSave(state: AppState) {
+  lastWriteAt = Date.now();
   writeChain = writeChain
     .then(() => saveState({ projects: state.projects, todos: state.todos }))
     .catch((e) => console.error("落库失败", e));
@@ -39,6 +44,11 @@ function demoState(): AppState {
         { id: "s1", from: "production", action: "checkout", to: "develop", note: "" },
         { id: "s2", from: "develop", action: "merge", to: "test", note: "" },
         { id: "s3", from: "develop", action: "merge", to: "production", note: "" },
+      ],
+      branches: [
+        { role: "production", name: "生产", code: "master" },
+        { role: "develop", name: "开发", code: "dev" },
+        { role: "test", name: "测试", code: "test" },
       ],
     },
     swimlanes: [
@@ -267,9 +277,14 @@ export function startExternalSync() {
   if (!isTauri()) return;
   const sync = async () => {
     try {
+      // 本地写后冷却期内跳过：写链在途时磁盘是旧快照，覆盖会丢刚保存的数据
+      const syncStart = Date.now();
+      if (syncStart - lastWriteAt < WRITE_COOLDOWN_MS) return;
       await writeChain;
       const disk = await loadState();
       if (!disk) return;
+      // 双保险：本轮同步期间又有新写排队 → 刚读的磁盘快照可能已过时，放弃覆盖
+      if (lastWriteAt > syncStart) return;
       const current = useAppStore.getState();
       const diskNorm = normalizeState(disk);
       const curNorm = normalizeState({ projects: current.projects, todos: current.todos });

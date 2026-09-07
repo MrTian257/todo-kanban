@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#233c73"/>
+      <stop offset="1" stop-color="#3c5387"/>
+    </linearGradient>
+  </defs>
+  <rect x="16" y="16" width="992" height="992" rx="200" fill="url(#g)"/>
+  <!-- 主干 -->
+  <path d="M390 830 V300" stroke="#f5f1e8" stroke-width="46" stroke-linecap="round"/>
+  <!-- 分支 -->
+  <path d="M390 660 C450 620 560 500 670 400" stroke="#f5f1e8" stroke-width="46" stroke-linecap="round" fill="none"/>
+  <!-- done：圆圈+叉 -->
+  <circle cx="390" cy="830" r="74" fill="#3c5387" stroke="#f5f1e8" stroke-width="40"/>
+  <path d="M338 778 L442 882 M338 882 L442 778" stroke="#f5f1e8" stroke-width="40" stroke-linecap="round"/>
+  <!-- doing：实心圆 -->
+  <circle cx="390" cy="300" r="74" fill="#f5f1e8"/>
+  <!-- todo：空心圆 -->
+  <circle cx="670" cy="400" r="74" fill="#3c5387" stroke="#f5f1e8" stroke-width="40"/>
+</svg>

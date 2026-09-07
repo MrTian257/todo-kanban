@@ -65,7 +65,13 @@ export function normalizeProject(raw: Partial<Project>): Project {
     frontendRepoToken: raw.frontendRepoToken ?? "",
     backendRepoToken: raw.backendRepoToken ?? "",
     productionBranch: raw.productionBranch ?? "",
-    branchRule: raw.branchRule ?? null,
+    branchRule: raw.branchRule
+      ? {
+          enabled: raw.branchRule.enabled ?? false,
+          steps: Array.isArray(raw.branchRule.steps) ? raw.branchRule.steps : [],
+          branches: Array.isArray(raw.branchRule.branches) ? raw.branchRule.branches : [],
+        }
+      : null,
     swimlanes: raw.swimlanes && raw.swimlanes.length > 0 ? raw.swimlanes : DEFAULT_SWIMLANES.map((l) => ({ ...l })),
     archived: raw.archived ?? false,
     createdAt: raw.createdAt ?? Date.now(),

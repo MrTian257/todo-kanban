@@ -30,6 +30,7 @@ import {
   BRANCH_ACTION_LABEL,
   BRANCH_ROLES,
   BRANCH_ROLE_LABEL,
+  BranchDef,
   BranchRule,
   BranchRuleStep,
   Project,
@@ -63,6 +64,13 @@ const BRANCH_RULE_TEMPLATE: BranchRuleStep[] = [
   { id: "s3", from: "develop", action: "merge", to: "production", note: "" },
 ];
 
+/** 分支定义模板：按角色给出默认编码建议（用户可改） */
+const BRANCH_DEF_TEMPLATE: BranchDef[] = [
+  { role: "production", name: "生产", code: "master" },
+  { role: "develop", name: "开发", code: "dev" },
+  { role: "test", name: "测试", code: "test" },
+];
+
 export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
   const { upsertProject } = useAppStore();
   const isEdit = !!project;
@@ -70,6 +78,7 @@ export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
   const [showToken, setShowToken] = React.useState(false);
   const [ruleEnabled, setRuleEnabled] = React.useState(true);
   const [steps, setSteps] = React.useState<BranchRuleStep[]>(BRANCH_RULE_TEMPLATE.map((s) => ({ ...s })));
+  const [defs, setDefs] = React.useState<BranchDef[]>(BRANCH_DEF_TEMPLATE.map((b) => ({ ...b })));
 
   const {
     register,
@@ -111,6 +120,16 @@ export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
           ? project.branchRule.steps.map((s) => ({ ...s }))
           : BRANCH_RULE_TEMPLATE.map((s) => ({ ...s })),
       );
+      // 分支定义：优先项目已有定义（补齐缺失角色为空行），新项目用模板
+      const existing = project?.branchRule?.branches ?? [];
+      const merged = BRANCH_ROLES.map(
+        (r) => existing.find((b) => b.role === r) ?? { role: r, name: BRANCH_ROLE_LABEL[r], code: "" },
+      );
+      setDefs(
+        existing.length > 0
+          ? merged
+          : BRANCH_DEF_TEMPLATE.map((b) => ({ ...b })),
+      );
     }
   }, [open, project, reset]);
 
@@ -119,6 +138,10 @@ export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
     const rule: BranchRule | null = {
       enabled: ruleEnabled,
       steps: steps.filter((s) => s.from && s.to && s.action),
+      // 只保留填了编码的定义（未填编码=不启用该角色）
+      branches: defs
+        .map((b) => ({ role: b.role, name: b.name.trim(), code: b.code.trim() }))
+        .filter((b) => b.code !== ""),
     };
     const p: Project = {
       id: project?.id ?? newId(),
@@ -144,6 +167,16 @@ export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
 
   const updateStep = (id: string, patch: Partial<BranchRuleStep>) => {
     setSteps(steps.map((s) => (s.id === id ? { ...s, ...patch } : s)));
+  };
+
+  /** 角色 → 表单内显示名（defs 优先，回退默认） */
+  const roleName = (role: string) => defs.find((b) => b.role === role)?.name?.trim() || BRANCH_ROLE_LABEL[role] || role;
+  /** 角色 → 表单内编码 */
+  const roleCode = (role: string) => defs.find((b) => b.role === role)?.code?.trim() ?? "";
+  /** 下拉选项文案：名称（编码） */
+  const roleOption = (role: string) => {
+    const code = roleCode(role);
+    return code ? `${roleName(role)} · ${code}` : roleName(role);
   };
 
   return (
@@ -218,13 +251,41 @@ export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
                 <React.Fragment key={s.id}>
                   {i > 0 && <span className="text-muted-foreground">→</span>}
                   <span className="rounded bg-background px-2 py-1 shadow-sm">
-                    {BRANCH_ROLE_LABEL[s.from] ?? s.from} {BRANCH_ACTION_LABEL[s.action] ?? s.action}{" "}
-                    {BRANCH_ROLE_LABEL[s.to] ?? s.to}
+                    {roleName(s.from)} {BRANCH_ACTION_LABEL[s.action] ?? s.action} {roleName(s.to)}
+                    {(roleCode(s.from) || roleCode(s.to)) && (
+                      <span className="ml-1 font-mono text-[10px] text-muted-foreground">
+                        [{roleCode(s.from) || "?"} → {roleCode(s.to) || "?"}]
+                      </span>
+                    )}
                   </span>
                 </React.Fragment>
               ))}
               {steps.length === 0 && <span className="text-muted-foreground">（空）暂不配置</span>}
             </div>
+            {/* 分支定义：每角色名称 + 分支编码 */}
+            <div className="overflow-x-auto"><div className="min-w-[490px] space-y-2">
+              <div className="grid grid-cols-[90px_1fr_1fr] gap-2 text-xs text-muted-foreground"><span>角色</span><span>分支名称</span><span>分支编码（git 分支名）</span></div>
+              {defs.map((b) => (
+                <div key={b.role} className="grid grid-cols-[90px_1fr_1fr] items-center gap-2">
+                  <span className="text-xs text-muted-foreground">{BRANCH_ROLE_LABEL[b.role] ?? b.role}</span>
+                  <Input
+                    className="h-9"
+                    aria-label={`分支名称 ${BRANCH_ROLE_LABEL[b.role] ?? b.role}`}
+                    placeholder={BRANCH_ROLE_LABEL[b.role] ?? b.role}
+                    value={b.name}
+                    onChange={(e) => setDefs(defs.map((x) => (x.role === b.role ? { ...x, name: e.target.value } : x)))}
+                  />
+                  <Input
+                    className="h-9 font-mono"
+                    aria-label={`分支编码 ${BRANCH_ROLE_LABEL[b.role] ?? b.role}`}
+                    placeholder="如 main / dev / release/1.0"
+                    value={b.code}
+                    onChange={(e) => setDefs(defs.map((x) => (x.role === b.role ? { ...x, code: e.target.value } : x)))}
+                  />
+                </div>
+              ))}
+            </div></div>
+            <p className="text-xs text-muted-foreground">分支编码留空的角色视为未启用；步骤中引用了未定义编码的角色时，保存将被后端校验拒绝。</p>
             <div className="overflow-x-auto"><div className="min-w-[490px] space-y-2">
               <div className="grid grid-cols-[16px_1fr_90px_1fr_104px] gap-2 text-xs text-muted-foreground"><span/><span>来源分支</span><span>操作</span><span>目标分支</span><span>调整顺序</span></div>
               {steps.map((s, i) => (
@@ -234,7 +295,7 @@ export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
                     <SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       {BRANCH_ROLES.map((r) => (
-                        <SelectItem key={r} value={r}>{BRANCH_ROLE_LABEL[r]}</SelectItem>
+                        <SelectItem key={r} value={r}>{roleOption(r)}</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
@@ -249,7 +310,7 @@ export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
                     <SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       {BRANCH_ROLES.map((r) => (
-                        <SelectItem key={r} value={r}>{BRANCH_ROLE_LABEL[r]}</SelectItem>
+                        <SelectItem key={r} value={r}>{roleOption(r)}</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
