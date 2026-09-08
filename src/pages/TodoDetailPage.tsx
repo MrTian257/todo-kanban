@@ -208,6 +208,8 @@ export function TodoDetailPage() {
       seq: 0,
       tag: "",
       archived: false,
+      createdBy: "human",
+      aiCoordinated: false,
       createdAt: now,
     };
     const todo = normalizeTodo(

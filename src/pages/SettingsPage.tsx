@@ -1,5 +1,6 @@
-// 设置：明暗、主题皮肤（5 套）、侧边导航、数据说明
+// 设置：明暗、主题皮肤（5 套）、侧边导航、MCP 集成、数据说明
 
+import * as React from "react";
 import { useTheme } from "next-themes";
 import {
   Select,
@@ -10,12 +11,46 @@ import {
 } from "@/components/ui/select";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { Bot, Eye, EyeOff } from "lucide-react";
+import { toast } from "sonner";
+import { DEFAULT_MCP_TOKEN, mcpGetConfig, mcpSetConfig } from "@/lib/mcp";
 import { useSkin, SKINS } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
 export function SettingsPage() {
   const { theme, setTheme } = useTheme();
   const [skin, setSkin] = useSkin();
+  const [mcpEnabled, setMcpEnabled] = React.useState(true);
+  const [mcpToken, setMcpToken] = React.useState(DEFAULT_MCP_TOKEN);
+  const [mcpShowToken, setMcpShowToken] = React.useState(false);
+  const [mcpSaving, setMcpSaving] = React.useState(false);
+
+  React.useEffect(() => {
+    mcpGetConfig()
+      .then((s) => {
+        setMcpEnabled(s.enabled);
+        setMcpToken(s.token);
+      })
+      .catch(() => {
+        /* 默认值兜底 */
+      });
+  }, []);
+
+  const saveMcp = async () => {
+    setMcpSaving(true);
+    try {
+      await mcpSetConfig({ enabled: mcpEnabled, token: mcpToken.trim() || DEFAULT_MCP_TOKEN });
+      toast.success("MCP 设置已保存");
+    } catch (e) {
+      toast.error(String(e));
+    } finally {
+      setMcpSaving(false);
+    }
+  };
 
   return (
     <div className="h-full w-full overflow-y-auto bg-background p-6">
@@ -66,6 +101,54 @@ export function SettingsPage() {
             <CardTitle>侧边导航</CardTitle>
             <CardDescription>工作台：今日焦点 / Todo List / 项目资料；底部为明暗切换与设置入口。</CardDescription>
           </CardHeader>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Bot className="h-4 w-4 text-primary" />
+              MCP 集成
+            </CardTitle>
+            <CardDescription>AI 编程工具经 MCP 把拆分任务登记到本应用（自动标记 AI 创建 / AI 协调）；Token 用于 MCP server 启动认证。</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <span className="text-sm font-medium">启用 MCP</span>
+                <p className="text-xs text-muted-foreground">默认开启；禁用后 MCP server 启动将被拒绝。</p>
+              </div>
+              <Switch checked={mcpEnabled} onCheckedChange={setMcpEnabled} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="mcp-token">授权 Token</Label>
+              <div className="flex gap-2">
+                <Input
+                  id="mcp-token"
+                  type={mcpShowToken ? "text" : "password"}
+                  value={mcpToken}
+                  onChange={(e) => setMcpToken(e.target.value)}
+                  placeholder={DEFAULT_MCP_TOKEN}
+                  className="font-mono"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  aria-label="显示或隐藏 Token"
+                  onClick={() => setMcpShowToken((v) => !v)}
+                >
+                  {mcpShowToken ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                </Button>
+                <Button onClick={saveMcp} disabled={mcpSaving}>
+                  {mcpSaving ? "保存中…" : "保存"}
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                默认全局固定授权 Key：<code className="font-mono">{DEFAULT_MCP_TOKEN}</code>
+                ；MCP server 启动需携带此 Token（--token 参数或 MCP_TODO_TOKEN 环境变量）。
+              </p>
+            </div>
+          </CardContent>
         </Card>
 
         <Card>

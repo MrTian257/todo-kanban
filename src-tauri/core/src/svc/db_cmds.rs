@@ -6,8 +6,10 @@ use std::sync::Mutex;
 
 use crate::db;
 use crate::error::{AppError, AppResult};
-use crate::models::{DbBranchDef, DbBranchRule, DbBranchRuleStep, DbProject, DbState, DbSwimlane, DbTodo};
-use rusqlite::Connection;
+use crate::models::{
+    DbBranchDef, DbBranchRule, DbBranchRuleStep, DbProject, DbState, DbSwimlane, DbTodo, McpSettings,
+};
+use rusqlite::{Connection, OptionalExtension};
 
 static DB_RW_LOCK: Mutex<()> = Mutex::new(());
 type StateCache = Option<((usize, usize, i64), DbState)>;
@@ -175,6 +177,7 @@ fn seed_demo_state(conn: &Connection) -> AppResult<()> {
                 DbSwimlane { id: "swim-done".into(), name: "已完成".into(), status: "done".into(), sort_order: 3 },
             ]),
             archived: false,
+            created_by: "human".into(),
             created_at: now - 30 * day,
             updated_at: now - day,
             ..Default::default()
@@ -238,9 +241,78 @@ fn demo_todo(spec: DemoTodoSpec, now: i64, day: i64) -> DbTodo {
         },
         commits: vec![],
         sort_order,
+        created_by: "human".into(),
         created_at: now - days_ago * day,
         updated_at: now - days_ago * day,
     }
+}
+
+// ── MCP 集成设置（app_meta 持久化；MCP server 启动校验复用） ─────────────
+
+const MCP_ENABLED_KEY: &str = "mcp_enabled";
+const MCP_TOKEN_KEY: &str = "mcp_token";
+
+fn read_meta(conn: &Connection, key: &str) -> AppResult<Option<String>> {
+    conn.query_row(
+        "SELECT value FROM app_meta WHERE key = ?1",
+        [key],
+        |r| r.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(AppError::from)
+}
+
+fn write_meta(conn: &Connection, key: &str, value: &str) -> AppResult<()> {
+    conn.execute(
+        "INSERT INTO app_meta (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        rusqlite::params![key, value],
+    )
+    .map_err(AppError::from)?;
+    Ok(())
+}
+
+fn mcp_settings_from_conn(conn: &Connection) -> AppResult<McpSettings> {
+    let mut s = McpSettings::default();
+    if let Some(v) = read_meta(conn, MCP_ENABLED_KEY)? {
+        s.enabled = v == "1" || v.eq_ignore_ascii_case("true");
+    }
+    if let Some(v) = read_meta(conn, MCP_TOKEN_KEY)? {
+        let t = v.trim();
+        if !t.is_empty() {
+            s.token = t.to_string();
+        }
+    }
+    Ok(s)
+}
+
+/// 从指定库文件读取 MCP 设置（MCP server 启动校验复用）
+pub fn mcp_read_from_db(path: &Path) -> AppResult<McpSettings> {
+    let conn = db::open(path)?;
+    db::init(&conn)?;
+    mcp_settings_from_conn(&conn)
+}
+
+/// 读取 MCP 集成设置（无数据源 / key 缺失 → 默认：启用 + 全局固定授权 Token）
+pub fn mcp_get_config() -> AppResult<McpSettings> {
+    let Some(path) = resolve_db_path()? else {
+        return Ok(McpSettings::default());
+    };
+    mcp_read_from_db(&path)
+}
+
+/// 保存 MCP 集成设置（写 app_meta）
+pub fn mcp_set_config(s: McpSettings) -> AppResult<()> {
+    let Some(path) = resolve_db_path()? else {
+        return Err(AppError::invalid(
+            "尚未配置数据文件（运行目录缺少 db-config.txt），无法保存 MCP 设置",
+        ));
+    };
+    let conn = db::open(&path)?;
+    db::init(&conn)?;
+    write_meta(&conn, MCP_ENABLED_KEY, if s.enabled { "1" } else { "0" })?;
+    write_meta(&conn, MCP_TOKEN_KEY, &s.token)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -279,6 +351,29 @@ mod tests {
             let state = db::load_state(&conn).unwrap();
             assert_eq!(state.todos.len(), 9);
         }
+        drop_conn_files(&dir);
+    }
+
+    #[test]
+    fn mcp_settings_default_and_write() {
+        let dir = std::env::temp_dir().join(format!("tk-mcp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = ensure_db_at(&dir).unwrap();
+        // 默认：启用 + 全局固定授权 Token
+        let s = mcp_read_from_db(&path).unwrap();
+        assert!(s.enabled);
+        assert_eq!(s.token, crate::models::DEFAULT_MCP_TOKEN);
+        // 写入后再读：禁用 + 自定义 Token
+        {
+            let conn = db::open(&path).unwrap();
+            db::init(&conn).unwrap();
+            write_meta(&conn, MCP_ENABLED_KEY, "0").unwrap();
+            write_meta(&conn, MCP_TOKEN_KEY, "sk-custom").unwrap();
+        }
+        let s = mcp_read_from_db(&path).unwrap();
+        assert!(!s.enabled);
+        assert_eq!(s.token, "sk-custom");
         drop_conn_files(&dir);
     }
 

@@ -9,6 +9,13 @@ use std::io::{BufRead, Write};
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     config::set(config::parse(&args));
+
+    // 启动校验：数据源可用 + 设置页启用 + 授权 Token 匹配（不通过直接退出）
+    if let Err(msg) = bridge::verify_startup() {
+        log_to_stderr(&msg);
+        std::process::exit(1);
+    }
+
     log_to_stderr(&format!(
         "mcp-server 启动，readonly={}",
         config::get().map(|c| c.readonly).unwrap_or(false)

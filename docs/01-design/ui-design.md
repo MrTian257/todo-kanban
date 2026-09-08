@@ -16,7 +16,7 @@
 | `/projects` | ProjectListPage 项目资料 | 项目列表与维护（新增占位卡片） |
 | `/project/:projectId` | BoardPage 泳道看板 | 项目详情：可拖拽泳道看板（列=泳道、行=待办） |
 | `/project/:projectId/todo/:todoId` | TodoDetailPage 待办详情 | 新建（todoId=new）/编辑待办；支持 `?swimlane=` 预选泳道 |
-| `/settings` | SettingsPage 设置 | 明暗、主题皮肤、侧边导航、数据说明 |
+| `/settings` | SettingsPage 设置 | 明暗、主题皮肤、侧边导航、**MCP 集成（启用开关 + 授权 Token）**、数据说明 |
 
 - 页面容器统一 `w-full h-full bg-background p-6`
 - App 根：ThemeProvider（next-themes）+ TooltipProvider（delayDuration=0）+ sonner Toaster（top-center）+ SidebarLayout；数据 `loaded` 前显示「加载中…」防闪跳
@@ -37,6 +37,7 @@
   - 泳道内重排：`commit()` 经 `commitOrder` 落库（保留相对顺序，**sortOrder 0..n 持久化，重载还原**）；**跨泳道拖拽 = `patchTodo({ swimlaneId, status })`**（status 取目标泳道绑定状态）落库
   - DragOverlay 拖拽浮层；已归档不展示；禁止只改本地状态不落库
 - 新建/编辑待办：**跳转待办详情页**（`navigate("/project/:id/todo/new?swimlane=x" | "/project/:id/todo/:todoId")`）
+- **AI 标记**：行 meta 区展示 AI Badge——`createdBy==="ai"` 显示「AI 创建」、`aiCoordinated` 显示「AI 协调」（Bot 图标 + tooltip 说明来源），与项目卡片「AI 创建」Badge 一致
 - **泳道管理对话框**：新增（名称 + 绑定状态）/ 改名 / 拖拽排序 / 删除（其下待办迁移至同状态剩余第一个泳道，删除需二次确认）；保存即 `projects.swimlanes` 落库
 - BoardPage 头部展示项目仓库地址（前端蓝/后端绿）与项目目录；可打开项目编辑（ProjectFormDialog）
 
@@ -46,11 +47,11 @@
 - **中间主体**：标题输入 + **所见即所得 Markdown 备注**（`todo/MarkdownEditor`，可滚动，支持直接粘贴图片）
 - **右侧字段栏（w-80）**：
   - 代码目录：Select（前端/后端/自定义路径）；仓库状态条（绿点=当前分支 + 分支数 + 刷新按钮 / 红字错误）
-  - 分支：`BranchSelect`（可搜索、生产分支置顶、当前分支标注）；勾选「新建分支」→ 新分支名输入 + 切出源选择（默认生产分支，切出前自动 fetch）
+  - 分支：`BranchSelect`（可搜索、生产分支置顶、当前分支标注）；勾选「新建分支」→ 新分支名输入 + 切出源选择（默认生产分支，切出前自动 fetch，创建后自动 push -u 建立远端同名上游）
   - 所属泳道：Select（该项目泳道列表，按绑定状态分组展示；默认预选当前状态第一个泳道；**切换泳道 = 同步表单 status 值**）
   - 计划时间：DateRangePicker（今天/明天/下周快捷）
   - 卡点：Input
-- 行为细节：表单 RHF + zod（与后端 `validate_branch_name` 同规则的分支名校验）；代码目录变化 → `peekGitInfo` 缓存命中立即应用，否则固定目录立即拉取、**自定义路径 300ms 防抖**；`reqSeq` 竞态守卫（快速切换目录丢弃过期响应）；配置了「仓库地址+Token」走 `gitInfoRemote` 远端增强；保存前把新建分支名同步进表单字段以纳入 zod 校验；新建分支成功后 `invalidateGitInfo`
+- 行为细节：表单 RHF + zod（与后端 `validate_branch_name` 同规则的分支名校验）；代码目录变化 → `peekGitInfo` 缓存命中立即应用，否则固定目录立即拉取、**自定义路径 300ms 防抖**；`reqSeq` 竞态守卫（快速切换目录丢弃过期响应）；配置了「仓库地址+Token」走 `gitInfoRemote` 远端增强；保存前把新建分支名同步进表单字段以纳入 zod 校验；新建分支成功后 `invalidateGitInfo`（新建分支 = 创建并推送远端同名分支 + 建立上游，push 失败仅后端告警不阻断保存）
 
 ## 5. Markdown 备注组件（`todo/MarkdownEditor` / `todo/MarkdownView`）
 

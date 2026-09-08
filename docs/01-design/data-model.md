@@ -24,7 +24,7 @@
 
 ## 3. 字段明细
 
-### 3.1 Todo（DbTodo，表 todos 19 列）
+### 3.1 Todo（DbTodo，表 todos 23 列）
 
 | 字段 | 类型（前端） | 说明 |
 | --- | --- | --- |
@@ -45,9 +45,11 @@
 | archived | boolean | 已归档（serde default false） |
 | startedAt / doneAt | number \| null | 开始/完成时间戳（毫秒） |
 | commits | CommitInfo[] | 关联提交记录（JSON 列） |
+| createdBy | human \| ai | 创建者（v7；MCP 新建为 ai，UI 新建为 human，存量默认 human） |
+| aiCoordinated | boolean | AI 协调标记（v7；经 MCP 创建或修改过为 true，卡片显示「AI 创建 / AI 协调」） |
 | createdAt / updatedAt | number | 时间戳（毫秒） |
 
-### 3.2 Project（DbProject，表 projects 14 列）
+### 3.2 Project（DbProject，表 projects 16 列）
 
 | 字段 | 类型（前端） | 说明 |
 | --- | --- | --- |
@@ -60,6 +62,7 @@
 | branchRule | BranchRule \| null | 分支规则（serde default null） |
 | swimlanes | Swimlane[] | 泳道配置（v5 新增；serde default null → normalize 预置默认三泳道） |
 | archived | boolean | 已归档 |
+| createdBy | human \| ai | 创建者（v7；MCP 新建为 ai，UI 新建为 human，存量默认 human；项目卡片显示「AI 创建」） |
 | createdAt / updatedAt | number | 时间戳 |
 
 ### 3.3 分支规则（DbBranchRule / DbBranchRuleStep）
@@ -93,21 +96,24 @@
 
 > ⚠ 历史遗留：前端 `storage.ts` 顶部注释写着「环境变量 TODO_GIT_DB_PATH 优先」——**与实现不符**（Rust 侧无此环境变量，始终走 db-config.txt），重构时勿被误导。
 
-### 4.2 Schema（`db/schema.rs`，`USER_VERSION = 6`）
+### 4.2 Schema（`db/schema.rs`，`USER_VERSION = 7`）
 
 ```sql
-projects（15 列）: id PK, name, project_dir, frontend_dir, backend_dir,
+projects（16 列）: id PK, name, project_dir, frontend_dir, backend_dir,
   frontend_repo_url, backend_repo_url, production_branch,
   branch_rule TEXT(JSON, 可空), archived, created_at, updated_at,
   frontend_repo_token, backend_repo_token,          -- v4 新增
-  swimlanes TEXT(JSON, 可空)                        -- v5 新增
-todos（21 列）: id PK, project_id, title, note, repo_path, branch,
+  swimlanes TEXT(JSON, 可空),                        -- v5 新增
+  created_by TEXT NOT NULL DEFAULT 'human'           -- v7 新增（human | ai）
+todos（23 列）: id PK, project_id, title, note, repo_path, branch,
   status DEFAULT 'todo', swimlane_id TEXT,           -- v5 新增（可空；按 status 映射默认泳道）
   quadrant DEFAULT 'schedule', seq, tag,
   start_date, end_date, blocker, archived,
   started_at, done_at, commits TEXT(JSON, DEFAULT '[]'),
   sort_order INTEGER NOT NULL DEFAULT 0,              -- v6 新增（泳道内排序）
-  created_at, updated_at
+  created_at, updated_at,
+  created_by TEXT NOT NULL DEFAULT 'human',           -- v7 新增（human | ai）
+  ai_coordinated INTEGER NOT NULL DEFAULT 0           -- v7 新增（AI 协调标记）
 索引：idx_todos_project ON todos(project_id)
 app_meta（v2）: key PK, value —— key='next_seq' 为任务全局序号分配源（已分配最大序号）
 git_repo_cache（v3）: repo_path PK, repo_exists, is_repo, current_branch,
@@ -123,6 +129,7 @@ git_repo_cache（v3）: repo_path PK, repo_exists, is_repo, current_branch,
 | v3 → v4 | projects `ALTER TABLE` 补 `frontend_repo_token` / `backend_repo_token`（幂等保护） |
 | v4 → v5 | projects 补 `swimlanes`、todos 补 `swimlane_id`（幂等保护）；**存量 todo 按 status 回填** swim-todo / swim-doing / swim-done；存量项目 swimlanes 为 NULL → 前端 normalize 预置默认三泳道 |
 | v5 → v6 | todos 补 `sort_order`（幂等保护）；存量按插入顺序（rowid）回填，拖拽排序落库后重载保留 |
+| v6 → v7 | todos 补 `created_by`/`ai_coordinated`、projects 补 `created_by`（幂等保护）；存量默认 human / 未协调，不回溯猜测 |
 
 ### 4.3 存取语义（`db/mod.rs` + `svc/db_cmds.rs`）
 
@@ -135,8 +142,8 @@ git_repo_cache（v3）: repo_path PK, repo_exists, is_repo, current_branch,
 
 ## 5. 前端归一化（`lib/normalize.ts`，唯一入口）
 
-- `normalizeTodo`：补齐旧数据缺失字段——`tag`（缺省回填 `todoTag(id)` = `todo-<id前8位>` 兜底）、`seq`（?? 0）、`commits`（保证数组）、`startedAt/doneAt`（null）、`quadrant`（缺省 "schedule"，仅兼容保留）、`swimlaneId`（缺失/悬空 → 按 status 映射该项目该状态第一个泳道）、`sortOrder`（?? 0）、`startDate/endDate`（null）、`blocker`（""）、`archived`（false）
-- `normalizeProject`：补齐 `productionBranch` / `branchRule` / `frontendRepoToken` / `backendRepoToken` / `swimlanes`（缺失/为空 → 预置默认三泳道）
+- `normalizeTodo`：补齐旧数据缺失字段——`tag`（缺省回填 `todoTag(id)` = `todo-<id前8位>` 兜底）、`seq`（?? 0）、`commits`（保证数组）、`startedAt/doneAt`（null）、`quadrant`（缺省 "schedule"，仅兼容保留）、`swimlaneId`（缺失/悬空 → 按 status 映射该项目该状态第一个泳道）、`sortOrder`（?? 0）、`startDate/endDate`（null）、`blocker`（""）、`archived`（false）、`createdBy`（空/缺失 → "human"）、`aiCoordinated`（?? false）
+- `normalizeProject`：补齐 `productionBranch` / `branchRule` / `frontendRepoToken` / `backendRepoToken` / `swimlanes`（缺失/为空 → 预置默认三泳道）/ `createdBy`（空/缺失 → "human"）
 - `normalizeTodos`：归一化后执行 `dedupeTodosCommits`（todo.ts）——**历史脏数据修正**，一条 hash 只保留在最先出现的待办
 - 运行时归属保护：`dedupeCommitsForTodo`（todo.ts）——给某待办合并提交前，先剔除已被其它待办占用的 hash
 

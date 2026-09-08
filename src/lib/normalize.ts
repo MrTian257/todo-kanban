@@ -48,6 +48,8 @@ export function normalizeTodo(raw: Partial<Todo>, project?: Project): Todo {
     doneAt: raw.doneAt ?? null,
     commits: Array.isArray(raw.commits) ? raw.commits : [],
     sortOrder: raw.sortOrder ?? 0,
+    createdBy: raw.createdBy || "human",
+    aiCoordinated: raw.aiCoordinated ?? false,
     createdAt: raw.createdAt ?? Date.now(),
     updatedAt: raw.updatedAt ?? Date.now(),
   };
@@ -74,6 +76,7 @@ export function normalizeProject(raw: Partial<Project>): Project {
       : null,
     swimlanes: raw.swimlanes && raw.swimlanes.length > 0 ? raw.swimlanes : DEFAULT_SWIMLANES.map((l) => ({ ...l })),
     archived: raw.archived ?? false,
+    createdBy: raw.createdBy || "human",
     createdAt: raw.createdAt ?? Date.now(),
     updatedAt: raw.updatedAt ?? Date.now(),
   };

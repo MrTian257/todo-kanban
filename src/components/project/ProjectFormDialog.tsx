@@ -157,6 +157,7 @@ export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
       branchRule: rule,
       swimlanes: project?.swimlanes ?? null,
       archived: project?.archived ?? false,
+      createdBy: project?.createdBy ?? "human",
       createdAt: project?.createdAt ?? now,
       updatedAt: now,
     };

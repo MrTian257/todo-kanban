@@ -32,7 +32,7 @@ npm run tauri build          # 打包桌面应用（release 为 GUI 子系统，
 - 桌面端启动：后端在**程序运行目录**找 `db-config.txt`（首行 = 数据库绝对路径）——
   - 无指示文件/内容为空 → `db_load_state` 返回空 → 前端展示空态（并提示生成新的数据文件；`ensure_db` 后端能力已预留但当前未暴露命令，首启通常需手动放置指示文件或沿用 exe 同目录的既有 `todo-git.db`）
   - 数据文件损坏/读取失败 → toast 提示并回退空态（不崩溃）
-- MCP server 运行：`target/release/mcp-server.exe`（与 app 同目录部署时自动命中同一 `db-config.txt`；可用 `MCP_TODO_DB_CONFIG` 或 `--db-config <dir>` 覆盖数据源目录，`MCP_TODO_READONLY=1` 开启只读）
+- MCP server 运行：`target/release/mcp-server.exe`（与 app 同目录部署时自动命中同一 `db-config.txt`；可用 `MCP_TODO_DB_CONFIG` 或 `--db-config <dir>` 覆盖数据源目录，`MCP_TODO_READONLY=1` 开启只读）。**认证**：需携带授权 Token（`--token <key>` 或 `MCP_TODO_TOKEN=<key>`，默认全局固定 `sk-GLOBAl_MCP_BY_ADMIN`）；设置页可启用/禁用 MCP 与修改 Token——禁用或 Token 不匹配时 mcp-server 启动即退出（stderr 中文提示）；数据文件未初始化也会拒绝启动
 - 浏览器模式：**无本地存储**，始终空态（旧 localStorage 双通道已移除）
 - 主题皮肤：localStorage `todo-git.skin.v1`（默认星尘）
 

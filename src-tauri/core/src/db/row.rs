@@ -13,8 +13,8 @@ fn parse_json_or<T: serde::de::DeserializeOwned>(raw: Option<String>, default: T
     }
 }
 
-/// todos 全字段 SELECT（21 列，列序勿动）
-pub const TODO_SELECT: &str = "SELECT id, project_id, title, note, repo_path, branch, status, swimlane_id, quadrant, seq, tag, start_date, end_date, blocker, archived, started_at, done_at, commits, sort_order, created_at, updated_at FROM todos";
+/// todos 全字段 SELECT（23 列，列序勿动）
+pub const TODO_SELECT: &str = "SELECT id, project_id, title, note, repo_path, branch, status, swimlane_id, quadrant, seq, tag, start_date, end_date, blocker, archived, started_at, done_at, commits, sort_order, created_at, updated_at, created_by, ai_coordinated FROM todos";
 
 pub fn row_to_todo(row: &Row) -> AppResult<DbTodo> {
     Ok(DbTodo {
@@ -43,6 +43,10 @@ pub fn row_to_todo(row: &Row) -> AppResult<DbTodo> {
         sort_order: row.get(18)?,
         created_at: row.get(19)?,
         updated_at: row.get(20)?,
+        created_by: row
+            .get::<_, Option<String>>(21)?
+            .unwrap_or_else(|| "human".into()),
+        ai_coordinated: row.get::<_, Option<bool>>(22)?.unwrap_or(false),
     })
 }
 
@@ -73,21 +77,24 @@ pub fn todo_params(t: &DbTodo) -> Vec<Box<dyn rusqlite::ToSql>> {
         Box::new(t.sort_order),
         Box::new(t.created_at),
         Box::new(t.updated_at),
+        Box::new(if t.created_by.is_empty() { "human".to_string() } else { t.created_by.clone() }),
+        Box::new(t.ai_coordinated),
     ]
 }
 
-pub const TODO_UPSERT: &str = "INSERT INTO todos (id, project_id, title, note, repo_path, branch, status, swimlane_id, quadrant, seq, tag, start_date, end_date, blocker, archived, started_at, done_at, commits, sort_order, created_at, updated_at)
-  VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)
+pub const TODO_UPSERT: &str = "INSERT INTO todos (id, project_id, title, note, repo_path, branch, status, swimlane_id, quadrant, seq, tag, start_date, end_date, blocker, archived, started_at, done_at, commits, sort_order, created_at, updated_at, created_by, ai_coordinated)
+  VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23)
   ON CONFLICT(id) DO UPDATE SET title=excluded.title, note=excluded.note, repo_path=excluded.repo_path,
     branch=excluded.branch, status=excluded.status, swimlane_id=excluded.swimlane_id,
     quadrant=excluded.quadrant, seq=excluded.seq, tag=excluded.tag,
     start_date=excluded.start_date, end_date=excluded.end_date, blocker=excluded.blocker,
     archived=excluded.archived, started_at=excluded.started_at, done_at=excluded.done_at,
-    commits=excluded.commits, sort_order=excluded.sort_order, updated_at=excluded.updated_at
+    commits=excluded.commits, sort_order=excluded.sort_order, updated_at=excluded.updated_at,
+    created_by=excluded.created_by, ai_coordinated=excluded.ai_coordinated
   WHERE excluded.updated_at >= todos.updated_at";
 
-/// projects 全字段 SELECT（15 列，列序勿动）
-pub const PROJECT_SELECT: &str = "SELECT id, name, project_dir, frontend_dir, backend_dir, frontend_repo_url, backend_repo_url, production_branch, branch_rule, archived, created_at, updated_at, frontend_repo_token, backend_repo_token, swimlanes FROM projects";
+/// projects 全字段 SELECT（16 列，列序勿动）
+pub const PROJECT_SELECT: &str = "SELECT id, name, project_dir, frontend_dir, backend_dir, frontend_repo_url, backend_repo_url, production_branch, branch_rule, archived, created_at, updated_at, frontend_repo_token, backend_repo_token, swimlanes, created_by FROM projects";
 
 pub fn row_to_project(row: &Row) -> AppResult<DbProject> {
     Ok(DbProject {
@@ -106,6 +113,9 @@ pub fn row_to_project(row: &Row) -> AppResult<DbProject> {
         frontend_repo_token: row.get::<_, Option<String>>(12)?.unwrap_or_default(),
         backend_repo_token: row.get::<_, Option<String>>(13)?.unwrap_or_default(),
         swimlanes: parse_json_or::<Option<Vec<DbSwimlane>>>(row.get(14)?, None),
+        created_by: row
+            .get::<_, Option<String>>(15)?
+            .unwrap_or_else(|| "human".into()),
     })
 }
 
@@ -134,18 +144,19 @@ pub fn project_params(p: &DbProject) -> Vec<Box<dyn rusqlite::ToSql>> {
                 .as_ref()
                 .map(|s| serde_json::to_string(s).unwrap_or_else(|_| "null".into())),
         ),
+        Box::new(if p.created_by.is_empty() { "human".to_string() } else { p.created_by.clone() }),
     ]
 }
 
-pub const PROJECT_UPSERT: &str = "INSERT INTO projects (id, name, project_dir, frontend_dir, backend_dir, frontend_repo_url, backend_repo_url, production_branch, branch_rule, archived, created_at, updated_at, frontend_repo_token, backend_repo_token, swimlanes)
-  VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
+pub const PROJECT_UPSERT: &str = "INSERT INTO projects (id, name, project_dir, frontend_dir, backend_dir, frontend_repo_url, backend_repo_url, production_branch, branch_rule, archived, created_at, updated_at, frontend_repo_token, backend_repo_token, swimlanes, created_by)
+  VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)
   ON CONFLICT(id) DO UPDATE SET name=excluded.name, project_dir=excluded.project_dir,
     frontend_dir=excluded.frontend_dir, backend_dir=excluded.backend_dir,
     frontend_repo_url=excluded.frontend_repo_url, backend_repo_url=excluded.backend_repo_url,
     production_branch=excluded.production_branch, branch_rule=excluded.branch_rule,
     archived=excluded.archived, updated_at=excluded.updated_at,
     frontend_repo_token=excluded.frontend_repo_token, backend_repo_token=excluded.backend_repo_token,
-    swimlanes=excluded.swimlanes
+    swimlanes=excluded.swimlanes, created_by=excluded.created_by
   WHERE excluded.updated_at >= projects.updated_at";
 
 pub fn load_state_from_conn(conn: &rusqlite::Connection) -> AppResult<DbState> {

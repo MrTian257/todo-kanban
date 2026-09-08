@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import {
   AlertTriangle,
+  Bot,
   GitBranch,
   GitCommitHorizontal,
   CalendarDays,
@@ -186,6 +187,19 @@ export function TodoRow({ todo, projectName, showProjectName, variant = "list" }
         <button className="tk-task-title" onClick={() => navigate(`/project/${todo.projectId}/todo/${todo.id}`)}>{todo.title}</button>
         <div className="tk-task-meta">
           {showProjectName && projectName && <Badge variant="secondary" className="font-normal">{projectName}</Badge>}
+          {(todo.createdBy === "ai" || todo.aiCoordinated) && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Badge variant="outline" className="gap-1 font-normal text-primary">
+                  <Bot className="h-3 w-3" />
+                  {todo.createdBy === "ai" ? "AI 创建" : "AI 协调"}
+                </Badge>
+              </TooltipTrigger>
+              <TooltipContent>
+                {todo.createdBy === "ai" ? "由 AI 通过 MCP 创建" : "由 AI 通过 MCP 协调修改"}
+              </TooltipContent>
+            </Tooltip>
+          )}
           {todo.tag && <button onClick={copyTag} className="flex max-w-full items-center gap-2 rounded text-xs text-foreground/75 hover:text-primary" title="复制提交标记" aria-label={`复制提交标记 ${todo.tag}`}><code className="truncate">{todo.tag}</code><Copy className="h-3 w-3 shrink-0"/></button>}
         </div>
         {todo.branch && <DropdownMenu open={branchMenu} onOpenChange={setBranchMenu}>

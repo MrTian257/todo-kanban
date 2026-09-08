@@ -61,6 +61,8 @@ export interface Project {
   branchRule: BranchRule | null;
   swimlanes: Swimlane[] | null;
   archived: boolean;
+  /** 创建者：human | ai（MCP 新建为 ai，UI 新建为 human，旧数据默认 human） */
+  createdBy: "human" | "ai";
   createdAt: number;
   updatedAt: number;
 }
@@ -86,6 +88,10 @@ export interface Todo {
   commits: CommitInfo[];
   /** 泳道内排序（v6；同泳道升序，重载保留） */
   sortOrder: number;
+  /** 创建者：human | ai（MCP 新建为 ai，UI 新建为 human，旧数据默认 human） */
+  createdBy: "human" | "ai";
+  /** AI 协调标记：经 MCP 创建或修改过为 true */
+  aiCoordinated: boolean;
   createdAt: number;
   updatedAt: number;
 }

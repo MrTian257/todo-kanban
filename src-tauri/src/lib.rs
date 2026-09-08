@@ -54,6 +54,8 @@ pub fn run() {
             commands::git_commit_info,
             commands::db_load_state,
             commands::db_save_state,
+            commands::mcp_get_config,
+            commands::mcp_set_config,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

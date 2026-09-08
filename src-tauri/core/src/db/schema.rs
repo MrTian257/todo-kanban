@@ -1,7 +1,7 @@
 //! DDL + 迁移。USER_VERSION = 6。
 //! 注意：SQLite 列序是硬契约——schema ↔ row ↔ mod 的 SELECT/INSERT 三处同步。
 
-pub const USER_VERSION: i64 = 6;
+pub const USER_VERSION: i64 = 7;
 
 /// 建表（新库直接完整 v6 形态；旧库缺列由 migrate 补）
 pub fn create_tables(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
@@ -22,7 +22,8 @@ CREATE TABLE IF NOT EXISTS projects (
   updated_at INTEGER NOT NULL,
   frontend_repo_token TEXT NOT NULL DEFAULT '',
   backend_repo_token TEXT NOT NULL DEFAULT '',
-  swimlanes TEXT
+  swimlanes TEXT,
+  created_by TEXT NOT NULL DEFAULT 'human'  -- v7：创建者（human | ai）
 );
 CREATE TABLE IF NOT EXISTS todos (
   id TEXT PRIMARY KEY,
@@ -45,7 +46,9 @@ CREATE TABLE IF NOT EXISTS todos (
   commits TEXT NOT NULL DEFAULT '[]',
   sort_order INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  created_by TEXT NOT NULL DEFAULT 'human',   -- v7：创建者（human | ai）
+  ai_coordinated INTEGER NOT NULL DEFAULT 0    -- v7：AI 协调标记（经 MCP 修改过）
 );
 CREATE INDEX IF NOT EXISTS idx_todos_project ON todos(project_id);
 CREATE TABLE IF NOT EXISTS app_meta (
@@ -126,6 +129,20 @@ pub fn migrate(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
             )?;
         }
     }
+    if version < 7 {
+        // v6 → v7：创建者标识（human | ai）+ AI 协调标记（存量默认 human / 未协调）
+        if !column_exists(conn, "todos", "created_by")? {
+            conn.execute_batch(
+                "ALTER TABLE todos ADD COLUMN created_by TEXT NOT NULL DEFAULT 'human';
+                 ALTER TABLE todos ADD COLUMN ai_coordinated INTEGER NOT NULL DEFAULT 0;",
+            )?;
+        }
+        if !column_exists(conn, "projects", "created_by")? {
+            conn.execute_batch(
+                "ALTER TABLE projects ADD COLUMN created_by TEXT NOT NULL DEFAULT 'human';",
+            )?;
+        }
+    }
 
     conn.execute_batch(&format!("PRAGMA user_version = {USER_VERSION};"))
 }
@@ -175,6 +192,48 @@ mod tests {
             })
             .unwrap();
         assert_eq!(lane, "swim-doing");
+    }
+
+    #[test]
+    fn migrate_v6_db_adds_v7_columns() {
+        let conn = open_in_memory().unwrap();
+        // 模拟 v6 库（含 sort_order，无 created_by / ai_coordinated）
+        conn.execute_batch(
+            "CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL,
+               project_dir TEXT, frontend_dir TEXT, backend_dir TEXT,
+               frontend_repo_url TEXT, backend_repo_url TEXT, production_branch TEXT,
+               branch_rule TEXT, archived INTEGER, created_at INTEGER, updated_at INTEGER,
+               frontend_repo_token TEXT, backend_repo_token TEXT, swimlanes TEXT);
+             CREATE TABLE todos (id TEXT PRIMARY KEY, project_id TEXT, title TEXT,
+               note TEXT, repo_path TEXT, branch TEXT, status TEXT, swimlane_id TEXT,
+               quadrant TEXT, seq INTEGER, tag TEXT, start_date TEXT, end_date TEXT,
+               blocker TEXT, archived INTEGER, started_at INTEGER, done_at INTEGER,
+               commits TEXT, sort_order INTEGER, created_at INTEGER, updated_at INTEGER);
+             CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE git_repo_cache (repo_path TEXT PRIMARY KEY, repo_exists INTEGER,
+               is_repo INTEGER, current_branch TEXT, branches TEXT, error TEXT, fetched_at INTEGER);
+             INSERT INTO todos (id, project_id, title, created_at, updated_at)
+               VALUES ('t1','p1','任务A',1,1);
+             PRAGMA user_version = 6;",
+        )
+        .unwrap();
+        migrate(&conn).unwrap();
+        assert!(column_exists(&conn, "todos", "created_by").unwrap());
+        assert!(column_exists(&conn, "todos", "ai_coordinated").unwrap());
+        assert!(column_exists(&conn, "projects", "created_by").unwrap());
+        // 存量默认 human / 未协调
+        let cb: String = conn
+            .query_row("SELECT created_by FROM todos WHERE id='t1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(cb, "human");
+        let ac: i64 = conn
+            .query_row("SELECT ai_coordinated FROM todos WHERE id='t1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(ac, 0);
+        let v: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, USER_VERSION);
     }
 
     #[test]

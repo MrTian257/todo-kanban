@@ -132,10 +132,17 @@ pub struct DbProject {
     pub archived: bool,
     pub created_at: i64,
     pub updated_at: i64,
+    /// 创建者：human | ai（v7；MCP 新建为 ai，UI 新建为 human，存量默认 human）
+    #[serde(default = "default_creator")]
+    pub created_by: String,
 }
 
 fn default_status() -> String {
     "todo".to_string()
+}
+
+fn default_creator() -> String {
+    "human".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -180,6 +187,12 @@ pub struct DbTodo {
     pub sort_order: i64,
     pub created_at: i64,
     pub updated_at: i64,
+    /// 创建者：human | ai（v7；MCP 新建为 ai，UI 新建为 human，存量默认 human）
+    #[serde(default = "default_creator")]
+    pub created_by: String,
+    /// AI 协调标记（v7；经 MCP 创建或修改过为 true）
+    #[serde(default)]
+    pub ai_coordinated: bool,
 }
 
 /// 前端 store 顶层状态 ↔ 数据库全量快照
@@ -190,6 +203,26 @@ pub struct DbState {
     pub projects: Vec<DbProject>,
     #[serde(default)]
     pub todos: Vec<DbTodo>,
+}
+
+/// 默认全局固定 MCP 授权 Token（设置页可修改；MCP server 启动认证用）
+pub const DEFAULT_MCP_TOKEN: &str = "sk-GLOBAl_MCP_BY_ADMIN";
+
+/// MCP 集成设置（app_meta 持久化；缺失回默认：启用 + 全局固定授权 Token）
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct McpSettings {
+    pub enabled: bool,
+    pub token: String,
+}
+
+impl Default for McpSettings {
+    fn default() -> Self {
+        McpSettings {
+            enabled: true,
+            token: DEFAULT_MCP_TOKEN.to_string(),
+        }
+    }
 }
 
 impl DbTodo {

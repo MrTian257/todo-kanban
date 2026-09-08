@@ -58,6 +58,7 @@ function demoState(): AppState {
       { id: "swim-done", name: "已完成", status: "done", sortOrder: 3 },
     ],
     archived: false,
+    createdBy: "human",
     createdAt: now - 30 * day,
     updatedAt: now - day,
   };
@@ -89,6 +90,8 @@ function demoState(): AppState {
     doneAt: status === "done" ? now - daysAgo * day : null,
     commits: [],
     sortOrder: 0,
+    createdBy: "human",
+    aiCoordinated: false,
     createdAt: now - daysAgo * day,
     updatedAt: now - daysAgo * day,
   });
