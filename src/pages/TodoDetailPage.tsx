@@ -1,4 +1,4 @@
-// 待办详情页（新建/编辑一体）：中间标题 + WYSIWYG Markdown 备注；右侧字段栏
+// 待办详情页（新建/编辑一体）：中间标题 + Markdown 源文与预览 备注；右侧字段栏
 // 字段栏：代码目录 Select / 仓库状态条 / 分支 BranchSelect（可新建，切出源默认生产分支）/ 泳道 Select / 日期范围 / 卡点
 
 import * as React from "react";
@@ -280,7 +280,7 @@ export function TodoDetailPage() {
           {errors.title && <p className="text-xs text-destructive">{errors.title.message}</p>}
           <div className="min-h-0 flex-1">
             <MarkdownEditor
-              value={editing?.note ?? ""}
+              value={watch("note")}
               onChange={(md) => setValue("note", md, { shouldDirty: true })}
             />
           </div>
