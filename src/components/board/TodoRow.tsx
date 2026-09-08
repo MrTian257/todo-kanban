@@ -1,10 +1,12 @@
-// 泳道看板行：列=泳道、行=待办。支持开始/完成(自动补录)/重开/归档/切分支/打开目录/同步提交/补录/手动加提交(多行批量)/复制标记/编辑/删除
+// 泳道看板行：列=泳道、行=待办。支持开始/完成(自动补录)/重开/归档/切分支/打开目录/同步提交/补录/手动加提交(多行批量)/复制标记/编辑/删除；
+// 卡片整体支持右键菜单（注册制，见 lib/context-menu.ts）：展开/收起详情、编辑、复制标记、打开目录、提交三件套、移动到泳道、归档、删除
 
 import * as React from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import {
   AlertTriangle,
+  Archive,
   Bot,
   GitBranch,
   GitCommitHorizontal,
@@ -48,6 +50,7 @@ import { useAppStore } from "@/lib/store";
 import { CommitInfo, Todo } from "@/lib/types";
 import { fmtDateTime, shortHash } from "@/lib/format";
 import { todoUrgency } from "@/lib/todo";
+import { useContextMenu, type ContextMenuItem } from "@/lib/context-menu";
 import {
   autoRecaptureOnDone,
   recapture,
@@ -81,6 +84,7 @@ export function TodoRow({ todo, projectName, showProjectName, variant = "list" }
   const [busy, setBusy] = React.useState<string | null>(null);
   const [branchMenu, setBranchMenu] = React.useState(false);
   const [branchList, setBranchList] = React.useState<string[]>([]);
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = React.useState(false);
 
   const urgency = todoUrgency(todo);
 
@@ -96,7 +100,8 @@ export function TodoRow({ todo, projectName, showProjectName, variant = "list" }
   const reopen = () => patchTodo(todo.id, { status: "todo", startedAt: null, doneAt: null });
 
   const archive = () => patchTodo(todo.id, { archived: true });
-  const del = () => { if (window.confirm(`删除任务「${todo.title}」？此操作无法撤销。`)) removeTodo(todo.id); };
+  // 删除确认改为 Dialog（原 window.confirm 在 Tauri 2 无 dialog 插件时路由到未注册命令，确认框失效）
+  const del = () => setConfirmDeleteOpen(true);
 
   const checkout = async (branch: string) => {
     if (!todo.repoPath) return toast.error("该待办未绑定代码目录");
@@ -204,8 +209,31 @@ export function TodoRow({ todo, projectName, showProjectName, variant = "list" }
   const removeCommit = (hash: string) =>
     patchTodo(todo.id, { commits: todo.commits.filter((c) => c.hash !== hash) });
 
+  // ── 右键菜单（注册制：卡片任意处右键；build 每次渲染刷新闭包，取右键时刻最新状态） ──
+  useContextMenu(`[data-todo-id="${CSS.escape(todo.id)}"]`, () => {
+    const laneItems: ContextMenuItem[] = lanes.map((l) => ({
+      label: l.name,
+      disabled: l.id === todo.swimlaneId,
+      onSelect: () =>
+        moveTodo(todo.projectId, todo.id, l.id, todos.filter((t) => t.projectId === todo.projectId && t.swimlaneId === l.id && !t.archived).length),
+    }));
+    return [
+      { label: expanded ? "收起详情" : "展开详情", icon: GitCommitHorizontal, onSelect: () => setExpanded((v) => !v) },
+      { label: "编辑", icon: ArrowLeftRight, onSelect: () => navigate(`/project/${todo.projectId}/todo/${todo.id}`) },
+      { label: "复制提交标记", icon: Copy, disabled: !todo.tag, onSelect: () => void copyTag() },
+      { label: "打开代码目录", icon: FolderOpen, onSelect: () => void openDir() },
+      { label: "同步提交", icon: RefreshCw, disabled: busy !== null, onSelect: () => void syncCommits() },
+      { label: "按时间窗补录", icon: History, disabled: busy !== null, onSelect: () => void doRecapture() },
+      { label: "手动添加提交", icon: Plus, onSelect: () => setAddCommitOpen(true) },
+      { label: "移动到泳道", children: laneItems },
+      { type: "separator" },
+      ...(todo.status === "done" ? [{ label: "归档", icon: Archive, onSelect: archive }] : []),
+      { label: "删除", icon: Trash2, danger: true, onSelect: del },
+    ] satisfies ContextMenuItem[];
+  });
+
   return (
-    <div className={cn("group", variant === "card" ? "tk-task-card" : "tk-task-row")}>
+    <div data-todo-id={todo.id} className={cn("group", variant === "card" ? "tk-task-card" : "tk-task-row")}>
       {variant === "list" && <StatusNode status={todo.status} className="mt-1" />}
       <div className="min-w-0 flex-1">
         <button className="tk-task-title" onClick={() => navigate(`/project/${todo.projectId}/todo/${todo.id}`)}>{todo.title}</button>
@@ -357,6 +385,20 @@ export function TodoRow({ todo, projectName, showProjectName, variant = "list" }
           <DialogFooter>
             <Button variant="outline" onClick={() => setAddCommitOpen(false)}>取消</Button>
             <Button onClick={addCommit} disabled={busy !== null || !addText.trim()}>批量添加</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 删除确认（替代 window.confirm：Tauri 2 无 dialog 插件时该方法路由到未注册命令） */}
+      <Dialog open={confirmDeleteOpen} onOpenChange={setConfirmDeleteOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>删除任务</DialogTitle>
+            <DialogDescription>确定删除任务「{todo.title}」？任务及其提交关联将一并移除，此操作无法撤销。</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmDeleteOpen(false)}>取消</Button>
+            <Button variant="destructive" onClick={() => { setConfirmDeleteOpen(false); removeTodo(todo.id); }}>删除</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

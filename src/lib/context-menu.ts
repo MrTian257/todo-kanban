@@ -33,6 +33,8 @@ export interface ContextMenuActionItem {
   /** 危险操作（红色） */
   danger?: boolean;
   disabled?: boolean;
+  /** 一级子菜单（仅支持一层嵌套；弹层在触发行右侧展开） */
+  children?: ContextMenuItem[];
   onSelect?: () => void;
 }
 
