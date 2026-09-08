@@ -9,6 +9,10 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::error::{AppError, AppResult};
 use crate::models::{DbState, DbTodo};
 use crate::svc::branch_rule;
+use todo_kanban_upgrade::error::UpgradeError;
+use todo_kanban_upgrade::version::build_incompatible_report;
+/// 重导出升级包类型（MCP server 等依赖 core 的消费方使用）
+pub use todo_kanban_upgrade::version::{VersionReport, VersionStatus};
 
 pub mod legacy;
 pub mod repo_cache;
@@ -29,11 +33,38 @@ pub fn open_in_memory() -> rusqlite::Result<Connection> {
     Connection::open_in_memory()
 }
 
-/// 幂等建表 + 迁移到 v5（主路径）
+/// 幂等建表 + 迁移到最新（主路径；迁移引擎在 upgrade 分包）
 pub fn init(conn: &Connection) -> AppResult<()> {
     schema::create_tables(conn)?;
-    schema::migrate(conn)?;
+    todo_kanban_upgrade::migration::migrate(conn)?;
     Ok(())
+}
+
+/// 统一入口：打开（WAL）→ 建表 → 升级编排（版本判定/备份/逐级迁移/报告）。
+/// 数据版本不兼容（TooNew/TooOld）→ Err(AppError::Version)。
+pub fn open_and_init(path: &Path, backup_dir: &Path) -> AppResult<(Connection, VersionReport)> {
+    let conn = open(path)?;
+    schema::create_tables(&conn)?;
+    let report = todo_kanban_upgrade::upgrade::ensure(&conn, path, backup_dir)?;
+    Ok((conn, report))
+}
+
+/// 版本检查（供前端启动门禁）：执行检查与升级编排，但 TooNew/TooOld 以 status 返回而非抛错。
+pub fn check_version(path: &Path, backup_dir: &Path) -> AppResult<VersionReport> {
+    let conn = open(path)?;
+    schema::create_tables(&conn)?;
+    match todo_kanban_upgrade::upgrade::ensure(&conn, path, backup_dir) {
+        Ok(report) => Ok(report),
+        Err(UpgradeError::TooNew { data_version, .. }) => Ok(build_incompatible_report(
+            VersionStatus::TooNew,
+            data_version,
+        )),
+        Err(UpgradeError::TooOld { data_version, .. }) => Ok(build_incompatible_report(
+            VersionStatus::TooOld,
+            data_version,
+        )),
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// 旧 JSON 一次性迁移（仅测试/参考；主路径不触旧 JSON）

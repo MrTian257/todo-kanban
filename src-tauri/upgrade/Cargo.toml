@@ -1,0 +1,12 @@
+[package]
+name = "todo-kanban-upgrade"
+version = "2.0.0"
+description = "todo-kanban 数据版本升级链路（迁移引擎 / 版本判定 / 硬备份），独立分包静态打进主体"
+edition = "2021"
+
+[dependencies]
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+log = "0.4"
+todo-kanban-config = { path = "../config" }

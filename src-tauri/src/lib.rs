@@ -57,6 +57,7 @@ pub fn run() {
             commands::db_save_state,
             commands::mcp_get_config,
             commands::mcp_set_config,
+            commands::db_check_version,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

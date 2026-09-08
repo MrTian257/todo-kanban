@@ -1,0 +1,9 @@
+[package]
+name = "todo-kanban-config"
+version = "2.0.0"
+description = "todo-kanban 纯配置库（无任何依赖）：软件版本 / 数据版本支持范围 / 迁移步骤 / 更新日志 / 依赖清单"
+edition = "2021"
+
+[lib]
+name = "todo_kanban_config"
+crate-type = ["rlib"]

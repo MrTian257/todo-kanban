@@ -4105,6 +4105,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "todo-kanban-config"
+version = "2.0.0"
+
+[[package]]
 name = "todo-kanban-core"
 version = "2.0.0"
 dependencies = [
@@ -4112,6 +4116,18 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "todo-kanban-upgrade",
+]
+
+[[package]]
+name = "todo-kanban-upgrade"
+version = "2.0.0"
+dependencies = [
+ "log",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "todo-kanban-config",
 ]
 
 [[package]]

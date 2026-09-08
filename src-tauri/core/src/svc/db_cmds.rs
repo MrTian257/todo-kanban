@@ -73,8 +73,7 @@ pub fn load_state() -> AppResult<Option<DbState>> {
     let _guard = DB_RW_LOCK
         .lock()
         .map_err(|_| AppError::invalid("读锁获取失败"))?;
-    let conn = db::open(&path)?;
-    db::init(&conn)?;
+    let (conn, _report) = db::open_and_init(&path, &backup_dir()?)?;
     let fp = db::storage_fingerprint(&conn)?;
 
     let cache = FP_CACHE
@@ -105,8 +104,7 @@ pub fn save_state(payload: DbState) -> AppResult<()> {
     let _guard = DB_RW_LOCK
         .lock()
         .map_err(|_| AppError::invalid("写锁获取失败"))?;
-    let conn = db::open(&path)?;
-    db::init(&conn)?;
+    let (conn, _report) = db::open_and_init(&path, &backup_dir()?)?;
     db::save_state(&conn, &payload)?;
     let mut cache = FP_CACHE
         .lock()
@@ -128,8 +126,7 @@ pub fn ensure_db_at(dir: &Path) -> AppResult<PathBuf> {
             p
         }
     };
-    let conn = db::open(&path)?;
-    db::init(&conn)?;
+    let (conn, _report) = db::open_and_init(&path, &dir.join("backup"))?;
     let seeded: bool = conn
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM app_meta WHERE key = 'seeded')",
@@ -146,6 +143,21 @@ pub fn ensure_db_at(dir: &Path) -> AppResult<PathBuf> {
         .map_err(AppError::from)?;
     }
     Ok(path)
+}
+
+/// 备份目录：程序运行目录下的 backup/
+fn backup_dir() -> AppResult<PathBuf> {
+    Ok(exe_dir()?.join("backup"))
+}
+
+/// 版本检查（前端启动门禁）：无数据源 → 默认 ok 报告；否则执行检查/升级并返回报告。
+pub fn check_version() -> AppResult<todo_kanban_upgrade::version::VersionReport> {
+    let Some(path) = resolve_db_path()? else {
+        return Ok(todo_kanban_upgrade::version::build_ok_report(
+            todo_kanban_upgrade::version::CURRENT_VERSION,
+        ));
+    };
+    db::check_version(&path, &backup_dir()?)
 }
 
 /// 演示数据（与前端 store.ts demoState 对齐：1 项目 + 9 待办）

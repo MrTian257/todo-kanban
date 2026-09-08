@@ -9,6 +9,8 @@ pub enum AppError {
     Sqlite(rusqlite::Error),
     Git(String),
     Invalid(String),
+    /// 数据版本不兼容 / 升级失败（来自 upgrade 分包）
+    Version(String),
 }
 
 impl fmt::Display for AppError {
@@ -19,6 +21,7 @@ impl fmt::Display for AppError {
             AppError::Sqlite(e) => write!(f, "数据库错误：{e}"),
             AppError::Git(m) => write!(f, "{m}"),
             AppError::Invalid(m) => write!(f, "{m}"),
+            AppError::Version(m) => write!(f, "{m}"),
         }
     }
 }
@@ -40,6 +43,12 @@ impl From<serde_json::Error> for AppError {
 impl From<rusqlite::Error> for AppError {
     fn from(e: rusqlite::Error) -> Self {
         AppError::Sqlite(e)
+    }
+}
+
+impl From<todo_kanban_upgrade::error::UpgradeError> for AppError {
+    fn from(e: todo_kanban_upgrade::error::UpgradeError) -> Self {
+        AppError::Version(e.to_string())
     }
 }
 

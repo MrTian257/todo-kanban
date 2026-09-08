@@ -3,6 +3,7 @@
 
 use todo_kanban_core::models::{CommitInfo, DbState, GitInfo, McpSettings};
 use todo_kanban_core::svc::{db_cmds, git_cmds, repo_cache};
+use todo_kanban_upgrade::version::VersionReport;
 
 fn err_str(e: impl ToString) -> String {
     e.to_string()
@@ -98,4 +99,11 @@ pub fn mcp_get_config() -> Result<McpSettings, String> {
 #[tauri::command]
 pub fn mcp_set_config(payload: McpSettings) -> Result<(), String> {
     db_cmds::mcp_set_config(payload).map_err(err_str)
+}
+
+/// 14. 数据版本检查/升级（前端启动门禁）：TooNew/TooOld 以 status 返回而非抛错；
+/// 兼容升级在此执行（备份+逐级迁移），返回 upgraded 报告供提示
+#[tauri::command]
+pub fn db_check_version() -> Result<VersionReport, String> {
+    db_cmds::check_version().map_err(err_str)
 }

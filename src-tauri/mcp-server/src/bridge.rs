@@ -58,8 +58,7 @@ fn load_state() -> AppResult<Option<DbState>> {
     let Some(path) = resolve_db_path()? else {
         return Ok(None);
     };
-    let conn = db::open(&path)?;
-    db::init(&conn)?;
+    let (conn, _report) = db::open_and_init(&path, &mcp_backup_dir())?;
     Ok(Some(db::load_state(&conn)?))
 }
 
@@ -72,9 +71,17 @@ fn save_state(state: DbState) -> AppResult<()> {
     let Some(path) = resolve_db_path()? else {
         return Err(AppError::invalid("未配置数据文件，无法保存"));
     };
-    let conn = db::open(&path)?;
-    db::init(&conn)?;
+    let (conn, _report) = db::open_and_init(&path, &mcp_backup_dir())?;
     db::save_state(&conn, &state)
+}
+
+/// MCP server 进程的备份目录：exe 所在目录/backup（与 app 同目录部署时共用）
+fn mcp_backup_dir() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("backup")
 }
 
 fn call_tool(name: &str, args: &Value) -> AppResult<Value> {
@@ -169,6 +176,25 @@ pub fn verify_startup() -> Result<(), String> {
                 .to_string(),
         );
     };
+    // 数据版本兼容检查（TooNew/TooOld → 拒绝启动）
+    let report = db::check_version(&path, &mcp_backup_dir()).map_err(|e| e.to_string())?;
+    use todo_kanban_core::db::VersionStatus as Vs;
+    match report.status {
+        Vs::TooNew => {
+            return Err(format!(
+                "数据版本不兼容：数据由更高版本（v{}）软件创建，当前软件最高支持 v{}，请升级软件后再启动 MCP",
+                report.data_version, report.app_max
+            ));
+        }
+        Vs::TooOld => {
+            return Err(format!(
+                "数据版本不兼容：数据版本（v{}）过旧，当前软件最低支持 v{}，请先安装中间版本升级后再启动 MCP",
+                report.data_version, report.app_min
+            ));
+        }
+        _ => {}
+    }
+
     let settings = db_cmds::mcp_read_from_db(&path).map_err(|e| e.to_string())?;
     if !settings.enabled {
         return Err("MCP 已在 todo-kanban 设置页中被禁用，请先在应用中启用".to_string());

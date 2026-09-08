@@ -131,6 +131,8 @@ git_repo_cache（v3）: repo_path PK, repo_exists, is_repo, current_branch,
 | v5 → v6 | todos 补 `sort_order`（幂等保护）；存量按插入顺序（rowid）回填，拖拽排序落库后重载保留 |
 | v6 → v7 | todos 补 `created_by`/`ai_coordinated`、projects 补 `created_by`（幂等保护）；存量默认 human / 未协调，不回溯猜测 |
 
+**版本判定与升级（ADR-011）**：数据版本 = `PRAGMA user_version`；软件内置 `CURRENT_VERSION`（=7）与 `MIN_SUPPORTED_VERSION`（=1），编译打包进 `todo-kanban-upgrade` 分包。启动时任一入口（app `db::open_and_init` / MCP `verify_startup` / `db_check_version`）判定：数据版本高于软件支持 → **拒绝**（提示升级软件）；低于最低支持 → **拒绝**（提示装中间版本）；在范围内且低于当前 → **兼容升级**：`wal_checkpoint(TRUNCATE)` 合并 WAL 后**硬备份 db 到程序运行目录 `backup/`**（`<stem>-v<from>-<时间戳>.db`，保留最近 10 份），再**事务化逐级迁移**（任一失败回滚、user_version 不变）。
+
 ### 4.3 存取语义（`db/mod.rs` + `svc/db_cmds.rs`）
 
 - **写（save_state）**：进程级 `DB_RW_LOCK` 写锁全程互斥 → 单事务（unchecked_transaction）**差异写**：UPSERT 变更行（`ON CONFLICT(id) DO UPDATE`）+ 差集删除（只删快照中已移除的行），未变行跳过；**不删除快照之外的既有行**（多窗口各自保存增量互不覆盖）；`updated_at` 较新者胜

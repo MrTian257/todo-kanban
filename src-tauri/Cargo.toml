@@ -25,5 +25,5 @@ log = "0.4"
 todo-kanban-core = { path = "core" }
 
 [workspace]
-members = ["core", "mcp-server"]
+members = ["config", "core", "upgrade", "mcp-server"]
 resolver = "2"
