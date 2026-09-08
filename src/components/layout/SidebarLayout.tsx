@@ -246,23 +246,21 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
               </TooltipTrigger>
               <TooltipContent>切换明暗</TooltipContent>
             </Tooltip>
-            {!collapsed && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8"
-                    aria-label="设置"
-                    onClick={() => navigate("/settings")}
-                  >
-                    <Settings className="h-4 w-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>设置</TooltipContent>
-              </Tooltip>
-            )}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  aria-label="设置"
+                  onClick={() => navigate("/settings")}
+                >
+                  <Settings className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>设置</TooltipContent>
+            </Tooltip>
           </div>
         </aside>
 

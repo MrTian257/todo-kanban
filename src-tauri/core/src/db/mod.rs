@@ -137,7 +137,7 @@ pub fn save_state(conn: &Connection, state: &DbState) -> AppResult<()> {
         .collect();
 
     // tag 全局唯一性校验用：库中已有 todo 的非空 tag（排除本批更新的 id）
-    let mut existing_tags: HashSet<String> = existing
+    let existing_tags: HashSet<String> = existing
         .todos
         .iter()
         .filter(|t| !batch_ids.contains(t.id.as_str()))
@@ -161,8 +161,9 @@ pub fn save_state(conn: &Connection, state: &DbState) -> AppResult<()> {
             let n = next_seq(&tx)?; // 写锁（事务）内全局取号
             used_seqs.insert(n);
             todo.seq = n;
-            // 仅当 tag 为空时自动生成；用户手动设置的非空 tag 保留（全局唯一校验见下）
-            if todo.tag.is_empty() {
+            // 空 tag 或系统生成的 todo-<seq>：跟随新 seq 重新生成；
+            // 用户手动设置的非系统格式 tag 保留（全局唯一校验见下）
+            if todo.tag.is_empty() || is_auto_tag(&todo.tag) {
                 todo.tag = format!("todo-{n}");
             }
         } else {
@@ -229,6 +230,13 @@ fn ensure_next_seq(conn: &Connection) -> AppResult<()> {
         )?;
     }
     Ok(())
+}
+
+/// 是否为系统自动生成的提交标记（todo-<数字>）；用于 seq 重分配时决定是否跟随重写
+fn is_auto_tag(tag: &str) -> bool {
+    tag.strip_prefix("todo-")
+        .map(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()))
+        .unwrap_or(false)
 }
 
 /// 写锁内取号：返回下一个全局序号并推进

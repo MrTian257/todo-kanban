@@ -15,7 +15,8 @@ use crate::version::{
 
 /// 升级编排：对已建表的连接执行 版本判定 →（兼容升级时）硬备份 → 逐级迁移 → 报告。
 /// - 数据版本 > CURRENT → Err(TooNew)（用户规则：直接拒绝）
-/// - 数据版本 < MIN     → Err(TooOld)
+/// - 数据版本（非 0）< MIN → Err(TooOld)
+/// - 数据版本 == 0（新库/未初始化）→ 不拒绝、不备份，直接迁移到 CURRENT
 /// - 数据版本 == CURRENT → Ok(ok 报告)
 /// - MIN ≤ 数据版本 < CURRENT → 备份 + 迁移 + upgraded 报告
 pub fn ensure(conn: &Connection, db_path: &Path, backup_dir: &Path) -> UpgradeResult<VersionReport> {
@@ -26,17 +27,22 @@ pub fn ensure(conn: &Connection, db_path: &Path, backup_dir: &Path) -> UpgradeRe
             max_supported: CURRENT_VERSION,
         });
     }
-    if data_version < MIN_SUPPORTED_VERSION {
+    if data_version != 0 && data_version < MIN_SUPPORTED_VERSION {
         return Err(UpgradeError::TooOld {
             data_version,
             min_supported: MIN_SUPPORTED_VERSION,
         });
     }
     if data_version < CURRENT_VERSION {
-        let target = backup_before_upgrade(db_path, backup_dir, data_version)?;
-        log::info!("数据兼容升级前已硬备份：{}", target.display());
-        let outcome = migrate(conn)?;
-        return Ok(build_upgraded_report(data_version, &outcome));
+        // v0（新库）为首次初始化，无需备份；初始化不算"升级"（返回 ok 报告，前端不弹升级提示）
+        if data_version != 0 {
+            let target = backup_before_upgrade(db_path, backup_dir, data_version)?;
+            log::info!("数据兼容升级前已硬备份：{}", target.display());
+            let outcome = migrate(conn)?;
+            return Ok(build_upgraded_report(data_version, &outcome));
+        }
+        let _ = migrate(conn)?;
+        return Ok(build_ok_report(CURRENT_VERSION));
     }
     Ok(build_ok_report(data_version))
 }
@@ -50,7 +56,7 @@ pub fn peek_version(conn: &Connection) -> UpgradeResult<VersionReport> {
             max_supported: CURRENT_VERSION,
         });
     }
-    if data_version < MIN_SUPPORTED_VERSION {
+    if data_version != 0 && data_version < MIN_SUPPORTED_VERSION {
         return Err(UpgradeError::TooOld {
             data_version,
             min_supported: MIN_SUPPORTED_VERSION,

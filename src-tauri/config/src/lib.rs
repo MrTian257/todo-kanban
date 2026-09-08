@@ -2,7 +2,7 @@
 //! 所有"版本等常量"集中于此，供 upgrade / core / app / mcp-server 引用（经 upgrade 间接依赖）。
 
 /// 软件版本（来自 Cargo.toml version）
-pub const SOFTWARE_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const SOFTWARE_VERSION: &str = "v2.0.0";
 
 /// 软件支持的当前（最高）数据版本（schema user_version 目标值）
 pub const CURRENT_DATA_VERSION: i64 = 7;

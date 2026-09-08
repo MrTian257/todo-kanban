@@ -20,6 +20,7 @@ import { toast } from "sonner";
 import { DEFAULT_MCP_TOKEN, mcpGetConfig, mcpSetConfig } from "@/lib/mcp";
 import { useSkin, SKINS } from "@/lib/theme";
 import { cn } from "@/lib/utils";
+import { dbCheckVersion, type VersionReport } from "@/lib/version";
 
 export function SettingsPage() {
   const { theme, setTheme } = useTheme();
@@ -28,6 +29,7 @@ export function SettingsPage() {
   const [mcpToken, setMcpToken] = React.useState(DEFAULT_MCP_TOKEN);
   const [mcpShowToken, setMcpShowToken] = React.useState(false);
   const [mcpSaving, setMcpSaving] = React.useState(false);
+  const [version, setVersion] = React.useState<VersionReport | null>(null);
 
   React.useEffect(() => {
     mcpGetConfig()
@@ -37,6 +39,15 @@ export function SettingsPage() {
       })
       .catch(() => {
         /* 默认值兜底 */
+      });
+  }, []);
+
+  // 数据版本信息（展示当前数据版本与软件支持范围）
+  React.useEffect(() => {
+    dbCheckVersion()
+      .then(setVersion)
+      .catch(() => {
+        /* 非 Tauri / 检查失败不阻塞 */
       });
   }, []);
 
@@ -156,11 +167,19 @@ export function SettingsPage() {
             <CardTitle>数据说明</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2 text-sm text-muted-foreground">
-            <p>• 数据存储：桌面端 SQLite（位置由程序运行目录 <code>db-config.txt</code> 指示文件指定）。</p>
+            <p>
+              • 数据来源：桌面端 SQLite（位置由程序运行目录 <code>db-config.txt</code> 指示文件指定）；
+              当前数据版本 <Badge variant="outline" className="ml-0.5 font-mono">v{version?.dataVersion ?? "…"}</Badge>
+              （软件支持 v{version?.appMin ?? 1} ~ v{version?.appMax ?? 7}）。
+            </p>
+            <p>
+              • 数据升级：启动时自动检查数据版本——兼容则先硬备份到运行目录 <code>backup/</code> 再逐级升级；
+              数据由更高版本创建或版本过旧时拒绝打开并提示（见设置页顶部错误页）。
+            </p>
             <p>• 浏览器预览模式无本地存储（演示数据只读），完整功能仅桌面端。</p>
             <p>• Git 操作依赖本机 <code>git</code>（PATH，版本 ≥ 2.20）；GitLab 远端增强可选系统 <code>curl</code>。</p>
             <p>
-              • 版本 <Badge variant="secondary">2.0.0</Badge>（泳道看板） 当前主题皮肤：
+              • 软件版本 <Badge variant="secondary">{version?.softwareVersion ?? "2.0.0"}</Badge>（泳道看板） 当前主题皮肤：
               <Badge variant="outline" className="ml-1">{SKINS.find((s) => s.id === skin)?.name}</Badge>
             </p>
           </CardContent>

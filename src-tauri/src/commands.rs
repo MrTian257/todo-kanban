@@ -1,9 +1,9 @@
-//! 11 个 Tauri 命令薄壳：一行转调 core::svc，错误 map_err 转中文 String（命令内不 panic）。
+//! 14 个 Tauri 命令薄壳：一行转调 core::svc，错误 map_err 转中文 String（命令内不 panic）。
 //! 契约见 docs/02-development（backend-contract）。
 
+use todo_kanban_core::db::VersionReport;
 use todo_kanban_core::models::{CommitInfo, DbState, GitInfo, McpSettings};
 use todo_kanban_core::svc::{db_cmds, git_cmds, repo_cache};
-use todo_kanban_upgrade::version::VersionReport;
 
 fn err_str(e: impl ToString) -> String {
     e.to_string()
