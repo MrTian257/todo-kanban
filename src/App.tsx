@@ -1,10 +1,12 @@
-// 路由根：HashRouter + ThemeProvider + TooltipProvider + Toaster + SidebarLayout
+// 路由根：HashRouter + ThemeProvider + TooltipProvider + Toaster + ContextMenuOverlay + SidebarLayout
 // 副作用集中：initAppStore / startExternalSync / startGitCacheWarm / 皮肤初始化
+// （右键菜单系统与输入建议控制在 main.tsx 全局安装，弹层在下方挂载）
 
 import { useEffect } from "react";
 import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
 import { ThemeProvider } from "next-themes";
 import { Toaster } from "sonner";
+import { ContextMenuOverlay } from "@/components/layout/ContextMenuOverlay";
 import { SidebarLayout } from "@/components/layout/SidebarLayout";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAppStore, startExternalSync, startGitCacheWarm } from "@/lib/store";
@@ -41,6 +43,7 @@ export default function App() {
     <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
       <TooltipProvider delayDuration={0}>
         <Toaster position="bottom-right" richColors />
+        <ContextMenuOverlay />
         <HashRouter>
           <SidebarLayout>
             {loaded ? <Routes>

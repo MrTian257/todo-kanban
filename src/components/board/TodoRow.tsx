@@ -1,4 +1,4 @@
-// 泳道看板行：列=泳道、行=待办。支持开始/完成(自动补录)/重开/归档/切分支/打开目录/同步提交/补录/手动加提交/复制标记/编辑/删除
+// 泳道看板行：列=泳道、行=待办。支持开始/完成(自动补录)/重开/归档/切分支/打开目录/同步提交/补录/手动加提交(多行批量)/复制标记/编辑/删除
 
 import * as React from "react";
 import { useNavigate } from "react-router-dom";
@@ -42,10 +42,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAppStore } from "@/lib/store";
-import { Todo } from "@/lib/types";
+import { CommitInfo, Todo } from "@/lib/types";
 import { fmtDateTime, shortHash } from "@/lib/format";
 import { todoUrgency } from "@/lib/todo";
 import {
@@ -76,7 +76,7 @@ export function TodoRow({ todo, projectName, showProjectName, variant = "list" }
   const { todos, projects, patchTodo, removeTodo, moveTodo } = useAppStore();
   const lanes = [...(projects.find(p=>p.id===todo.projectId)?.swimlanes ?? [])].sort((a,b)=>a.sortOrder-b.sortOrder);
   const [addCommitOpen, setAddCommitOpen] = React.useState(false);
-  const [addHash, setAddHash] = React.useState("");
+  const [addText, setAddText] = React.useState("");
   const [expanded, setExpanded] = React.useState(false);
   const [busy, setBusy] = React.useState<string | null>(null);
   const [branchMenu, setBranchMenu] = React.useState(false);
@@ -155,20 +155,44 @@ export function TodoRow({ todo, projectName, showProjectName, variant = "list" }
     toast.success("已按时间窗补录");
   };
 
+  // 手动添加提交（多行批量）：按空白/逗号拆分逐个查询，单条失败不中断其余条目
   const addCommit = async () => {
-    if (!todo.repoPath || !addHash.trim()) return;
+    if (!todo.repoPath) return toast.error("该待办未绑定代码目录");
+    const tokens = Array.from(new Set(addText.split(/[\s,;，；]+/).map((t) => t.trim()).filter(Boolean)));
+    if (tokens.length === 0) return;
+    setBusy("addCommit");
     try {
-      const info = await gitCommitInfo(todo.repoPath, addHash.trim());
-      if (todo.commits.some((c) => c.hash === info.hash)) {
-        toast.info("该提交已存在");
-      } else {
-        patchTodo(todo.id, { commits: [info, ...todo.commits] });
-        toast.success("已添加提交");
+      const known = new Set(todo.commits.map((c) => c.hash));
+      const added: CommitInfo[] = [];
+      const failed: string[] = [];
+      let duplicated = 0;
+      for (const token of tokens) {
+        try {
+          const info = await gitCommitInfo(todo.repoPath, token);
+          if (known.has(info.hash)) { duplicated += 1; continue; }
+          known.add(info.hash);
+          added.push(info);
+        } catch {
+          failed.push(token);
+        }
       }
-      setAddCommitOpen(false);
-      setAddHash("");
-    } catch (e) {
-      toast.error(String(e));
+      if (added.length > 0) patchTodo(todo.id, { commits: [...added, ...todo.commits] });
+      const summary = [`新增 ${added.length}`, duplicated > 0 ? `重复 ${duplicated}` : "", failed.length > 0 ? `失败 ${failed.length}` : ""].filter(Boolean).join("、");
+      if (failed.length > 0) {
+        // 失败项留在输入框，便于修正后重试
+        setAddText(failed.join("\n"));
+        toast.error(`部分提交未添加（${summary}）：${failed.slice(0, 3).join("、")}${failed.length > 3 ? " 等" : ""}`);
+      } else if (added.length > 0) {
+        setAddText("");
+        setAddCommitOpen(false);
+        toast.success(`已添加 ${added.length} 条提交${duplicated > 0 ? `（另 ${duplicated} 条已存在）` : ""}`);
+      } else {
+        setAddText("");
+        setAddCommitOpen(false);
+        toast.info("输入的提交均已存在");
+      }
+    } finally {
+      setBusy(null);
     }
   };
 
@@ -308,22 +332,31 @@ export function TodoRow({ todo, projectName, showProjectName, variant = "list" }
         </DropdownMenu>
       </div>
 
-      {/* 手动添加提交对话框 */}
+      {/* 手动添加提交对话框（多行批量） */}
       <Dialog open={addCommitOpen} onOpenChange={setAddCommitOpen}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
             <DialogTitle>手动添加提交</DialogTitle>
-            <DialogDescription>输入提交短 hash（如 abc1234），将查询并关联到本待办。</DialogDescription>
+            <DialogDescription>每行一个提交短 hash（如 abc1234），支持粘贴多行批量添加，查询后关联到本待办。</DialogDescription>
           </DialogHeader>
-          <Input
-            value={addHash}
-            onChange={(e) => setAddHash(e.target.value)}
-            placeholder="短 hash"
-            onKeyDown={(e) => e.key === "Enter" && addCommit()}
+          <Textarea
+            value={addText}
+            onChange={(e) => setAddText(e.target.value)}
+            placeholder={"每行一个短 hash\n支持多行批量添加"}
+            rows={5}
+            className="font-mono"
+            disabled={busy !== null}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                void addCommit();
+              }
+            }}
           />
+          <p className="text-xs text-muted-foreground">Ctrl+Enter 提交；也支持空格/逗号分隔，单条失败不影响其余条目。</p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setAddCommitOpen(false)}>取消</Button>
-            <Button onClick={addCommit}>添加</Button>
+            <Button onClick={addCommit} disabled={busy !== null || !addText.trim()}>批量添加</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

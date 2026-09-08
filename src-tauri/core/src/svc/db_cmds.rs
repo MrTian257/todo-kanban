@@ -242,6 +242,7 @@ fn demo_todo(spec: DemoTodoSpec, now: i64, day: i64) -> DbTodo {
         commits: vec![],
         sort_order,
         created_by: "human".into(),
+        ai_coordinated: false,
         created_at: now - days_ago * day,
         updated_at: now - days_ago * day,
     }

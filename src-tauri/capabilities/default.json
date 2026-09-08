@@ -20,6 +20,7 @@
         { "path": "C:/workspace/**" }
       ]
     },
-    "opener:allow-reveal-item-in-dir"
+    "opener:allow-reveal-item-in-dir",
+    "clipboard-manager:allow-read-text"
   ]
 }

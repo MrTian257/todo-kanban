@@ -1,4 +1,4 @@
-// 应用入口：注册 11 命令 + opener/log 插件 + 启动自举（数据文件初始化 + 演示数据种子）。
+// 应用入口：注册 13 命令 + opener/log/clipboard-manager 插件 + 启动自举（数据文件初始化 + 演示数据种子）。
 // 日志：运行目录 kanban.log（追加写，超限轮转只保留一份）。
 
 pub mod commands;
@@ -31,6 +31,7 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .setup(move |_app| {
             // 启动自举：无 db-config.txt → 初始化运行目录 todo-kanban.db 并写演示数据
             match &exe_dir {
