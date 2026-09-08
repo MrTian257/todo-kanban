@@ -109,7 +109,7 @@ export function SettingsPage() {
               <Bot className="h-4 w-4 text-primary" />
               MCP 集成
             </CardTitle>
-            <CardDescription>AI 编程工具经 MCP 把拆分任务登记到本应用（自动标记 AI 创建 / AI 协调）；Token 用于 MCP server 启动认证。</CardDescription>
+            <CardDescription>AI 编程工具经 MCP 把拆分任务登记到本应用（自动标记 AI 创建 / AI 协助）；Token 用于 MCP server 启动认证。</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex items-center justify-between gap-4">

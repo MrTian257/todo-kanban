@@ -89,7 +89,7 @@ MCP server 是独立 stdio 进程，两种方式接入：
 ## 打标说明（自动，无需手动）
 
 - **新建**的 todo / project → MCP 自动置 `createdBy="ai"`（卡片显示「AI 创建」）
-- **修改**已存在的 todo → MCP 自动置 `aiCoordinated=true`（卡片显示「AI 协调」；`createdBy` 保持原值）
+- **修改**已存在的 todo → MCP 自动置 `aiCoordinated=true`（卡片显示「AI 协助」；`createdBy` 保持原值）
 - 人工通过 UI 创建的记录标记 `human`，与 AI 记录在卡片上区分展示
 
 ## 最佳实践

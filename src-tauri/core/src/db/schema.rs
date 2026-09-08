@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS todos (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   created_by TEXT NOT NULL DEFAULT 'human',   -- v7：创建者（human | ai）
-  ai_coordinated INTEGER NOT NULL DEFAULT 0    -- v7：AI 协调标记（经 MCP 修改过）
+  ai_coordinated INTEGER NOT NULL DEFAULT 0    -- v7：AI 协助标记（经 MCP 修改过）
 );
 CREATE INDEX IF NOT EXISTS idx_todos_project ON todos(project_id);
 CREATE TABLE IF NOT EXISTS app_meta (
@@ -130,7 +130,7 @@ pub fn migrate(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
         }
     }
     if version < 7 {
-        // v6 → v7：创建者标识（human | ai）+ AI 协调标记（存量默认 human / 未协调）
+        // v6 → v7：创建者标识（human | ai）+ AI 协助标记（存量默认 human / 未协调）
         if !column_exists(conn, "todos", "created_by")? {
             conn.execute_batch(
                 "ALTER TABLE todos ADD COLUMN created_by TEXT NOT NULL DEFAULT 'human';

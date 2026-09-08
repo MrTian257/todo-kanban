@@ -37,7 +37,7 @@
   - 泳道内重排：`commit()` 经 `commitOrder` 落库（保留相对顺序，**sortOrder 0..n 持久化，重载还原**）；**跨泳道拖拽 = `patchTodo({ swimlaneId, status })`**（status 取目标泳道绑定状态）落库
   - DragOverlay 拖拽浮层；已归档不展示；禁止只改本地状态不落库
 - 新建/编辑待办：**跳转待办详情页**（`navigate("/project/:id/todo/new?swimlane=x" | "/project/:id/todo/:todoId")`）
-- **AI 标记**：行 meta 区展示 AI Badge——`createdBy==="ai"` 显示「AI 创建」、`aiCoordinated` 显示「AI 协调」（Bot 图标 + tooltip 说明来源），与项目卡片「AI 创建」Badge 一致
+- **AI 标记**：行 meta 区展示 AI Badge——`createdBy==="ai"` 显示「AI 创建」、`aiCoordinated` 显示「AI 协助」（Bot 图标 + tooltip 说明来源），与项目卡片「AI 创建」Badge 一致
 - **泳道管理对话框**：新增（名称 + 绑定状态）/ 改名 / 拖拽排序 / 删除（其下待办迁移至同状态剩余第一个泳道，删除需二次确认）；保存即 `projects.swimlanes` 落库
 - BoardPage 头部展示项目仓库地址（前端蓝/后端绿）与项目目录；可打开项目编辑（ProjectFormDialog）
 

@@ -6,7 +6,7 @@ use std::path::Path;
 
 use rusqlite::{Connection, OptionalExtension};
 
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::models::{DbState, DbTodo};
 use crate::svc::branch_rule;
 
@@ -105,6 +105,16 @@ pub fn save_state(conn: &Connection, state: &DbState) -> AppResult<()> {
         .flat_map(|t| t.commits.iter().map(|c| c.hash.clone()))
         .collect();
 
+    // tag 全局唯一性校验用：库中已有 todo 的非空 tag（排除本批更新的 id）
+    let mut existing_tags: HashSet<String> = existing
+        .todos
+        .iter()
+        .filter(|t| !batch_ids.contains(t.id.as_str()))
+        .map(|t| t.tag.clone())
+        .filter(|t| !t.is_empty())
+        .collect();
+    let mut batch_tags: HashSet<String> = HashSet::new();
+
     // seq/tag 收敛 + 写入
     let mut used_seqs: HashSet<i64> = existing.todos.iter().map(|t| t.seq).collect();
     for p in &state.projects {
@@ -120,12 +130,25 @@ pub fn save_state(conn: &Connection, state: &DbState) -> AppResult<()> {
             let n = next_seq(&tx)?; // 写锁（事务）内全局取号
             used_seqs.insert(n);
             todo.seq = n;
-            todo.tag = format!("todo-{n}");
+            // 仅当 tag 为空时自动生成；用户手动设置的非空 tag 保留（全局唯一校验见下）
+            if todo.tag.is_empty() {
+                todo.tag = format!("todo-{n}");
+            }
         } else {
             used_seqs.insert(todo.seq);
             if todo.tag.is_empty() {
                 todo.tag = format!("todo-{}", todo.seq);
             }
+        }
+        // tag 全局唯一性校验（系统自动生成的 todo-<seq> 天然唯一；只校验非空用户 tag）
+        if !todo.tag.is_empty() {
+            if existing_tags.contains(&todo.tag) || batch_tags.contains(&todo.tag) {
+                return Err(AppError::invalid(format!(
+                    "提交标记「{}」已被其他待办使用，请修改后重试",
+                    todo.tag
+                )));
+            }
+            batch_tags.insert(todo.tag.clone());
         }
         // 泳道归属校验：悬空 → 回退该项目该状态第一个泳道
         let lanes = lanes_by_project
@@ -336,6 +359,80 @@ mod tests {
         let loaded = load_state(&conn).unwrap();
         let t2 = loaded.todos.iter().find(|t| t.id == "t2").unwrap();
         assert!(t2.commits.is_empty(), "重复 hash 应被去重");
+    }
+
+    #[test]
+    fn manual_tag_preserved_on_seq_assign() {
+        let conn = test_conn();
+        // 新建：seq=0 + 手动 tag → 保留非空 tag，seq 收敛分配
+        let mut t = todo("t1", 0, "feature-login");
+        t.created_at = 1;
+        t.updated_at = 1;
+        save_state(
+            &conn,
+            &DbState {
+                projects: vec![project("p1")],
+                todos: vec![t],
+            },
+        )
+        .unwrap();
+        let loaded = load_state(&conn).unwrap();
+        let t1 = &loaded.todos[0];
+        assert_eq!(t1.tag, "feature-login", "手动 tag 不应被覆盖");
+        assert!(t1.seq > 0, "seq 应被分配");
+    }
+
+    #[test]
+    fn duplicate_manual_tag_rejected() {
+        let conn = test_conn();
+        save_state(
+            &conn,
+            &DbState {
+                projects: vec![project("p1")],
+                todos: vec![todo("t1", 7, "todo-7")],
+            },
+        )
+        .unwrap();
+        // 新 todo 使用相同 tag → 全局唯一性拒绝
+        let mut t2 = todo("t2", 0, "todo-7");
+        t2.created_at = 2;
+        t2.updated_at = 2;
+        let err = save_state(
+            &conn,
+            &DbState {
+                projects: vec![project("p1")],
+                todos: vec![todo("t1", 7, "todo-7"), t2],
+            },
+        );
+        assert!(err.is_err());
+        let msg = err.unwrap_err().to_string();
+        assert!(msg.contains("已被其他待办使用"));
+    }
+
+    #[test]
+    fn clear_tag_regenerates_from_seq() {
+        let conn = test_conn();
+        save_state(
+            &conn,
+            &DbState {
+                projects: vec![project("p1")],
+                todos: vec![todo("t1", 5, "todo-5")],
+            },
+        )
+        .unwrap();
+        // 编辑：tag 清空、seq 保持 → else 分支自动补 todo-<seq>
+        let mut t1 = todo("t1", 5, "");
+        t1.updated_at = 2;
+        save_state(
+            &conn,
+            &DbState {
+                projects: vec![project("p1")],
+                todos: vec![t1],
+            },
+        )
+        .unwrap();
+        let loaded = load_state(&conn).unwrap();
+        assert_eq!(loaded.todos[0].tag, "todo-5");
     }
 
     #[test]

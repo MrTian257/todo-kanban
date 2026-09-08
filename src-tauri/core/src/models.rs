@@ -190,7 +190,7 @@ pub struct DbTodo {
     /// 创建者：human | ai（v7；MCP 新建为 ai，UI 新建为 human，存量默认 human）
     #[serde(default = "default_creator")]
     pub created_by: String,
-    /// AI 协调标记（v7；经 MCP 创建或修改过为 true）
+    /// AI 协助标记（v7；经 MCP 创建或修改过为 true）
     #[serde(default)]
     pub ai_coordinated: bool,
 }

@@ -90,7 +90,7 @@ export interface Todo {
   sortOrder: number;
   /** 创建者：human | ai（MCP 新建为 ai，UI 新建为 human，旧数据默认 human） */
   createdBy: "human" | "ai";
-  /** AI 协调标记：经 MCP 创建或修改过为 true */
+  /** AI 协助标记：经 MCP 创建或修改过为 true */
   aiCoordinated: boolean;
   createdAt: number;
   updatedAt: number;
@@ -172,6 +172,8 @@ export interface TodoFormValues {
   startDate: string | null;
   endDate: string | null;
   blocker: string;
+  /** 提交标记：空串表示由系统自动生成 todo-<seq> */
+  tag: string;
 }
 
 export interface ProjectFormValues {

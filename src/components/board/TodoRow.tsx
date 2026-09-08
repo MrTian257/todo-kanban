@@ -216,7 +216,7 @@ export function TodoRow({ todo, projectName, showProjectName, variant = "list" }
               <TooltipTrigger asChild>
                 <Badge variant="outline" className="gap-1 font-normal text-primary">
                   <Bot className="h-3 w-3" />
-                  {todo.createdBy === "ai" ? "AI 创建" : "AI 协调"}
+                  {todo.createdBy === "ai" ? "AI 创建" : "AI 协助"}
                 </Badge>
               </TooltipTrigger>
               <TooltipContent>
@@ -224,7 +224,7 @@ export function TodoRow({ todo, projectName, showProjectName, variant = "list" }
               </TooltipContent>
             </Tooltip>
           )}
-          {todo.tag && <button onClick={copyTag} className="flex max-w-full items-center gap-2 rounded text-xs text-foreground/75 hover:text-primary" title="复制提交标记" aria-label={`复制提交标记 ${todo.tag}`}><code className="truncate">{todo.tag}</code><Copy className="h-3 w-3 shrink-0"/></button>}
+          {todo.tag && <button onClick={copyTag} className="flex max-w-full items-center gap-2 rounded text-xs text-foreground/75 hover:text-primary" title="复制提交标记（修改标记后需重新同步提交）" aria-label={`复制提交标记 ${todo.tag}`}><code className="truncate">{todo.tag}</code><Copy className="h-3 w-3 shrink-0"/></button>}
         </div>
         {todo.branch && <DropdownMenu open={branchMenu} onOpenChange={setBranchMenu}>
           <DropdownMenuTrigger asChild><button className="mt-2 flex max-w-full items-center gap-2 rounded text-xs text-muted-foreground hover:text-primary" onClick={() => void openBranchMenu()} title={`任务分支：${todo.branch}`}><GitBranch className="h-3.5 w-3.5 shrink-0"/><span className="truncate">{todo.branch}</span></button></DropdownMenuTrigger>

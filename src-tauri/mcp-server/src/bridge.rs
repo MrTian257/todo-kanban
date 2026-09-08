@@ -146,10 +146,10 @@ fn apply_ai_markers(state: &mut DbState, existing: &DbState) {
     let proj_ids: HashSet<&str> = existing.projects.iter().map(|p| p.id.as_str()).collect();
     for t in &mut state.todos {
         if todo_ids.contains(t.id.as_str()) {
-            // 修改：AI 协调标记（created_by 保持原值）
+            // 修改：AI 协助标记（created_by 保持原值）
             t.ai_coordinated = true;
         } else {
-            // 新建：AI 创建 + AI 协调
+            // 新建：AI 创建 + AI 协助
             t.created_by = "ai".to_string();
             t.ai_coordinated = true;
         }

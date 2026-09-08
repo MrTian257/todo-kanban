@@ -7,7 +7,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { toast } from "sonner";
-import { ArrowLeft, GitBranch, ListTodo, RefreshCw, Save } from "lucide-react";
+import { ArrowLeft, GitBranch, ListTodo, RefreshCw, RotateCcw, Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -48,6 +48,13 @@ const schema = z
     startDate: z.string().nullable(),
     endDate: z.string().nullable(),
     blocker: z.string(),
+    // 提交标记：空串 = 系统自动生成 todo-<seq>；非空 = 用户手动设置（全局唯一）
+    tag: z
+      .string()
+      .trim()
+      .max(50, "标记最长 50 个字符")
+      .refine((v) => v === "" || !/\s/.test(v), "标记不能包含空格")
+      .refine((v) => v === "" || /^[a-zA-Z0-9_-]+$/.test(v), "标记仅支持字母、数字、连字符和下划线"),
   })
   .superRefine((v, ctx) => {
     if (v.createBranch) {
@@ -105,6 +112,7 @@ export function TodoDetailPage() {
       startDate: editing?.startDate ?? null,
       endDate: editing?.endDate ?? null,
       blocker: editing?.blocker ?? "",
+      tag: editing?.tag ?? "",
     },
   });
 
@@ -228,6 +236,9 @@ export function TodoDetailPage() {
       },
       project,
     );
+    // 提交标记手动编辑支持：用户输入（含空串）为权威值，覆盖 normalize 的兜底；
+    // 空串 → 后端 save_state 自动生成 todo-<seq>；非空 → 保留用户标记（全局唯一校验在后端）
+    todo.tag = values.tag.trim();
     upsertTodo(todo);
     toast.success(isNew ? "待办已创建" : "待办已保存");
     navigate(`/project/${project.id}`);
@@ -305,6 +316,33 @@ export function TodoDetailPage() {
             <Input id="blocker" placeholder="例如：等待接口联调" {...register("blocker")} />
           </div>
           <h2 className="tk-section-title border-t pt-5"><GitBranch className="h-4 w-4 text-primary"/>代码关联</h2>
+          <div className="space-y-2">
+            <Label htmlFor="tag">提交标记 <span className="text-xs text-muted-foreground">（留空自动生成）</span></Label>
+            <div className="flex gap-2">
+              <Input
+                id="tag"
+                placeholder={isNew ? "保存后自动生成，如 todo-1" : "todo-1"}
+                {...register("tag")}
+                className="font-mono text-sm"
+              />
+              {editing?.tag && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  aria-label="重置为自动生成"
+                  title="重置为自动生成"
+                  onClick={() => setValue("tag", "", { shouldDirty: true })}
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                </Button>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              用于 git 提交检索，提交信息中包含此标记即可自动关联。
+            </p>
+            {errors.tag && <p className="text-xs text-destructive">{errors.tag.message}</p>}
+          </div>
           <div className="space-y-2">
             <Label>代码目录</Label>
             <select aria-label="代码目录" value={customRepo ? "__custom__" : repoPath} className="h-10 w-full truncate rounded-lg border bg-background/50 px-3 text-sm" onChange={e=>{const v=e.target.value;setCustomRepo(v==="__custom__");if(v!=="__custom__")setValue("repoPath",v,{shouldDirty:true,shouldValidate:true});}}>

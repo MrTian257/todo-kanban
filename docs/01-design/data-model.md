@@ -39,14 +39,14 @@
 | quadrant | do \| schedule \| delegate \| eliminate | **仅数据兼容保留**（泳道重构后 UI 已弃用，旧数据不迁移删除） |
 | sortOrder | number | 泳道内排序（v6 新增；拖拽后 0..n 分配，重载保留；同序按 createdAt 兜底） |
 | seq | number | 创建序号（前端 max+1 预生成；后端以 `app_meta.next_seq` 写锁内全局收敛） |
-| tag | string | 提交标记 `todo-<seq>`（可记忆；旧数据缺 tag 时 normalize 回填 `todo-<id前8位>` 兜底） |
+| tag | string | 提交标记（可记忆，详情页可手动编辑）：**空串 = 系统自动生成 `todo-<seq>`**（seq 收敛时自动补齐）；**非空 = 用户手动设置**（全局唯一，后端拒绝重复）；旧数据缺 tag 时 normalize 回填 `todo-<id前8位>` 兜底，保存后由后端收敛为 `todo-<seq>` |
 | startDate / endDate | string \| null | 计划开始/截止（YYYY-MM-DD），范围选择器 |
 | blocker | string | 卡点描述（"" 无卡点；serde default） |
 | archived | boolean | 已归档（serde default false） |
 | startedAt / doneAt | number \| null | 开始/完成时间戳（毫秒） |
 | commits | CommitInfo[] | 关联提交记录（JSON 列） |
 | createdBy | human \| ai | 创建者（v7；MCP 新建为 ai，UI 新建为 human，存量默认 human） |
-| aiCoordinated | boolean | AI 协调标记（v7；经 MCP 创建或修改过为 true，卡片显示「AI 创建 / AI 协调」） |
+| aiCoordinated | boolean | AI 协助标记（v7；经 MCP 创建或修改过为 true，卡片显示「AI 创建 / AI 协助」） |
 | createdAt / updatedAt | number | 时间戳（毫秒） |
 
 ### 3.2 Project（DbProject，表 projects 16 列）
@@ -113,7 +113,7 @@ todos（23 列）: id PK, project_id, title, note, repo_path, branch,
   sort_order INTEGER NOT NULL DEFAULT 0,              -- v6 新增（泳道内排序）
   created_at, updated_at,
   created_by TEXT NOT NULL DEFAULT 'human',           -- v7 新增（human | ai）
-  ai_coordinated INTEGER NOT NULL DEFAULT 0           -- v7 新增（AI 协调标记）
+  ai_coordinated INTEGER NOT NULL DEFAULT 0           -- v7 新增（AI 协助标记）
 索引：idx_todos_project ON todos(project_id)
 app_meta（v2）: key PK, value —— key='next_seq' 为任务全局序号分配源（已分配最大序号）
 git_repo_cache（v3）: repo_path PK, repo_exists, is_repo, current_branch,
