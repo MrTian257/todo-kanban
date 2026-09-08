@@ -20,7 +20,10 @@ const rehypePlugins: PluggableList = [
     // Sanitization adds its own prefix to every id, including raw HTML ids.
     attributes: {
       ...defaultSchema.attributes,
-      code: [...(defaultSchema.attributes?.code ?? []), ["className", /^language-./, "math-inline", "math-display"]],
+      code: [
+        ...(defaultSchema.attributes?.code ?? []).filter(rule => (typeof rule === "string" ? rule : rule[0]) !== "className"),
+        ["className", /^language-./, "math-inline", "math-display"],
+      ],
     },
     protocols: { ...defaultSchema.protocols, src: [...(defaultSchema.protocols?.src ?? []), "data"] },
   }],

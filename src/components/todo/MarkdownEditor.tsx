@@ -7,8 +7,12 @@ import { cn } from "@/lib/utils";
 
 const IMAGE_MAX_SIDE = 1280;
 const IMAGE_JPEG_QUALITY = 0.82;
+const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+const IMAGE_BATCH_MAX_BYTES = 20 * 1024 * 1024;
+const IMAGE_BATCH_MAX_COUNT = 5;
+const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 
-/** canvas 降采样压缩：PNG <300KB 原样保留透明；JPEG 质量 0.82 */
+/** Preserve GIF/WebP animation; resize PNG/JPEG with transparency retained for PNG. */
 async function compressImage(file: File): Promise<string> {
   const dataUrl = await new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
@@ -16,6 +20,9 @@ async function compressImage(file: File): Promise<string> {
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
+
+  // Canvas would flatten animations. Preserve these bounded originals verbatim.
+  if (file.type === "image/gif" || file.type === "image/webp") return dataUrl;
 
   const img = new Image();
   await new Promise<void>((resolve, reject) => {
@@ -27,8 +34,8 @@ async function compressImage(file: File): Promise<string> {
   let { width, height } = img;
   if (width > IMAGE_MAX_SIDE || height > IMAGE_MAX_SIDE) {
     const ratio = Math.min(IMAGE_MAX_SIDE / width, IMAGE_MAX_SIDE / height);
-    width = Math.round(width * ratio);
-    height = Math.round(height * ratio);
+    width = Math.max(1, Math.round(width * ratio));
+    height = Math.max(1, Math.round(height * ratio));
   }
 
   const isPng = file.type === "image/png";
@@ -64,6 +71,7 @@ export function MarkdownEditor({ value, onChange, className }: Props) {
   const [error, setError] = React.useState("");
   const latest = React.useRef(value);
   const mounted = React.useRef(true);
+  const imageBusy = React.useRef(false);
   latest.current = value;
   React.useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const preview = React.useDeferredValue(value);
@@ -105,13 +113,27 @@ export function MarkdownEditor({ value, onChange, className }: Props) {
     replace(text, from, to, 0, text.length);
   };
   const insertImages = async (files: File[]) => {
-    if (!files.length || uploading) return;
+    if (!files.length || imageBusy.current) return;
+    setError("");
+    if (files.length > IMAGE_BATCH_MAX_COUNT || files.some(file => file.size > IMAGE_MAX_BYTES) || files.reduce((total, file) => total + file.size, 0) > IMAGE_BATCH_MAX_BYTES) {
+      setError("每次最多插入 5 张图片，单张不超过 10 MB，合计不超过 20 MB。");
+      return;
+    }
+    if (files.some(file => !IMAGE_TYPES.has(file.type))) {
+      setError("请选择 PNG、JPEG、GIF 或 WebP 图片。");
+      return;
+    }
+    imageBusy.current = true;
     const original = latest.current;
     const { start, end } = selection.current;
     setUploading(true);
     setError("");
     try {
-      const urls = await Promise.all(files.map(compressImage));
+      const urls: string[] = [];
+      for (const file of files) {
+        if (!mounted.current || latest.current !== original) break;
+        urls.push(await compressImage(file));
+      }
       if (!mounted.current) return;
       if (latest.current !== original) {
         setError("描述已更新，请重新插入图片。");
@@ -124,6 +146,7 @@ export function MarkdownEditor({ value, onChange, className }: Props) {
     } catch {
       if (mounted.current) setError("图片读取失败，请选择可用的图片重试。");
     } finally {
+      imageBusy.current = false;
       if (mounted.current) setUploading(false);
     }
   };
@@ -143,16 +166,16 @@ export function MarkdownEditor({ value, onChange, className }: Props) {
   const toolDisabled = mode === "preview" || uploading;
 
   return (
-    <div className={cn("flex h-full min-w-0 flex-col overflow-hidden", className)}>
-      <div className="flex flex-wrap items-center justify-between gap-2 border-y bg-muted/25 px-4 py-2">
-        <div className="flex gap-1" role="group" aria-label="Markdown 编辑模式">
+    <div className={cn("flex h-full min-w-0 flex-col overflow-y-auto", className)}>
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-y bg-muted/25 px-4 py-2">
+        <div className="flex flex-wrap gap-1" role="group" aria-label="Markdown 编辑模式">
           {([["edit", "编辑"], ["split", "分栏"], ["preview", "预览"]] as const).map(([id, label]) => (
             <Button key={id} type="button" size="sm" variant={mode === id ? "secondary" : "ghost"} aria-pressed={mode === id} disabled={uploading} onClick={() => setMode(id)}>{label}</Button>
           ))}
         </div>
         <Button type="button" variant="ghost" size="sm" aria-expanded={help} onClick={() => setHelp(!help)}><HelpCircle className="mr-1 h-3.5 w-3.5" />语法帮助</Button>
       </div>
-      {mode !== "preview" && <div className="flex flex-wrap items-center gap-1 border-b px-4 py-2" role="group" aria-label="Markdown 格式工具">
+      {mode !== "preview" && <div className="flex shrink-0 flex-wrap items-center gap-1 border-b px-4 py-2" role="group" aria-label="Markdown 格式工具">
         <ToolButton title="加粗 (⌘/Ctrl+B)" disabled={toolDisabled} onClick={() => wrap("**", "**")}><Bold /></ToolButton>
         <ToolButton title="斜体 (⌘/Ctrl+I)" disabled={toolDisabled} onClick={() => wrap("*", "*")}><Italic /></ToolButton>
         <ToolButton title="删除线" disabled={toolDisabled} onClick={() => wrap("~~", "~~")}><Strikethrough /></ToolButton>
@@ -173,19 +196,21 @@ export function MarkdownEditor({ value, onChange, className }: Props) {
         <ToolButton title="分隔线" disabled={toolDisabled} onClick={() => block("---")}><Minus /></ToolButton>
         <ToolButton title="数学公式" disabled={toolDisabled} onClick={() => block("$$\nE = mc^2\n$$")}><Sigma /></ToolButton>
       </div>}
-      <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={event => {
+      <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden onChange={event => {
         void insertImages(Array.from(event.target.files ?? []));
         event.target.value = "";
       }} />
       {help && <div className="border-b bg-muted/20 px-5 py-3 text-xs leading-6 text-muted-foreground">
         <p>支持 CommonMark + GFM：# 至 ###### 标题、**加粗**、*斜体*、~~删除线~~、嵌套列表、- [ ] 任务、引用、表格、链接、图片、分隔线与脚注 [^1]。</p>
         <p>代码块使用三反引号和语言名；公式使用 $行内公式$ 或独立行的 $$。空行分段，行尾两个空格或反斜杠换行。支持安全 HTML（如 details / summary），不执行脚本。</p>
-        <p>选中文字后使用工具栏或 ⌘/Ctrl+B、I、K；⌘/Ctrl+Z 撤销。图片可直接粘贴。源文原样保存，分栏模式实时预览。</p>
+        <p>选中文字后使用工具栏或 ⌘/Ctrl+B、I、K；⌘/Ctrl+Z 撤销。图片可直接粘贴（每次最多 5 张，单张 10 MB、合计 20 MB）；GIF/WebP 保留原图。源文原样保存，分栏模式实时预览。</p>
       </div>}
       {uploading && <p role="status" className="px-5 py-2 text-xs text-muted-foreground">正在处理图片…</p>}
       {error && <p role="alert" className="px-5 py-2 text-xs text-destructive">{error}</p>}
       <div className={cn("md-workspace flex-1 min-h-64 min-w-0", mode === "split" && "md-workspace-split")}>
-        {mode !== "preview" && <textarea
+        <textarea
+          hidden={mode === "preview"}
+          style={mode === "preview" ? { display: "none" } : undefined}
           ref={ref}
           aria-label="任务描述"
           value={value}
@@ -204,8 +229,8 @@ export function MarkdownEditor({ value, onChange, className }: Props) {
               void insertImages(files);
             }
           }}
-        />}
-        {mode !== "edit" && <section aria-label="Markdown 预览" className="md-preview min-w-0 overflow-auto px-5 py-5">
+        />
+        {mode !== "edit" && <section aria-label="Markdown 预览" className="md-preview min-h-64 min-w-0 overflow-auto px-5 py-5">
           <MarkdownView content={preview} />
         </section>}
       </div>

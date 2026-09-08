@@ -123,7 +123,18 @@ export function TodoDetailPage() {
     if (!isDirty) return;
     const guard = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ""; };
     const guardLink = (e: MouseEvent) => {
-      if ((e.target as HTMLElement).closest("a[href]") && !window.confirm("还有未保存的修改，确定离开？")) {e.preventDefault(); e.stopPropagation();}
+      const link = e.target instanceof Element ? e.target.closest<HTMLAnchorElement>("a[href]") : null;
+      if (!link || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      if (link.hasAttribute("download") || (link.target && link.target !== "_self")) return;
+      const href = link.getAttribute("href") ?? "";
+      // Markdown fragment links scroll inside the preview; HashRouter links navigate.
+      if (link.closest(".md-editor") && href.startsWith("#")) return;
+      const destination = new URL(link.href, window.location.href);
+      if (!["http:", "https:"].includes(destination.protocol) || destination.href === window.location.href) return;
+      if (!window.confirm("还有未保存的修改，确定离开？")) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
     };
     window.addEventListener("beforeunload",guard);
     document.addEventListener("click",guardLink,true);
