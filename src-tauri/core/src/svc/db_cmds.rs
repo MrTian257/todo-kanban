@@ -7,7 +7,8 @@ use std::sync::Mutex;
 use crate::db;
 use crate::error::{AppError, AppResult};
 use crate::models::{
-    DbBranchDef, DbBranchRule, DbBranchRuleStep, DbProject, DbState, DbSwimlane, DbTodo, McpSettings,
+    DbBranchDef, DbBranchRule, DbBranchRuleStep, DbProject, DbState, DbSwimlane, DbTodo,
+    McpSettings,
 };
 use rusqlite::{Connection, OptionalExtension};
 
@@ -136,21 +137,71 @@ fn seed_demo_state(conn: &Connection) -> AppResult<()> {
             branch_rule: Some(DbBranchRule {
                 enabled: true,
                 steps: vec![
-                    DbBranchRuleStep { id: "s1".into(), from: "production".into(), action: "checkout".into(), to: "develop".into(), note: String::new() },
-                    DbBranchRuleStep { id: "s2".into(), from: "develop".into(), action: "merge".into(), to: "test".into(), note: String::new() },
-                    DbBranchRuleStep { id: "s3".into(), from: "develop".into(), action: "merge".into(), to: "production".into(), note: String::new() },
+                    DbBranchRuleStep {
+                        id: "s1".into(),
+                        from: "production".into(),
+                        action: "checkout".into(),
+                        to: "develop".into(),
+                        note: String::new(),
+                    },
+                    DbBranchRuleStep {
+                        id: "s2".into(),
+                        from: "develop".into(),
+                        action: "merge".into(),
+                        to: "test".into(),
+                        note: String::new(),
+                    },
+                    DbBranchRuleStep {
+                        id: "s3".into(),
+                        from: "develop".into(),
+                        action: "merge".into(),
+                        to: "production".into(),
+                        note: String::new(),
+                    },
                 ],
                 branches: vec![
-                    DbBranchDef { role: "production".into(), name: "生产".into(), code: "master".into() },
-                    DbBranchDef { role: "develop".into(), name: "开发".into(), code: "dev".into() },
-                    DbBranchDef { role: "test".into(), name: "测试".into(), code: "test".into() },
+                    DbBranchDef {
+                        role: "production".into(),
+                        name: "生产".into(),
+                        code: "master".into(),
+                    },
+                    DbBranchDef {
+                        role: "develop".into(),
+                        name: "开发".into(),
+                        code: "dev".into(),
+                    },
+                    DbBranchDef {
+                        role: "test".into(),
+                        name: "测试".into(),
+                        code: "test".into(),
+                    },
                 ],
             }),
             swimlanes: Some(vec![
-                DbSwimlane { id: "swim-todo".into(), name: "待办".into(), status: "todo".into(), sort_order: 0 },
-                DbSwimlane { id: "swim-doing".into(), name: "进行中".into(), status: "doing".into(), sort_order: 1 },
-                DbSwimlane { id: "swim-release".into(), name: "待发版".into(), status: "doing".into(), sort_order: 2 },
-                DbSwimlane { id: "swim-done".into(), name: "已完成".into(), status: "done".into(), sort_order: 3 },
+                DbSwimlane {
+                    id: "swim-todo".into(),
+                    name: "待办".into(),
+                    status: "todo".into(),
+                    sort_order: 0,
+                },
+                DbSwimlane {
+                    id: "swim-doing".into(),
+                    name: "进行中".into(),
+                    status: "doing".into(),
+                    sort_order: 1,
+                },
+                DbSwimlane {
+                    id: "swim-release".into(),
+                    name: "待发版".into(),
+                    status: "doing".into(),
+                    sort_order: 2,
+                },
+                DbSwimlane {
+                    id: "swim-done".into(),
+                    name: "已完成".into(),
+                    status: "done".into(),
+                    sort_order: 3,
+                },
             ]),
             archived: false,
             created_by: "human".into(),
@@ -159,15 +210,150 @@ fn seed_demo_state(conn: &Connection) -> AppResult<()> {
             ..Default::default()
         }],
         todos: vec![
-            demo_todo(DemoTodoSpec { id: "demo-1", title: "优化项目列表布局", note: "整理项目概况，让任务与进度更容易查看。", status: "todo", swimlane_id: "swim-todo", seq: 1, days_ago: 0, branch: "feature/ui-polish", blocker: "", sort_order: 0 }, now, day),
-            demo_todo(DemoTodoSpec { id: "demo-2", title: "完善空状态提示", note: "为新项目提供清晰的开始入口。", status: "todo", swimlane_id: "swim-todo", seq: 2, days_ago: 0, branch: "feature/empty-state", blocker: "", sort_order: 1 }, now, day),
-            demo_todo(DemoTodoSpec { id: "demo-3", title: "调整日期选择交互", note: "选择计划日期并保持范围高亮。", status: "todo", swimlane_id: "swim-todo", seq: 3, days_ago: 0, branch: "feature/date-range", blocker: "", sort_order: 2 }, now, day),
-            demo_todo(DemoTodoSpec { id: "demo-4", title: "重构任务卡片样式", note: "统一任务信息与操作区域。", status: "doing", swimlane_id: "swim-doing", seq: 4, days_ago: 1, branch: "refactor/task-card", blocker: "等待接口联调", sort_order: 0 }, now, day),
-            demo_todo(DemoTodoSpec { id: "demo-5", title: "优化分支选择体验", note: "区分关联分支与工作区当前分支。", status: "doing", swimlane_id: "swim-doing", seq: 5, days_ago: 1, branch: "feature/branch-selector", blocker: "", sort_order: 1 }, now, day),
-            demo_todo(DemoTodoSpec { id: "demo-6", title: "修复跨泳道拖拽", note: "验证状态同步与排序持久化。", status: "doing", swimlane_id: "swim-release", seq: 6, days_ago: 1, branch: "fix/drag-drop", blocker: "", sort_order: 0 }, now, day),
-            demo_todo(DemoTodoSpec { id: "demo-7", title: "完善提交记录展示", note: "优化提交信息层级。", status: "doing", swimlane_id: "swim-release", seq: 7, days_ago: 1, branch: "feature/commit-log", blocker: "", sort_order: 1 }, now, day),
-            demo_todo(DemoTodoSpec { id: "demo-8", title: "新增项目归档入口", note: "收纳已结束的项目。", status: "done", swimlane_id: "swim-done", seq: 8, days_ago: 0, branch: "feature/archive-entry", blocker: "", sort_order: 0 }, now, day),
-            demo_todo(DemoTodoSpec { id: "demo-9", title: "统一主题配色", note: "适配浅色与深色主题。", status: "done", swimlane_id: "swim-done", seq: 9, days_ago: 0, branch: "chore/theme-color", blocker: "", sort_order: 1 }, now, day),
+            demo_todo(
+                DemoTodoSpec {
+                    id: "demo-1",
+                    title: "优化项目列表布局",
+                    note: "整理项目概况，让任务与进度更容易查看。",
+                    status: "todo",
+                    swimlane_id: "swim-todo",
+                    seq: 1,
+                    days_ago: 0,
+                    branch: "feature/ui-polish",
+                    blocker: "",
+                    sort_order: 0,
+                },
+                now,
+                day,
+            ),
+            demo_todo(
+                DemoTodoSpec {
+                    id: "demo-2",
+                    title: "完善空状态提示",
+                    note: "为新项目提供清晰的开始入口。",
+                    status: "todo",
+                    swimlane_id: "swim-todo",
+                    seq: 2,
+                    days_ago: 0,
+                    branch: "feature/empty-state",
+                    blocker: "",
+                    sort_order: 1,
+                },
+                now,
+                day,
+            ),
+            demo_todo(
+                DemoTodoSpec {
+                    id: "demo-3",
+                    title: "调整日期选择交互",
+                    note: "选择计划日期并保持范围高亮。",
+                    status: "todo",
+                    swimlane_id: "swim-todo",
+                    seq: 3,
+                    days_ago: 0,
+                    branch: "feature/date-range",
+                    blocker: "",
+                    sort_order: 2,
+                },
+                now,
+                day,
+            ),
+            demo_todo(
+                DemoTodoSpec {
+                    id: "demo-4",
+                    title: "重构任务卡片样式",
+                    note: "统一任务信息与操作区域。",
+                    status: "doing",
+                    swimlane_id: "swim-doing",
+                    seq: 4,
+                    days_ago: 1,
+                    branch: "refactor/task-card",
+                    blocker: "等待接口联调",
+                    sort_order: 0,
+                },
+                now,
+                day,
+            ),
+            demo_todo(
+                DemoTodoSpec {
+                    id: "demo-5",
+                    title: "优化分支选择体验",
+                    note: "区分关联分支与工作区当前分支。",
+                    status: "doing",
+                    swimlane_id: "swim-doing",
+                    seq: 5,
+                    days_ago: 1,
+                    branch: "feature/branch-selector",
+                    blocker: "",
+                    sort_order: 1,
+                },
+                now,
+                day,
+            ),
+            demo_todo(
+                DemoTodoSpec {
+                    id: "demo-6",
+                    title: "修复跨泳道拖拽",
+                    note: "验证状态同步与排序持久化。",
+                    status: "doing",
+                    swimlane_id: "swim-release",
+                    seq: 6,
+                    days_ago: 1,
+                    branch: "fix/drag-drop",
+                    blocker: "",
+                    sort_order: 0,
+                },
+                now,
+                day,
+            ),
+            demo_todo(
+                DemoTodoSpec {
+                    id: "demo-7",
+                    title: "完善提交记录展示",
+                    note: "优化提交信息层级。",
+                    status: "doing",
+                    swimlane_id: "swim-release",
+                    seq: 7,
+                    days_ago: 1,
+                    branch: "feature/commit-log",
+                    blocker: "",
+                    sort_order: 1,
+                },
+                now,
+                day,
+            ),
+            demo_todo(
+                DemoTodoSpec {
+                    id: "demo-8",
+                    title: "新增项目归档入口",
+                    note: "收纳已结束的项目。",
+                    status: "done",
+                    swimlane_id: "swim-done",
+                    seq: 8,
+                    days_ago: 0,
+                    branch: "feature/archive-entry",
+                    blocker: "",
+                    sort_order: 0,
+                },
+                now,
+                day,
+            ),
+            demo_todo(
+                DemoTodoSpec {
+                    id: "demo-9",
+                    title: "统一主题配色",
+                    note: "适配浅色与深色主题。",
+                    status: "done",
+                    swimlane_id: "swim-done",
+                    seq: 9,
+                    days_ago: 0,
+                    branch: "chore/theme-color",
+                    blocker: "",
+                    sort_order: 1,
+                },
+                now,
+                day,
+            ),
         ],
     };
     db::save_state(conn, &state)
@@ -188,7 +374,18 @@ struct DemoTodoSpec {
 }
 
 fn demo_todo(spec: DemoTodoSpec, now: i64, day: i64) -> DbTodo {
-    let DemoTodoSpec { id, title, note, status, swimlane_id, seq, days_ago, branch, blocker, sort_order } = spec;
+    let DemoTodoSpec {
+        id,
+        title,
+        note,
+        status,
+        swimlane_id,
+        seq,
+        days_ago,
+        branch,
+        blocker,
+        sort_order,
+    } = spec;
     DbTodo {
         id: id.into(),
         project_id: "demo-project".into(),
@@ -230,11 +427,9 @@ const MCP_ENABLED_KEY: &str = "mcp_enabled";
 const MCP_TOKEN_KEY: &str = "mcp_token";
 
 fn read_meta(conn: &Connection, key: &str) -> AppResult<Option<String>> {
-    conn.query_row(
-        "SELECT value FROM app_meta WHERE key = ?1",
-        [key],
-        |r| r.get::<_, String>(0),
-    )
+    conn.query_row("SELECT value FROM app_meta WHERE key = ?1", [key], |r| {
+        r.get::<_, String>(0)
+    })
     .optional()
     .map_err(AppError::from)
 }

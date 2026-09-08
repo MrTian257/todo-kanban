@@ -39,11 +39,17 @@ pub fn branch_list(repo_url: &str, token: &str) -> AppResult<Vec<String>> {
             }
         }
         if items.len() < PER_PAGE as usize {
-            log::info!("GitLab 分页结束：page={page} 未达每页上限，共 {total} 条", total = all.len());
+            log::info!(
+                "GitLab 分页结束：page={page} 未达每页上限，共 {total} 条",
+                total = all.len()
+            );
             break;
         }
         if page == MAX_PAGES {
-            log::warn!("GitLab 分页达到上限 {MAX_PAGES}×{PER_PAGE}，仅返回前 {total} 条分支", total = all.len());
+            log::warn!(
+                "GitLab 分页达到上限 {MAX_PAGES}×{PER_PAGE}，仅返回前 {total} 条分支",
+                total = all.len()
+            );
         }
     }
     log::info!("GitLab 远端分支拉取完成：共 {total} 条", total = all.len());
@@ -95,7 +101,11 @@ fn curl_json(url: &str, token: &str) -> AppResult<String> {
     let masked_token = if token.is_empty() {
         "<empty>".to_string()
     } else {
-        format!("{}...{}", &token[..token.len().min(4)], &token[token.len().saturating_sub(4)..])
+        format!(
+            "{}...{}",
+            &token[..token.len().min(4)],
+            &token[token.len().saturating_sub(4)..]
+        )
     };
     log::debug!("GitLab curl 请求：url={url}, token={masked_token}");
     let mut cmd = quiet_command("curl");
@@ -114,7 +124,10 @@ fn curl_json(url: &str, token: &str) -> AppResult<String> {
     })?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
-        log::error!("GitLab API 请求失败：status={:?}, stderr={stderr}", out.status);
+        log::error!(
+            "GitLab API 请求失败：status={:?}, stderr={stderr}",
+            out.status
+        );
         return Err(AppError::git(format!("GitLab API 请求失败：{stderr}")));
     }
     let body = String::from_utf8_lossy(&out.stdout).to_string();

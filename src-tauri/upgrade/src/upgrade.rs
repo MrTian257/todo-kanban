@@ -9,8 +9,8 @@ use crate::backup::backup_before_upgrade;
 use crate::error::{UpgradeError, UpgradeResult};
 use crate::migration::migrate;
 use crate::version::{
-    build_ok_report, build_upgraded_report, read_version, write_app_meta_version,
-    CURRENT_VERSION, MIN_SUPPORTED_VERSION, VersionReport,
+    build_ok_report, build_upgraded_report, read_version, write_app_meta_version, VersionReport,
+    CURRENT_VERSION, MIN_SUPPORTED_VERSION,
 };
 
 /// 升级编排：对已建表的连接执行 版本判定 →（兼容升级时）硬备份 → 逐级迁移 → 报告。
@@ -19,7 +19,11 @@ use crate::version::{
 /// - 数据版本 == 0（新库/未初始化）→ 不拒绝、不备份，直接迁移到 CURRENT
 /// - 数据版本 == CURRENT → Ok(ok 报告)
 /// - MIN ≤ 数据版本 < CURRENT → 备份 + 迁移 + upgraded 报告
-pub fn ensure(conn: &Connection, db_path: &Path, backup_dir: &Path) -> UpgradeResult<VersionReport> {
+pub fn ensure(
+    conn: &Connection,
+    db_path: &Path,
+    backup_dir: &Path,
+) -> UpgradeResult<VersionReport> {
     let data_version = read_version(conn)?;
     if data_version > CURRENT_VERSION {
         return Err(UpgradeError::TooNew {
@@ -118,7 +122,10 @@ mod tests {
         let conn = rusqlite::Connection::open(&db).unwrap();
         let err = ensure(&conn, &db, &dir.join("backup")).unwrap_err();
         match err {
-            UpgradeError::TooNew { data_version, max_supported } => {
+            UpgradeError::TooNew {
+                data_version,
+                max_supported,
+            } => {
                 assert_eq!(data_version, 8);
                 assert_eq!(max_supported, CURRENT_VERSION);
             }
@@ -129,7 +136,10 @@ mod tests {
 
     #[test]
     fn ensure_too_old_message() {
-        let e = UpgradeError::TooOld { data_version: 3, min_supported: 4 };
+        let e = UpgradeError::TooOld {
+            data_version: 3,
+            min_supported: 4,
+        };
         let msg = e.to_string();
         assert!(msg.contains("过旧") && msg.contains("中间版本"));
     }
@@ -147,7 +157,11 @@ mod tests {
         assert_eq!(report.status, VersionStatus::Upgraded);
         assert_eq!(report.from, Some(1));
         assert_eq!(report.to, Some(CURRENT_VERSION));
-        assert!(report.steps.as_ref().map(|s| !s.is_empty()).unwrap_or(false));
+        assert!(report
+            .steps
+            .as_ref()
+            .map(|s| !s.is_empty())
+            .unwrap_or(false));
         // 硬备份已产生（运行目录/backup 下）
         let backups: Vec<_> = std::fs::read_dir(dir.join("backup"))
             .unwrap()
@@ -155,7 +169,10 @@ mod tests {
             .collect();
         assert!(!backups.is_empty(), "应产生硬备份文件");
         // 版本已到位
-        assert_eq!(crate::version::read_version(&conn).unwrap(), CURRENT_VERSION);
+        assert_eq!(
+            crate::version::read_version(&conn).unwrap(),
+            CURRENT_VERSION
+        );
         drop(conn);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -175,4 +192,3 @@ mod tests {
         assert_eq!(report.data_version, CURRENT_VERSION);
     }
 }
-

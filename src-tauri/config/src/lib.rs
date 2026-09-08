@@ -18,9 +18,15 @@ pub const MIGRATION_STEPS: [(&str, &str); 6] = [
     ("v1→v2", "建 app_meta；存量数字标记清洗"),
     ("v2→v3", "建 git_repo_cache"),
     ("v3→v4", "projects 补 GitLab Token 两列"),
-    ("v4→v5", "泳道重构：projects.swimlanes、todos.swimlane_id + 按状态回填"),
+    (
+        "v4→v5",
+        "泳道重构：projects.swimlanes、todos.swimlane_id + 按状态回填",
+    ),
     ("v5→v6", "todos 补 sort_order + 按插入顺序回填"),
-    ("v6→v7", "创建者标识：todos/projects.created_by + todos.ai_coordinated"),
+    (
+        "v6→v7",
+        "创建者标识：todos/projects.created_by + todos.ai_coordinated",
+    ),
 ];
 
 /// 更新日志（文本形式，逐版本摘要）

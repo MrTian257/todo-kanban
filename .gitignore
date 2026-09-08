@@ -39,3 +39,6 @@ src-tauri/gen
 .omo/run-continuation/
 release/
 .playwright-mcp/
+
+# Local artifacts (not to be pushed)
+todo-markdown-code-changes.zip

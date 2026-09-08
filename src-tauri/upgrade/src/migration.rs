@@ -92,7 +92,9 @@ pub fn migrate(conn: &Connection) -> UpgradeResult<MigrateOutcome> {
             )?;
         }
         if !column_exists(&tx, "projects", "created_by")? {
-            tx.execute_batch("ALTER TABLE projects ADD COLUMN created_by TEXT NOT NULL DEFAULT 'human';")?;
+            tx.execute_batch(
+                "ALTER TABLE projects ADD COLUMN created_by TEXT NOT NULL DEFAULT 'human';",
+            )?;
         }
     }
 
@@ -161,6 +163,15 @@ mod tests {
         assert!(out.migrated);
         assert_eq!(out.steps.len() as i64, CURRENT_VERSION - 1);
         assert_eq!(read_version(&conn).unwrap(), CURRENT_VERSION);
+        // 数据版本同时写入 app_meta
+        let app_meta_version: String = conn
+            .query_row(
+                "SELECT value FROM app_meta WHERE key = 'data_version'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(app_meta_version, CURRENT_VERSION.to_string());
         // 各版本列齐全
         assert!(column_exists(&conn, "projects", "frontend_repo_token").unwrap());
         assert!(column_exists(&conn, "projects", "swimlanes").unwrap());
@@ -171,7 +182,9 @@ mod tests {
         assert!(column_exists(&conn, "projects", "created_by").unwrap());
         // v5 泳道回填
         let lane: String = conn
-            .query_row("SELECT swimlane_id FROM todos WHERE id='t1'", [], |r| r.get(0))
+            .query_row("SELECT swimlane_id FROM todos WHERE id='t1'", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert_eq!(lane, "swim-doing");
     }
@@ -211,4 +224,3 @@ mod tests {
         assert_eq!(v, 4, "迁移失败应回滚，user_version 不变");
     }
 }
-

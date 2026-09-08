@@ -92,7 +92,7 @@
 - 数据库文件由**程序运行目录（exe 所在目录）下 `todo-kanban.db` 指示文件**指定：首行 = 数据库绝对路径（`db_path` 解析；指示缺失或为空 → 无数据源）
 - 无数据源语义：`db_load_state` 返回 `Ok(None)` → 前端空态并提示「生成新的数据文件」；`db_save_state` 拒绝并返回中文错误
 - `ensure_db`（预留能力，当前无命令暴露）：无指示 → 写入 `todo-kanban.db` 指向 `<exe_dir>/todo-git.db` 并建库建表
-- WAL 模式；MCP server 同样回退 exe_dir，可用 `MCP_TODO_DB_CONFIG` 环境变量或 `--db-config <dir>` 覆盖
+- WAL 模式；MCP server 同样回退 exe_dir，可用 `MCP_TODO_DB_CONFIG` 环境变量或 `--db-config <dir>` 覆盖数据源目录
 
 > ⚠ 历史遗留：前端 `storage.ts` 顶部注释写着「环境变量 TODO_GIT_DB_PATH 优先」——**与实现不符**（Rust 侧无此环境变量，始终走 todo-kanban.db），重构时勿被误导。
 

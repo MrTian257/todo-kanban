@@ -79,7 +79,7 @@ git_info / git_info_refresh / git_info_remote / git_create_branch / git_create_b
 ### 3.4 MCP server（workspace 成员 `mcp-server`，独立进程，零 tauri 依赖）
 
 - 定位：stdio 传输的 MCP 服务端，把核心能力以 **9 tools + 3 resources** 暴露给外部 MCP 客户端；**与 Tauri 前端完全解耦**（不经 invoke_handler/capabilities）
-- 分层：`main.rs`（stdio 主循环）→ `protocol.rs`（MCP 规范逐行 JSON-RPC 2.0：initialize / tools / resources / ping）→ `bridge.rs`（tools/resources ↔ `core::svc`，AppError→JSON-RPC 错误码：Invalid→-32602、其余→-32603；`MCP_TODO_READONLY=1` 拒绝写工具）→ `config.rs`（数据源：`MCP_TODO_DB_CONFIG`/`--db-config` 覆盖 → exe_dir 回退 `todo-kanban.db`）
+- 分层：`main.rs`（stdio 主循环）→ `protocol.rs`（MCP 规范逐行 JSON-RPC 2.0：initialize / tools / resources / ping）→ `bridge.rs`（tools/resources ↔ `core::svc`，AppError→JSON-RPC 错误码：Invalid→-32602、其余→-32603；`MCP_TODO_READONLY=1` 拒绝写工具）→ `config.rs`（数据源目录：`MCP_TODO_DB_CONFIG`/`--db-config` 覆盖 → exe_dir 回退 `todo-kanban.db`）
 - MCP 的 `git_info` 保持**直读**语义（不经 app 侧缓存）；`git_info_refresh` / `git_info_remote` 为 app 专属命令不暴露
 - 详细设计见 mcp-design.md
 

@@ -5,9 +5,15 @@ use std::fmt;
 #[derive(Debug)]
 pub enum UpgradeError {
     /// 数据版本高于软件最高支持（用户规则：直接拒绝）
-    TooNew { data_version: i64, max_supported: i64 },
+    TooNew {
+        data_version: i64,
+        max_supported: i64,
+    },
     /// 数据版本低于软件最低支持
-    TooOld { data_version: i64, min_supported: i64 },
+    TooOld {
+        data_version: i64,
+        min_supported: i64,
+    },
     Sqlite(rusqlite::Error),
     Io(std::io::Error),
     /// 迁移前备份失败（中止升级，保守安全）

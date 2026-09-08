@@ -77,7 +77,11 @@ pub fn todo_params(t: &DbTodo) -> Vec<Box<dyn rusqlite::ToSql>> {
         Box::new(t.sort_order),
         Box::new(t.created_at),
         Box::new(t.updated_at),
-        Box::new(if t.created_by.is_empty() { "human".to_string() } else { t.created_by.clone() }),
+        Box::new(if t.created_by.is_empty() {
+            "human".to_string()
+        } else {
+            t.created_by.clone()
+        }),
         Box::new(t.ai_coordinated),
     ]
 }
@@ -144,7 +148,11 @@ pub fn project_params(p: &DbProject) -> Vec<Box<dyn rusqlite::ToSql>> {
                 .as_ref()
                 .map(|s| serde_json::to_string(s).unwrap_or_else(|_| "null".into())),
         ),
-        Box::new(if p.created_by.is_empty() { "human".to_string() } else { p.created_by.clone() }),
+        Box::new(if p.created_by.is_empty() {
+            "human".to_string()
+        } else {
+            p.created_by.clone()
+        }),
     ]
 }
 

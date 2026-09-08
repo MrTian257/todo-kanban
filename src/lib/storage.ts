@@ -1,5 +1,5 @@
 // 持久化通道：仅桌面 Tauri invoke；浏览器预览模式无存储（空态/演示数据）
-// 注：历史遗留注释「TODO_GIT_DB_PATH 环境变量优先」与实现不符（Rust 侧走 db-config.txt），勿被误导。
+// 注：历史遗留注释「TODO_GIT_DB_PATH 环境变量优先」已作废；Rust 侧固定使用程序运行目录下的 todo-kanban.db。
 
 import { invoke } from "@tauri-apps/api/core";
 import { AppState } from "./types";

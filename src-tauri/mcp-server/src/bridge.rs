@@ -35,13 +35,17 @@ fn is_readonly() -> bool {
 }
 
 /// 数据源路径：--db-config 指定目录 → 该目录下 todo-kanban.db；否则回退 app 运行目录。
+/// 数据文件不存在时返回 None，避免 MCP server 自动创建未初始化的库。
 fn resolve_db_file() -> AppResult<Option<PathBuf>> {
-    if let Some(cfg) = config::get() {
+    let path = if let Some(cfg) = config::get() {
         if let Some(dir) = cfg.db_config_dir {
-            return Ok(Some(dir.join("todo-kanban.db")));
+            dir.join("todo-kanban.db")
+        } else {
+            db_cmds::db_path()?
         }
-    }
-    let path = db_cmds::db_path()?;
+    } else {
+        db_cmds::db_path()?
+    };
     if path.exists() {
         Ok(Some(path))
     } else {

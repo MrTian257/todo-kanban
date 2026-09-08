@@ -132,9 +132,7 @@ pub fn validate_branch_name(name: &str) -> AppResult<()> {
         .chars()
         .any(|c| c.is_whitespace() || c.is_control() || invalid.contains(&c))
     {
-        return Err(AppError::invalid(
-            "分支名不能包含空格及 # @ % & * 等符号",
-        ));
+        return Err(AppError::invalid("分支名不能包含空格及 # @ % & * 等符号"));
     }
     Ok(())
 }

@@ -9,7 +9,7 @@ description: 把拆分出的开发任务登记到 todo-kanban（经 MCP）。当
 
 ## 前置条件
 
-- todo-kanban 桌面应用已运行过（数据文件已初始化，运行目录含 `db-config.txt`）
+- todo-kanban 桌面应用已运行过（数据文件已初始化，运行目录含 `todo-kanban.db`）
 - 设置页「MCP 集成」已启用（默认开启）
 - 授权 Token：todo-kanban 设置页可查看/修改，**默认全局固定 `sk-GLOBAl_MCP_BY_ADMIN`**
 
@@ -21,8 +21,8 @@ MCP server 是独立 stdio 进程，两种方式接入：
 2. **手动拉起**：
 
    ```bash
-   mcp-server --token <授权Token>                # 数据源回退 exe 同目录 db-config.txt
-   mcp-server --db-config <app运行目录> --token <授权Token>
+   mcp-server --token <授权Token>                # 数据源回退 exe 同目录 todo-kanban.db
+   mcp-server --db-config <含 todo-kanban.db 的目录> --token <授权Token>
    MCP_TODO_TOKEN=<授权Token> mcp-server          # 或环境变量方式
    ```
 

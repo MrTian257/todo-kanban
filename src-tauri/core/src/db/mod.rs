@@ -424,23 +424,25 @@ mod tests {
     #[test]
     fn duplicate_manual_tag_rejected() {
         let conn = test_conn();
+        // 手动 tag（非 todo-<数字> 自动格式）才能触发全局唯一性拒绝；
+        // 自动格式 todo-7 会在新 todo 取号时被重写为 todo-8，不会冲突
         save_state(
             &conn,
             &DbState {
                 projects: vec![project("p1")],
-                todos: vec![todo("t1", 7, "todo-7")],
+                todos: vec![todo("t1", 7, "feature-login")],
             },
         )
         .unwrap();
-        // 新 todo 使用相同 tag → 全局唯一性拒绝
-        let mut t2 = todo("t2", 0, "todo-7");
+        // 新 todo 使用相同手动 tag → 全局唯一性拒绝
+        let mut t2 = todo("t2", 0, "feature-login");
         t2.created_at = 2;
         t2.updated_at = 2;
         let err = save_state(
             &conn,
             &DbState {
                 projects: vec![project("p1")],
-                todos: vec![todo("t1", 7, "todo-7"), t2],
+                todos: vec![todo("t1", 7, "feature-login"), t2],
             },
         );
         assert!(err.is_err());

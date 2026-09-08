@@ -85,7 +85,7 @@ src-tauri/
     ├── Cargo.toml        # deps：todo-git-core(path) / serde / serde_json
     └── src/
         ├── main.rs       # stdio 主循环（stdout 仅协议帧，日志走 stderr）
-        ├── config.rs     # 数据源解析（MCP_TODO_DB_CONFIG / --db-config 覆盖 → exe_dir 回退）+ READONLY
+        ├── config.rs     # 数据源目录解析（MCP_TODO_DB_CONFIG / --db-config 覆盖 → exe_dir 回退 todo-kanban.db）+ READONLY
         ├── bridge.rs     # 9 工具 + 3 资源 ↔ core::svc 映射（AppError→JSON-RPC 错误码）
         └── protocol.rs   # MCP stdio 逐行 JSON-RPC 2.0（initialize/tools/resources/ping）
 ```

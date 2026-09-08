@@ -60,7 +60,10 @@ pub fn git_create_branch_from(repo: &str, branch: &str, from: &str) -> AppResult
     git_cli::validate_branch_name(branch)?;
     git_cli::validate_branch_name(from)?;
     if run_git(repo, &["fetch", "origin", from]).is_ok() {
-        match run_git(repo, &["branch", "--no-track", branch, &format!("origin/{from}")]) {
+        match run_git(
+            repo,
+            &["branch", "--no-track", branch, &format!("origin/{from}")],
+        ) {
             Ok(_) => return push_with_upstream(repo, branch),
             Err(e) => log::warn!("基于远端切出失败，回退本地源：{e}"),
         }
@@ -169,7 +172,11 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let origin = root.join("origin.git");
         let repo = root.join("repo");
-        run_git(root.to_str().unwrap(), &["init", "--bare", origin.to_str().unwrap()]).unwrap();
+        run_git(
+            root.to_str().unwrap(),
+            &["init", "--bare", origin.to_str().unwrap()],
+        )
+        .unwrap();
         run_git(root.to_str().unwrap(), &["init", repo.to_str().unwrap()]).unwrap();
         let r = repo.to_str().unwrap();
         run_git(r, &["config", "user.email", "t@t"]).unwrap();
@@ -194,7 +201,11 @@ mod tests {
     #[test]
     fn git_create_branch_from_sets_same_name_upstream() {
         // 环境无系统 git 时跳过（CI 兜底）
-        if std::process::Command::new("git").arg("--version").output().is_err() {
+        if std::process::Command::new("git")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
             return;
         }
         let root = setup_repo();
@@ -207,13 +218,20 @@ mod tests {
         assert_eq!(merge.trim(), "refs/heads/feat/todo-1");
         // 远端已创建同名分支
         let remotes = run_git(&repo, &["branch", "-r"]).unwrap();
-        assert!(remotes.contains("origin/feat/todo-1"), "远端应存在 feat/todo-1，实际：{remotes}");
+        assert!(
+            remotes.contains("origin/feat/todo-1"),
+            "远端应存在 feat/todo-1，实际：{remotes}"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn git_create_branch_sets_same_name_upstream() {
-        if std::process::Command::new("git").arg("--version").output().is_err() {
+        if std::process::Command::new("git")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
             return;
         }
         let root = setup_repo();

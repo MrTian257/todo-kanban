@@ -223,11 +223,15 @@ mod tests {
         assert!(column_exists(&conn, "projects", "created_by").unwrap());
         // 存量默认 human / 未协调
         let cb: String = conn
-            .query_row("SELECT created_by FROM todos WHERE id='t1'", [], |r| r.get(0))
+            .query_row("SELECT created_by FROM todos WHERE id='t1'", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert_eq!(cb, "human");
         let ac: i64 = conn
-            .query_row("SELECT ai_coordinated FROM todos WHERE id='t1'", [], |r| r.get(0))
+            .query_row("SELECT ai_coordinated FROM todos WHERE id='t1'", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert_eq!(ac, 0);
         let v: i64 = conn
