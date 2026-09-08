@@ -76,7 +76,7 @@ src-tauri/
 │       │   └── repo_cache.rs # git_repo_cache 表行访问（含单测）
 │       └── svc/
 │           ├── git_cmds.rs   # 7 个 git 命令业务
-│           ├── db_cmds.rs    # exe_dir/db_config_path/resolve_db_path/db_file_ready/ensure_db(预留)/
+│           ├── db_cmds.rs    # exe_dir/db_path/db_path/db_file_ready/ensure_db(预留)/
 │           │                 #   load_state(读锁+指纹缓存)/save_state(写锁+规则校验)；DB_RW_LOCK
 │           ├── repo_cache.rs # git_info 缓存编排（命中即回+后台 30s 节流刷新/强刷/远端增强/失效，含单测）
 │           ├── gitlab.rs     # GitLab API 桥（地址解析/系统 curl/分页拉取/本地∪远端合并，含单测）

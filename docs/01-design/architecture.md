@@ -67,7 +67,7 @@
 | `db/legacy.rs` | 旧 `todo-git.state.json` 读取（仅首次迁移参考） |
 | `db/repo_cache.rs` | `git_repo_cache` 表行访问（upsert/get，含单测） |
 | `svc/git_cmds.rs` | 7 个 git 命令业务 |
-| `svc/db_cmds.rs` | `exe_dir` / `db_config_path` / `resolve_db_path`（读运行目录 `db-config.txt` 首行）/ `db_file_ready` / `ensure_db`（预留，未暴露）/ `load_state`（读锁 + 指纹缓存）/ `save_state`（写锁 + 分支规则校验 + **泳道归属校验** + 清缓存）；`DB_RW_LOCK` 进程级读写锁 |
+| `svc/db_cmds.rs` | `exe_dir` / `db_path` / `db_path`（读运行目录 `todo-kanban.db` 首行）/ `db_file_ready` / `ensure_db`（预留，未暴露）/ `load_state`（读锁 + 指纹缓存）/ `save_state`（写锁 + 分支规则校验 + **泳道归属校验** + 清缓存）；`DB_RW_LOCK` 进程级读写锁 |
 | `svc/repo_cache.rs` | `git_info` 缓存优先编排（命中即回 + 后台节流刷新 30s）、`git_info_refresh` 强刷、`git_info_remote` 远端增强、`invalidate` |
 | `svc/gitlab.rs` | GitLab API 桥：仓库地址解析（http(s)）、系统 curl 调用（`PRIVATE-TOKEN`）、分页分支拉取（5×100）、本地 ∪ 远端合并 |
 | `svc/branch_rule.rs` | 分支规则校验（未知角色/动作、自环步骤拒绝；保存前兜底，与前端 zod 一致） |
@@ -79,7 +79,7 @@ git_info / git_info_refresh / git_info_remote / git_create_branch / git_create_b
 ### 3.4 MCP server（workspace 成员 `mcp-server`，独立进程，零 tauri 依赖）
 
 - 定位：stdio 传输的 MCP 服务端，把核心能力以 **9 tools + 3 resources** 暴露给外部 MCP 客户端；**与 Tauri 前端完全解耦**（不经 invoke_handler/capabilities）
-- 分层：`main.rs`（stdio 主循环）→ `protocol.rs`（MCP 规范逐行 JSON-RPC 2.0：initialize / tools / resources / ping）→ `bridge.rs`（tools/resources ↔ `core::svc`，AppError→JSON-RPC 错误码：Invalid→-32602、其余→-32603；`MCP_TODO_READONLY=1` 拒绝写工具）→ `config.rs`（数据源：`MCP_TODO_DB_CONFIG`/`--db-config` 覆盖 → exe_dir 回退 `db-config.txt`）
+- 分层：`main.rs`（stdio 主循环）→ `protocol.rs`（MCP 规范逐行 JSON-RPC 2.0：initialize / tools / resources / ping）→ `bridge.rs`（tools/resources ↔ `core::svc`，AppError→JSON-RPC 错误码：Invalid→-32602、其余→-32603；`MCP_TODO_READONLY=1` 拒绝写工具）→ `config.rs`（数据源：`MCP_TODO_DB_CONFIG`/`--db-config` 覆盖 → exe_dir 回退 `todo-kanban.db`）
 - MCP 的 `git_info` 保持**直读**语义（不经 app 侧缓存）；`git_info_refresh` / `git_info_remote` 为 app 专属命令不暴露
 - 详细设计见 mcp-design.md
 
@@ -91,7 +91,7 @@ git_info / git_info_refresh / git_info_remote / git_create_branch / git_create_b
 App.tsx useEffect → initAppStore()
   → loadState()（lib/storage；仅 Tauri 环境有数据）
     → invoke("db_load_state") → svc/db_cmds::load_state(exe_dir)
-      → resolve_db_path（db-config.txt 首行）→ 无数据源 → Ok(None) → 前端空态（提示生成数据文件）
+      → db_path（todo-kanban.db 首行）→ 无数据源 → Ok(None) → 前端空态（提示生成数据文件）
       → db::open(WAL) → db::init(user_version=6 迁移) → 指纹缓存命中即回 / 全量 SELECT → DbState
       → normalize（lib/normalize.ts：字段补默认 + 提交全局去重兜底）
   → startExternalSync（2s 轮询 + focus 立即同步）
@@ -150,7 +150,7 @@ App 启动后 startGitCacheWarm（60s）：收集项目/待办的所有仓库路
 | 命令薄壳 + core 纯逻辑库（workspace） | core 无 tauri 依赖可独立单测、可被 MCP server 复用；壳层只转调 |
 | spawn 子进程统一 `quiet_command`（CREATE_NO_WINDOW） | release GUI 壳下 git/curl 会弹可见控制台（std 不自动加），且 git_info 后台刷新会周期性触发 |
 | JSON → SQLite（rusqlite bundled） | 事务原子写替代 tmp+rename；索引/查询扩展性；旧数据一次性迁移（仅保留参考） |
-| 数据源 = 运行目录 `db-config.txt` 指示文件 | 数据库位置可自由指定/多数据文件；无指示 → 空态（前端提示生成） |
+| 数据源 = 运行目录 `todo-kanban.db` 指示文件 | 数据库位置可自由指定/多数据文件；无指示 → 空态（前端提示生成） |
 | `app_meta.next_seq` 全局序号源 + 写锁内取号 | 多窗口并发保存时 `todo-<n>` 编码全局唯一（前端 max+1 只是预生成，冲突由后端收敛） |
 | 提交唯一性全局去重 | 时间窗/标记/手动三条路径收敛，避免重复归属 |
 | 归档不展示（无恢复 UI） | 外部改库可恢复，2s 轮询感知（有意取舍） |
