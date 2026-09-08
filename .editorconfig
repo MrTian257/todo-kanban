@@ -1,0 +1,65 @@
+# EditorConfig 配置文件
+# https://editorconfig.org
+
+root = true
+
+[*]
+indent_style = space
+indent_size = 2
+end_of_line = crlf
+charset = utf-8
+trim_trailing_whitespace = true
+insert_final_newline = true
+max_line_length = off
+
+# ============================================================
+# 前端 / Node.js 生态（JavaScript / TypeScript / Vue / React）
+# 嵌套层级深，2 空格让代码更紧凑
+# ============================================================
+[*.{js,jsx,ts,tsx,vue,cjs,mjs}]
+indent_size = 2
+
+# ============================================================
+# 配置文件（JSON / YAML）
+# ============================================================
+[*.{json,jsonc,yaml,yml}]
+indent_size = 2
+
+# ============================================================
+# 后端 / 系统级语言（Python / Go / Java / Rust / Kotlin）
+# 官方规范推荐 4 空格，可读性更好
+# ============================================================
+[*.{py,go,java,rs,kt}]
+indent_size = 4
+
+# ============================================================
+# HTML / CSS / SCSS / Less
+# ============================================================
+[*.{html,htm,css,scss,less}]
+indent_size = 2
+
+# ============================================================
+# Shell 脚本（⚠️ 特别注意：Makefile / Shell 语法强制要求 Tab）
+# ============================================================
+[*.{sh,bash,zsh,Makefile,makefile}]
+indent_size = 4
+indent_style = tab
+
+
+# ============================================================
+# Markdown（特殊处理）
+# 行尾两个空格 = 换行，不能自动删除
+# ============================================================
+[*.md]
+trim_trailing_whitespace = false
+insert_final_newline = false
+max_line_length = off
+
+# ============================================================
+# 数据库 / 模板文件
+# ============================================================
+[*.{sql,prisma}]
+indent_size = 2
+
+[*.{ejs,jinja}]
+indent_size = 2

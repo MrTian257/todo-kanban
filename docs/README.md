@@ -40,7 +40,7 @@
 
 - **前端**：React 19 + TypeScript(strict)、Vite 7、shadcn/ui（radix-nova，基元勿手改）、Tailwind CSS v4（`@tailwindcss/vite`，无 tailwind.config）、zustand v5、React Router 7（**HashRouter**）、dnd-kit（core/sortable/utilities）、react-resizable-panels v4、react-hook-form + zod、react-day-picker v10、next-themes、sonner、lucide-react、markdown-it + turndown（WYSIWYG 备注）
 - **后端**：Tauri 2、Rust（workspace：薄壳 crate `todo-kanban` + 纯逻辑库 `todo-kanban-core` + 配置库 `todo-kanban-config`（版本等常量） + 升级分包 `todo-kanban-upgrade` + `mcp-server`）、rusqlite（bundled，WAL）、系统 git CLI、系统 curl（GitLab API）
-- **存储**：桌面端 SQLite（位置由**程序运行目录 `db-config.txt` 指示文件**指定，schema `user_version=7`）；**数据版本升级框架**（ADR-011）：`todo-kanban-upgrade` 独立分包，启动判定版本——不兼容（过新/过旧）全屏拒绝，兼容则硬备份到运行目录 `backup/` 后逐级迁移；浏览器预览模式**无本地存储**（空态展示）
+- **存储**：桌面端 SQLite（固定路径为**程序运行目录 `todo-kanban.db`**，schema `user_version=7`）；**数据版本升级框架**（ADR-011）：`todo-kanban-upgrade` 独立分包，启动判定版本——不兼容（过新/过旧）全屏拒绝，兼容则硬备份到运行目录 `backup/` 后逐级迁移；数据版本同时写入 `app_meta.data_version`；浏览器预览模式**无本地存储**（空态展示）
 - **扩展**：`src-tauri/mcp-server`（stdio MCP server）：9 tools + 3 resources，复用 `todo-kanban-core::svc`，零 tauri 依赖，`MCP_TODO_READONLY=1` 一键只读
 
 ## 与 todo-git 原文档的映射

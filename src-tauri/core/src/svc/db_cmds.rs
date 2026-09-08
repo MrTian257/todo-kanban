@@ -1,4 +1,4 @@
-//! 数据源与状态读写编排：exe_dir / db-config.txt 解析 / 读锁+指纹缓存 / 写锁+校验。
+//! 数据源与状态读写编排：exe_dir / 固定 todo-kanban.db / 读锁+指纹缓存 / 写锁+校验。
 //! DB_RW_LOCK 进程级读写锁；指纹缓存配合前端 2s 轮询开销趋近零。
 
 use std::path::{Path, PathBuf};
@@ -15,8 +15,6 @@ static DB_RW_LOCK: Mutex<()> = Mutex::new(());
 type StateCache = Option<((usize, usize, i64), DbState)>;
 static FP_CACHE: Mutex<StateCache> = Mutex::new(None);
 
-pub const DB_CONFIG_FILE: &str = "db-config.txt";
-
 /// 程序运行目录（exe 所在目录）
 pub fn exe_dir() -> AppResult<PathBuf> {
     let exe = std::env::current_exe().map_err(AppError::Io)?;
@@ -26,50 +24,27 @@ pub fn exe_dir() -> AppResult<PathBuf> {
         .unwrap_or_else(|| PathBuf::from(".")))
 }
 
-/// db-config.txt 路径（运行目录下）
-pub fn db_config_path() -> AppResult<PathBuf> {
-    Ok(exe_dir()?.join(DB_CONFIG_FILE))
+/// 固定数据文件路径：程序运行目录 / todo-kanban.db
+pub fn db_path() -> AppResult<PathBuf> {
+    Ok(exe_dir()?.join("todo-kanban.db"))
 }
 
-/// 解析数据源：读 db-config.txt 首行（绝对路径）；指示缺失/为空 → None
-pub fn resolve_db_path() -> AppResult<Option<PathBuf>> {
-    resolve_db_path_in(&exe_dir()?)
-}
-
-/// resolve_db_path 的目录参数版（ensure_db_at 复用）
-fn resolve_db_path_in(dir: &Path) -> AppResult<Option<PathBuf>> {
-    let cfg = dir.join(DB_CONFIG_FILE);
-    if !cfg.exists() {
-        return Ok(None);
-    }
-    let content = std::fs::read_to_string(&cfg).map_err(AppError::Io)?;
-    let first = content.lines().next().map(|l| l.trim()).unwrap_or("");
-    // 兼容 UTF-8 BOM（Windows 记事本/PowerShell Set-Content 默认带 BOM 写入）
-    let first = first.trim_start_matches('\u{feff}');
-    let first = first.trim();
-    if first.is_empty() {
-        return Ok(None);
-    }
-    let path = PathBuf::from(first);
-    // 兼容相对路径（相对 exe 目录）
-    let path = if path.is_absolute() {
-        path
-    } else {
-        dir.join(path)
-    };
-    Ok(Some(path))
+/// 指定目录下的固定数据文件路径
+fn db_path_in(dir: &Path) -> PathBuf {
+    dir.join("todo-kanban.db")
 }
 
 /// 数据文件是否就绪
 pub fn db_file_ready() -> AppResult<bool> {
-    Ok(resolve_db_path()?.is_some())
+    Ok(db_path()?.exists())
 }
 
 /// 全量读取：读锁（与写互斥，配合 WAL 快照读双保险）+ 指纹缓存
 pub fn load_state() -> AppResult<Option<DbState>> {
-    let Some(path) = resolve_db_path()? else {
+    let path = db_path()?;
+    if !path.exists() {
         return Ok(None);
-    };
+    }
     let _guard = DB_RW_LOCK
         .lock()
         .map_err(|_| AppError::invalid("读锁获取失败"))?;
@@ -96,11 +71,7 @@ pub fn load_state() -> AppResult<Option<DbState>> {
 
 /// 差异写落库：写锁全程互斥 + 保存前校验（分支规则 / 泳道归属由 db::save_state 承担）+ 清指纹缓存
 pub fn save_state(payload: DbState) -> AppResult<()> {
-    let Some(path) = resolve_db_path()? else {
-        return Err(AppError::invalid(
-            "尚未配置数据文件（运行目录缺少 db-config.txt），无法保存",
-        ));
-    };
+    let path = db_path()?;
     let _guard = DB_RW_LOCK
         .lock()
         .map_err(|_| AppError::invalid("写锁获取失败"))?;
@@ -113,19 +84,11 @@ pub fn save_state(payload: DbState) -> AppResult<()> {
     Ok(())
 }
 
-/// 启动自举：无/空 db-config.txt → 写入指向运行目录 todo-kanban.db；
+/// 启动自举：使用运行目录 todo-kanban.db；
 /// 空库（无种子标记）→ 建表并写入演示数据。返回数据库路径。
 /// 已有数据（含用户清空后的库）绝不覆盖——种子标记落在 app_meta，与业务数据解耦。
 pub fn ensure_db_at(dir: &Path) -> AppResult<PathBuf> {
-    let path = match resolve_db_path_in(dir)? {
-        Some(p) => p,
-        None => {
-            let p = dir.join("todo-kanban.db");
-            std::fs::write(dir.join(DB_CONFIG_FILE), p.display().to_string())
-                .map_err(AppError::Io)?;
-            p
-        }
-    };
+    let path = db_path_in(dir);
     let (conn, _report) = db::open_and_init(&path, &dir.join("backup"))?;
     let seeded: bool = conn
         .query_row(
@@ -152,11 +115,12 @@ fn backup_dir() -> AppResult<PathBuf> {
 
 /// 版本检查（前端启动门禁）：无数据源 → 默认 ok 报告；否则执行检查/升级并返回报告。
 pub fn check_version() -> AppResult<todo_kanban_upgrade::version::VersionReport> {
-    let Some(path) = resolve_db_path()? else {
+    let path = db_path()?;
+    if !path.exists() {
         return Ok(todo_kanban_upgrade::version::build_ok_report(
             todo_kanban_upgrade::version::CURRENT_VERSION,
         ));
-    };
+    }
     db::check_version(&path, &backup_dir()?)
 }
 
@@ -308,19 +272,16 @@ pub fn mcp_read_from_db(path: &Path) -> AppResult<McpSettings> {
 
 /// 读取 MCP 集成设置（无数据源 / key 缺失 → 默认：启用 + 全局固定授权 Token）
 pub fn mcp_get_config() -> AppResult<McpSettings> {
-    let Some(path) = resolve_db_path()? else {
+    let path = db_path()?;
+    if !path.exists() {
         return Ok(McpSettings::default());
-    };
+    }
     mcp_read_from_db(&path)
 }
 
 /// 保存 MCP 集成设置（写 app_meta）
 pub fn mcp_set_config(s: McpSettings) -> AppResult<()> {
-    let Some(path) = resolve_db_path()? else {
-        return Err(AppError::invalid(
-            "尚未配置数据文件（运行目录缺少 db-config.txt），无法保存 MCP 设置",
-        ));
-    };
+    let path = db_path()?;
     let conn = db::open(&path)?;
     db::init(&conn)?;
     write_meta(&conn, MCP_ENABLED_KEY, if s.enabled { "1" } else { "0" })?;
@@ -333,13 +294,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn resolve_db_path_missing_returns_none() {
-        // 测试目录无 db-config.txt
+    fn db_path_returns_exe_dir_db() {
         let exe = exe_dir().unwrap();
-        let cfg = exe.join(DB_CONFIG_FILE);
-        if !cfg.exists() {
-            assert!(resolve_db_path().unwrap().is_none());
-        }
+        let path = db_path().unwrap();
+        assert_eq!(path, exe.join("todo-kanban.db"));
     }
 
     #[test]
@@ -347,9 +305,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("tk-ensure-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        // 首次：无 db-config.txt → 初始化 + 演示数据
+        // 首次：无数据文件 → 初始化 + 演示数据
         let path = ensure_db_at(&dir).unwrap();
-        assert!(dir.join(DB_CONFIG_FILE).exists());
         assert!(path.exists());
         {
             let conn = db::open(&path).unwrap();

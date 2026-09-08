@@ -1,5 +1,5 @@
 //! git_info 缓存编排：SQLite 持久缓存命中即回 + 后台节流刷新（同路径 30s 至多一次）+ 强刷 + 远端增强 + 失效。
-//! 无数据源（db-config.txt 缺失）时退化为直读 git，不落缓存。
+//! 无数据源（todo-kanban.db 缺失）时退化为直读 git，不落缓存。
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -18,7 +18,10 @@ fn now_ms() -> i64 {
 }
 
 fn open_cache() -> Option<rusqlite::Connection> {
-    let path = db_cmds::resolve_db_path().ok()??;
+    let path = db_cmds::db_path().ok()?;
+    if !path.exists() {
+        return None;
+    }
     let conn = db::open(&path).ok()?;
     db::init(&conn).ok()?;
     Some(conn)

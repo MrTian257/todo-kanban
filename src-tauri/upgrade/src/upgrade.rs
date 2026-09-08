@@ -9,8 +9,8 @@ use crate::backup::backup_before_upgrade;
 use crate::error::{UpgradeError, UpgradeResult};
 use crate::migration::migrate;
 use crate::version::{
-    build_ok_report, build_upgraded_report, read_version, CURRENT_VERSION, MIN_SUPPORTED_VERSION,
-    VersionReport,
+    build_ok_report, build_upgraded_report, read_version, write_app_meta_version,
+    CURRENT_VERSION, MIN_SUPPORTED_VERSION, VersionReport,
 };
 
 /// 升级编排：对已建表的连接执行 版本判定 →（兼容升级时）硬备份 → 逐级迁移 → 报告。
@@ -42,8 +42,11 @@ pub fn ensure(conn: &Connection, db_path: &Path, backup_dir: &Path) -> UpgradeRe
             return Ok(build_upgraded_report(data_version, &outcome));
         }
         let _ = migrate(conn)?;
+        write_app_meta_version(conn, CURRENT_VERSION)?;
         return Ok(build_ok_report(CURRENT_VERSION));
     }
+    // 版本已是最新：确保 app_meta 与 PRAGMA user_version 同步（便于诊断）
+    write_app_meta_version(conn, CURRENT_VERSION)?;
     Ok(build_ok_report(data_version))
 }
 

@@ -1,4 +1,5 @@
-//! MCP server 配置：数据源解析（--db-config / MCP_TODO_DB_CONFIG 覆盖 → exe_dir 回退）+ 只读开关。
+//! MCP server 配置：数据源目录解析（--db-config / MCP_TODO_DB_CONFIG 覆盖 → exe_dir 回退）+ 只读开关。
+//! 实际库文件固定为 <目录>/todo-kanban.db。
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -6,7 +7,7 @@ use std::sync::Mutex;
 /// 进程内配置（bridge 使用）
 #[derive(Clone)]
 pub struct McpConfig {
-    /// 覆盖的数据源目录（None → 回退 app 的 exe_dir/db-config.txt）
+    /// 覆盖的数据源目录（None → 回退 app 的 exe_dir/todo-kanban.db）
     pub db_config_dir: Option<PathBuf>,
     pub readonly: bool,
     /// 启动授权 Token（--token / MCP_TODO_TOKEN；需与设置页授权 Token 匹配）
@@ -31,6 +32,7 @@ pub fn parse(args: &[String]) -> McpConfig {
     let mut i = 0;
     while i < args.len() {
         if args[i] == "--db-config" && i + 1 < args.len() {
+            // 指定包含 todo-kanban.db 的目录
             dir = Some(PathBuf::from(&args[i + 1]));
             i += 2;
         } else {
@@ -38,6 +40,7 @@ pub fn parse(args: &[String]) -> McpConfig {
         }
     }
     if dir.is_none() {
+        // 环境变量同样指定目录（非文件）
         if let Ok(v) = std::env::var("MCP_TODO_DB_CONFIG") {
             if !v.trim().is_empty() {
                 dir = Some(PathBuf::from(v));

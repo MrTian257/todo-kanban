@@ -1,5 +1,6 @@
 //! MCP bridge：9 tools + 3 resources ↔ core::svc。
 //! AppError → JSON-RPC 错误码：Invalid→-32602、其余→-32603；MCP_TODO_READONLY=1 拒绝全部写工具。
+//! 数据源固定为程序运行目录 todo-kanban.db；--db-config 仍支持覆盖到指定目录。
 //! MCP 的 git_info 保持直读语义（不经 app 侧缓存）；git_info_refresh / git_info_remote 为 app 专属不暴露。
 
 use std::collections::HashSet;
@@ -33,29 +34,23 @@ fn is_readonly() -> bool {
     config::get().map(|c| c.readonly).unwrap_or(false)
 }
 
-/// 数据源路径：覆盖目录 → 该目录下 db-config.txt 首行；否则回退 app 语义
-fn resolve_db_path() -> AppResult<Option<PathBuf>> {
+/// 数据源路径：--db-config 指定目录 → 该目录下 todo-kanban.db；否则回退 app 运行目录。
+fn resolve_db_file() -> AppResult<Option<PathBuf>> {
     if let Some(cfg) = config::get() {
         if let Some(dir) = cfg.db_config_dir {
-            let cfg_file = dir.join(db_cmds::DB_CONFIG_FILE);
-            if cfg_file.exists() {
-                let content = std::fs::read_to_string(&cfg_file)?;
-                let first = content.lines().next().map(|l| l.trim()).unwrap_or("");
-                let first = first.trim_start_matches('\u{feff}'); // 兼容 UTF-8 BOM
-                if !first.is_empty() {
-                    let p = PathBuf::from(first);
-                    return Ok(Some(if p.is_absolute() { p } else { dir.join(p) }));
-                }
-            }
-            // 覆盖目录无指示文件：直接使用目录下默认库文件
             return Ok(Some(dir.join("todo-kanban.db")));
         }
     }
-    db_cmds::resolve_db_path()
+    let path = db_cmds::db_path()?;
+    if path.exists() {
+        Ok(Some(path))
+    } else {
+        Ok(None)
+    }
 }
 
 fn load_state() -> AppResult<Option<DbState>> {
-    let Some(path) = resolve_db_path()? else {
+    let Some(path) = resolve_db_file()? else {
         return Ok(None);
     };
     let (conn, _report) = db::open_and_init(&path, &mcp_backup_dir())?;
@@ -68,7 +63,7 @@ fn save_state(state: DbState) -> AppResult<()> {
             "只读模式（MCP_TODO_READONLY=1），写操作被拒绝",
         ));
     }
-    let Some(path) = resolve_db_path()? else {
+    let Some(path) = resolve_db_file()? else {
         return Err(AppError::invalid("未配置数据文件，无法保存"));
     };
     let (conn, _report) = db::open_and_init(&path, &mcp_backup_dir())?;
@@ -170,9 +165,9 @@ fn apply_ai_markers(state: &mut DbState, existing: &DbState) {
 
 /// 启动校验：数据源可用 + MCP 已启用 + Token 匹配（不通过 → Err 中文提示，main 退出）
 pub fn verify_startup() -> Result<(), String> {
-    let Some(path) = resolve_db_path().map_err(|e| e.to_string())? else {
+    let Some(path) = resolve_db_file().map_err(|e| e.to_string())? else {
         return Err(
-            "未找到数据文件：请先运行 todo-kanban 应用完成初始化（运行目录需含 db-config.txt）"
+            "未找到数据文件：请先运行 todo-kanban 应用完成初始化（运行目录需含 todo-kanban.db）"
                 .to_string(),
         );
     };

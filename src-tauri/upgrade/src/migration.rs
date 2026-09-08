@@ -3,7 +3,7 @@
 use rusqlite::Connection;
 
 use crate::error::{UpgradeError, UpgradeResult};
-use crate::version::{read_version, CURRENT_VERSION};
+use crate::version::{read_version, write_app_meta_version, CURRENT_VERSION};
 
 /// 迁移步骤描述（来自 config 分包；下标 j（0-based）对应 v{j+1}→v{j+2}）
 pub use todo_kanban_config::MIGRATION_STEPS;
@@ -98,6 +98,8 @@ pub fn migrate(conn: &Connection) -> UpgradeResult<MigrateOutcome> {
 
     tx.execute_batch(&format!("PRAGMA user_version = {CURRENT_VERSION};"))?;
     tx.commit().map_err(UpgradeError::from)?;
+    // 同步写入 app_meta，便于外部诊断
+    write_app_meta_version(conn, CURRENT_VERSION).map_err(UpgradeError::from)?;
 
     // 收集实际执行的步骤（from..CURRENT 区间）
     let steps: Vec<(i64, i64, String)> = MIGRATION_STEPS

@@ -1,6 +1,7 @@
 //! 数据版本判定状态与版本报告（serde camelCase/snake_case，供 Tauri 命令与前端渲染）。
 //! 版本等常量统一来自 config 分包（todo-kanban-config）。
 
+use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
 /// 软件支持的当前（最高）数据版本（config 分包）
@@ -46,9 +47,37 @@ pub struct VersionReport {
     pub steps: Option<Vec<MigrationStep>>,
 }
 
-/// 读取当前数据版本
+/// app_meta 中记录数据版本的键
+pub const APP_META_DATA_VERSION_KEY: &str = "data_version";
+
+/// 读取当前数据版本：优先读 app_meta（显式记录），缺失/无效则回退 PRAGMA user_version。
 pub fn read_version(conn: &rusqlite::Connection) -> rusqlite::Result<i64> {
+    let meta: Option<String> = conn
+        .query_row(
+            "SELECT value FROM app_meta WHERE key = ?1",
+            [APP_META_DATA_VERSION_KEY],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if let Some(v) = meta {
+        if let Ok(n) = v.trim().parse::<i64>() {
+            return Ok(n);
+        }
+    }
     conn.query_row("PRAGMA user_version", [], |r| r.get(0))
+}
+
+/// 将数据版本写入 app_meta（与 PRAGMA user_version 保持一致，便于外部查看/诊断）。
+pub fn write_app_meta_version(
+    conn: &rusqlite::Connection,
+    version: i64,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO app_meta (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [APP_META_DATA_VERSION_KEY, version.to_string().as_str()],
+    )?;
+    Ok(())
 }
 
 /// 由迁移结果构造报告（status=upgraded）

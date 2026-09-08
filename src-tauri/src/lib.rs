@@ -33,7 +33,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .setup(move |_app| {
-            // 启动自举：无 db-config.txt → 初始化运行目录 todo-kanban.db 并写演示数据
+            // 启动自举：初始化运行目录 todo-kanban.db 并写演示数据
             match &exe_dir {
                 Some(dir) => match todo_kanban_core::svc::db_cmds::ensure_db_at(dir) {
                     Ok(path) => log::info!("数据文件就绪：{}", path.display()),
