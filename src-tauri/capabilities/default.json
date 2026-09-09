@@ -181,7 +181,14 @@
     "core:window:allow-unminimize",
     "opener:default",
     "opener:allow-default-urls",
-    "opener:allow-open-path",
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [
+        {
+          "path": "**"
+        }
+      ]
+    },
     "opener:allow-open-url",
     "opener:allow-reveal-item-in-dir",
     "clipboard-manager:allow-read-text",

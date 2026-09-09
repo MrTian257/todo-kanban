@@ -90,28 +90,49 @@ fn push_with_upstream(repo: &str, branch: &str) -> AppResult<()> {
 
 /// 检出目标分支（成功后由调用方失效缓存）
 pub fn git_checkout_branch(repo: &str, branch: &str) -> AppResult<()> {
+    // 分支名是位置参数：不校验则 `git checkout -f` 之类会被当成选项执行（丢弃工作区修改）
+    git_cli::validate_branch_name(branch)?;
     run_git(repo, &["checkout", branch]).map(|_| ())
 }
 
 /// 按标记 `todo-<n>` 全分支检索提交；`ref_branch` 提供时按参考分支附加来源三分类标注
 /// （native/merge/cherry/other，见 annotate_commit_origins）
 pub fn git_sync_commits(repo: &str, tag: &str, ref_branch: Option<&str>) -> AppResult<Vec<CommitInfo>> {
+    // 标记匹配必须带边界：`--grep=todo-1` 会同时命中 todo-12 / todo-100，导致提交挂到错误待办
+    let pattern = format!("(^|[^0-9A-Za-z_-]){}([^0-9A-Za-z_-]|$)", regex_escape(tag));
     let out = run_git(
         repo,
         &[
             "log",
             "--all",
-            "-F",
+            "--extended-regexp",
             "--grep",
-            tag,
+            &pattern,
             &format!("--format={COMMIT_FORMAT}"),
         ],
     )?;
     let mut commits = git_cli::parse_commit_lines(&out);
     if let Some(b) = ref_branch {
+        // 参考分支同样作为位置参数传给 rev-parse/rev-list
+        git_cli::validate_branch_name(b)?;
         annotate_commit_origins(repo, b, &mut commits);
     }
     Ok(commits)
+}
+
+/// 转义 POSIX ERE 元字符（`--grep` 用扩展正则匹配，标记由用户/MCP 提供）
+fn regex_escape(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for c in value.chars() {
+        if matches!(
+            c,
+            '.' | '^' | '$' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|' | '\\'
+        ) {
+            escaped.push('\\');
+        }
+        escaped.push(c);
+    }
+    escaped
 }
 
 /// 时间窗抓取：[since_iso, until_iso]（ISO 8601，按 committer date 过滤）；按 branch 附加来源三分类标注
@@ -121,6 +142,8 @@ pub fn git_commits_between(
     since_iso: &str,
     until_iso: &str,
 ) -> AppResult<Vec<CommitInfo>> {
+    // branch 来自任务字段（自由文本）：校验后才能作为位置参数
+    git_cli::validate_branch_name(branch)?;
     let out = run_git(
         repo,
         &[
@@ -138,8 +161,13 @@ pub fn git_commits_between(
 
 /// 按短 hash 查询单条提交
 pub fn git_commit_info(repo: &str, short_hash: &str) -> AppResult<CommitInfo> {
-    if short_hash.trim().is_empty() {
+    let hash = short_hash.trim();
+    if hash.is_empty() {
         return Err(AppError::invalid("提交 hash 不能为空"));
+    }
+    // hash 是位置参数：白名单校验，避免 `--output=/path` 之类被当成 git 选项执行
+    if !(4..=40).contains(&hash.len()) || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(AppError::invalid("提交 hash 必须是 4~40 位十六进制字符"));
     }
     let out = run_git(
         repo,
@@ -147,7 +175,7 @@ pub fn git_commit_info(repo: &str, short_hash: &str) -> AppResult<CommitInfo> {
             "show",
             "--no-patch",
             &format!("--format={COMMIT_FORMAT}"),
-            short_hash.trim(),
+            hash,
         ],
     )?;
     let mut list = git_cli::parse_commit_lines(&out);
@@ -262,7 +290,13 @@ fn detect_cherry_picks(repo: &str, ref_branch: &str) -> (HashSet<String>, HashMa
             if let Ok(body) = run_git(repo, &["show", "-s", "--format=%B", h]) {
                 for line in body.lines() {
                     let line = line.trim();
-                    if let Some(rest) = line.strip_prefix("cherry picked from commit ") {
+                    // git cherry-pick -x 实际写入的是 `(cherry picked from commit <sha>)`（带括号）；
+                    // 同时兼容无括号的手写形态。
+                    let trailer = line
+                        .strip_prefix("cherry picked from commit ")
+                        .or_else(|| line.strip_prefix("(cherry picked from commit "))
+                        .map(|rest| rest.trim_end_matches(')'));
+                    if let Some(rest) = trailer {
                         if let Some(sha) = rest.split_whitespace().next() {
                             source.insert(h.to_string(), short_hash(sha));
                             break;
@@ -520,6 +554,9 @@ mod tests {
 
         // main: 无 -x 剪切 B → cp（不合并 feature）
         run_git(r, &["checkout", "main"]).unwrap();
+        // git 提交时间戳为秒级：同一秒内 cherry-pick 会生成与源提交完全相同的 hash
+        // （父提交/树/消息/时间戳一致），此时 `git cherry` 无输出，测试会假失败。
+        std::thread::sleep(std::time::Duration::from_millis(1_100));
         run_git(r, &["cherry-pick", b.as_str()]).unwrap();
         let cp = run_git(r, &["rev-parse", "HEAD"]).unwrap().trim().to_string();
 
@@ -535,7 +572,7 @@ mod tests {
         assert_eq!(by(&cp).origin, "cherry", "无 -x 剪切应经补丁等价识别");
         assert_eq!(
             by(&cp).source,
-            format!("补丁等价于 feature"),
+            "补丁等价于 feature".to_string(),
             "剪切来源应为等价分支"
         );
         assert_eq!(by(&c).origin, "native");

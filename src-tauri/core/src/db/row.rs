@@ -88,7 +88,7 @@ pub fn todo_params(t: &DbTodo) -> Vec<Box<dyn rusqlite::ToSql>> {
 
 pub const TODO_UPSERT: &str = "INSERT INTO todos (id, project_id, title, note, repo_path, branch, status, swimlane_id, quadrant, seq, tag, start_date, end_date, blocker, archived, started_at, done_at, commits, sort_order, created_at, updated_at, created_by, ai_coordinated)
   VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23)
-  ON CONFLICT(id) DO UPDATE SET title=excluded.title, note=excluded.note, repo_path=excluded.repo_path,
+  ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id, title=excluded.title, note=excluded.note, repo_path=excluded.repo_path,
     branch=excluded.branch, status=excluded.status, swimlane_id=excluded.swimlane_id,
     quadrant=excluded.quadrant, seq=excluded.seq, tag=excluded.tag,
     start_date=excluded.start_date, end_date=excluded.end_date, blocker=excluded.blocker,

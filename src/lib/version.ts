@@ -21,16 +21,13 @@ export interface VersionReport {
   from?: number | null;
   to?: number | null;
   steps?: VersionStep[] | null;
-
+  /** 桌面端依赖版本（壳 crate 在 db_check_version 里补齐；浏览器预览为空） */
   tauriVersion?: string;
-  reactVersion?: string;
   sqliteVersion?: string;
   gitVersion?: string;
-  vditor?: string;
-
 }
 
-/** 浏览器预览模式默认报告（无真实数据） */
+/** 浏览器预览模式默认报告（无真实数据源；依赖版本留空，界面显示「—」而不是假版本号） */
 const PREVIEW_REPORT: VersionReport = {
   status: "ok",
   dataVersion: 8,
@@ -40,12 +37,6 @@ const PREVIEW_REPORT: VersionReport = {
   from: null,
   to: null,
   steps: null,
-
-  tauriVersion: "^2.5.0",
-  reactVersion: "18.0.0",
-  sqliteVersion: "3.0.0",
-  gitVersion: "--",
-  vditor: "4.0.0",
 };
 
 /** 启动时执行数据版本检查与升级，返回报告 */

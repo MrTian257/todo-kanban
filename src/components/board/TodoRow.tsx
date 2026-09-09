@@ -51,7 +51,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { flushPersistence, useAppStore } from "@/lib/store";
 import { CommitInfo, Todo } from "@/lib/types";
 import { fmtDateTime, shortHash } from "@/lib/format";
-import { todoUrgency } from "@/lib/todo";
+import { dedupeCommitsForTodo, todoUrgency } from "@/lib/todo";
 import { useContextMenu, type ContextMenuItem } from "@/lib/context-menu";
 import {
   autoRecaptureOnDone,
@@ -170,9 +170,9 @@ export function TodoRow({ todo, projectName, showProjectName, variant = "list" }
     try {
       // 以任务分支为参考分支做来源三分类标注（原生/合并进来/剪切进来/不在分支上）
       const commits = await gitSyncCommits(todo.repoPath, todo.tag, todo.branch);
-      patchTodo(todo.id, {
-        commits: [...commits.filter((c) => !todo.commits.some((x) => x.hash === c.hash)), ...todo.commits],
-      });
+      // 同一 hash 只能归属一条待办：剔除已被其它待办占用的提交（与完成/补录路径同规则）
+      const merged = [...commits.filter((c) => !todo.commits.some((x) => x.hash === c.hash)), ...todo.commits];
+      patchTodo(todo.id, { commits: dedupeCommitsForTodo({ ...todo, commits: merged }, todos).commits });
       await flushPersistence();
       toast.success(`同步到 ${commits.length} 条提交`);
     } catch (e) {
@@ -215,7 +215,8 @@ export function TodoRow({ todo, projectName, showProjectName, variant = "list" }
         }
       }
       if (added.length > 0) {
-        patchTodo(todo.id, { commits: [...added, ...todo.commits] });
+        const merged = [...added, ...todo.commits];
+        patchTodo(todo.id, { commits: dedupeCommitsForTodo({ ...todo, commits: merged }, todos).commits });
         await flushPersistence();
       }
       const summary = [`新增 ${added.length}`, duplicated > 0 ? `重复 ${duplicated}` : "", failed.length > 0 ? `失败 ${failed.length}` : ""].filter(Boolean).join("、");

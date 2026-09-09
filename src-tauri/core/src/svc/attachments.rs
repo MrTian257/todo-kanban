@@ -625,7 +625,9 @@ mod tests {
             assert_eq!(count(&conn, "SELECT COUNT(*) FROM todo_attachments"), 2);
             let (orig, seq): (String, i64) = conn
                 .query_row(
-                    "SELECT original_name, seq FROM todo_attachments WHERE attachment_id = ?1",
+                    "SELECT a.original_name, t.seq FROM todo_attachments t
+                     JOIN attachments a ON a.id = t.attachment_id
+                     WHERE t.attachment_id = ?1",
                     [&first.id],
                     |r| Ok((r.get(0)?, r.get(1)?)),
                 )
@@ -824,7 +826,8 @@ mod tests {
             conn.execute("DELETE FROM todos WHERE id = 't1'", []).unwrap();
         }
         let summary = gc_orphans_at(&db_path).unwrap();
-        assert_eq!(summary.removed_relations, 0);
+        // 阶段二：t1 的关系已成悬空（任务被绕过 save_state 直接删除），本次一并清掉
+        assert_eq!(summary.removed_relations, 1);
         assert_eq!(summary.removed_attachments, 1);
         assert_eq!(summary.moved_files, 1);
         assert!(!attachments_root_at(&db_path).join("t1/t1-0001.png").exists());

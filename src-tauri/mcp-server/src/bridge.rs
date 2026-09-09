@@ -22,13 +22,12 @@ pub const RESOURCES: [(&str, &str); 3] = [
     ("todo-kanban://todos", "待办列表 JSON"),
 ];
 
-const WRITE_TOOLS: [&str; 7] = [
+/// 真正会改动仓库/数据的工具。git_sync_commits / git_commits_between / git_commit_info
+/// 只跑 git log/show/branch --contains，属只读查询，不能算写工具。
+const WRITE_TOOLS: [&str; 4] = [
     "git_create_branch",
     "git_create_branch_from",
     "git_checkout_branch",
-    "git_sync_commits",
-    "git_commits_between",
-    "git_commit_info",
     "db_save_state",
 ];
 

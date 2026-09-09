@@ -106,9 +106,9 @@ pub fn save_state_checked(payload: DbState, expected: DbState) -> AppResult<DbSt
     Ok(saved)
 }
 
-/// 启动自举：使用运行目录 todo-kanban.db；
-/// 空库（无种子标记）→ 建表并写入演示数据。返回数据库路径。
-/// 已有数据（含用户清空后的库）绝不覆盖——种子标记落在 app_meta，与业务数据解耦。
+/// 启动自举：使用平台数据目录 todo-kanban.db；
+/// 仅当「两表都为空且无种子标记」时写入演示数据。返回数据库路径。
+/// 已有数据（含用户清空后的库）绝不覆盖——双条件避免既有库因缺失 seeded 键被演示数据覆盖。
 pub fn ensure_db_at(dir: &Path) -> AppResult<PathBuf> {
     let path = db_path_in(dir);
     let (conn, _report) = db::open_and_init(&path, &dir.join("backup"))?;
@@ -119,7 +119,9 @@ pub fn ensure_db_at(dir: &Path) -> AppResult<PathBuf> {
             |r| r.get(0),
         )
         .map_err(AppError::from)?;
-    if !seeded {
+    // 只有真正的空库才播种：旧库（v1~v7 / 早期构建）可能没有 seeded 键，但绝不能因此被覆盖
+    let empty = db::storage_fingerprint(&conn)? == (0, 0, 0);
+    if !seeded && empty {
         seed_demo_state(&conn)?;
         conn.execute(
             "INSERT INTO app_meta (key, value) VALUES ('seeded', '1')",

@@ -98,14 +98,17 @@ fn percent_encode_segment(seg: &str) -> String {
 }
 
 fn curl_json(url: &str, token: &str) -> AppResult<String> {
+    // 按字符切片：token 允许非 ASCII（设置页/项目表单是自由文本），按字节切会 panic
     let masked_token = if token.is_empty() {
         "<empty>".to_string()
     } else {
-        format!(
-            "{}...{}",
-            &token[..token.len().min(4)],
-            &token[token.len().saturating_sub(4)..]
-        )
+        let chars: Vec<char> = token.chars().collect();
+        let head: String = chars.iter().take(4).collect();
+        let tail: String = chars
+            .iter()
+            .skip(chars.len().saturating_sub(4))
+            .collect();
+        format!("{head}...{tail}")
     };
     log::debug!("GitLab curl 请求：url={url}, token={masked_token}");
     let mut cmd = quiet_command("curl");

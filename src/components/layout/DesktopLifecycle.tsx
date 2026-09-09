@@ -34,6 +34,9 @@ export function DesktopLifecycle() {
     } catch (error) { toast.error(`窗口操作失败：${String(error)}`); }
     finally { busy.current = false; }
   };
+  // macOS Dock/系统退出会让 NSApplication 等待答复；取消时必须回话，否则退出流程挂起
+  const cancelQuit = () => { void invoke("cancel_quit").catch(() => { /* 非 macOS 或未注册时忽略 */ }); };
+  const dismissIntent = () => { setIntent(null); cancelQuit(); };
   const requestRef = useRef<(next: Intent) => void>(() => {});
   requestRef.current = next => {
     if (!canLeave()) return;
@@ -58,16 +61,17 @@ export function DesktopLifecycle() {
         if (alive) requestRef.current("close");
       }).then(keep).catch(error => toast.error(`关闭保护注册失败：${String(error)}`));
       void listen("app-quit-requested", () => { if (alive) requestRef.current("quit"); })
-        .then(keep).catch(error => toast.error(`退出保护注册失败：${String(error)}`));
+        .then(stop => { keep(stop); void invoke("arm_quit_protection").catch(() => { /* 非 macOS 忽略 */ }); })
+        .catch(error => toast.error(`退出保护注册失败：${String(error)}`));
     }
     return () => { alive = false; stops.forEach(stop => stop()); window.removeEventListener("beforeunload", guard); };
   }, []);
 
   return <>
-    <Dialog open={intent !== null} onOpenChange={open => { if (!open) setIntent(null); }}>
+    <Dialog open={intent !== null} onOpenChange={open => { if (!open) dismissIntent(); }}>
       <DialogContent><DialogTitle>还有未保存的编辑</DialogTitle>
         <DialogDescription>{intent === "quit" ? "退出不会提交当前编辑。待办会尝试保留草稿，项目表单的未保存修改将丢失。" : "关闭窗口不会提交当前编辑。macOS 会保留窗口内容，点击 Dock 图标可继续编辑。"}</DialogDescription>
-        <div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setIntent(null)}>继续编辑</Button>
+        <div className="flex justify-end gap-2"><Button variant="outline" onClick={dismissIntent}>继续编辑</Button>
           <Button onClick={() => { window.dispatchEvent(new Event("todo-save-draft")); if (intent) void finish(intent); }}>{intent === "quit" ? "确认退出" : "关闭窗口"}</Button></div>
       </DialogContent>
     </Dialog>
