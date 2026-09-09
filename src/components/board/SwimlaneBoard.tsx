@@ -68,7 +68,7 @@ export function SwimlaneBoard({projectId, query = "", branch = ""}: {projectId:s
   const draggingLane=active?.kind === "lane" ? lanes.find(l=>l.id===active.id):null;
   return <DndContext sensors={sensors} collisionDetection={collision} onDragStart={e=>{setActive({kind:e.active.data.current?.kind,id:String(e.active.id).replace(/^lane:/,"")});}} onDragOver={over} onDragMove={over} onDragEnd={end} onDragCancel={reset}>
     {filtered && <p className="mb-2 text-xs text-muted-foreground">筛选结果中暂不调整任务顺序，清除筛选后即可拖拽。</p>}
-    <div className="flex h-full items-stretch gap-5 overflow-x-auto pb-3" data-testid="kanban">
+    <div className="flex h-full items-stretch gap-5 overflow-x-auto" data-testid="kanban">
       <SortableContext items={lanes.map(l=>`lane:${l.id}`)} strategy={horizontalListSortingStrategy}>
         {lanes.map(lane=><Lane key={lane.id} lane={lane} tasks={items.get(lane.id)??[]} activeId={active?.kind==="todo"?active.id:null} target={target?.laneId===lane.id?target:null} laneTarget={laneOver===lane.id && draggingLane?.id!==lane.id} disabled={filtered} onAdd={()=>navigate(`/project/${projectId}/todo/new?swimlane=${encodeURIComponent(lane.id)}`)} />)}
       </SortableContext>

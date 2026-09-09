@@ -85,7 +85,6 @@ export default function App() {
         ) : (
         <HashRouter>
           <SidebarLayout>
-            {loaded && <PersistenceStatus />}
             <div className="min-h-0 flex-1 overflow-auto"><Suspense fallback={<div className="p-6 text-muted-foreground">正在加载页面…</div>}>
             {loaded ? <Routes>
               <Route path="/" element={<RootRedirect />} />
@@ -98,6 +97,7 @@ export default function App() {
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes> : <div className="flex h-full flex-col items-center justify-center gap-4 p-6 text-sm text-muted-foreground">{loadError ? <><p role="alert">读取失败，写入已禁用：{loadError}</p><button className="rounded border px-4 py-2" onClick={() => window.location.reload()}>重新加载</button></> : "正在加载工作空间…"}</div>}
             </Suspense></div>
+            {loaded && <PersistenceStatus />}
           </SidebarLayout>
         </HashRouter>
         )}
