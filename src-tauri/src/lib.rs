@@ -2,6 +2,9 @@
 // 日志：运行目录 kanban.log（追加写，超限轮转只保留一份）。
 
 pub mod commands;
+mod desktop;
+#[cfg(target_os = "macos")]
+mod menu;
 
 use tauri::http::{header, StatusCode};
 use tauri_plugin_log::{Target, TargetKind, TimezoneStrategy};
@@ -44,7 +47,10 @@ fn attachment_protocol(request: tauri::http::Request<Vec<u8>>) -> tauri::http::R
         Ok((mime, bytes)) => tauri::http::Response::builder()
             .header(header::CONTENT_TYPE, mime)
             // 文件名不复用（seq 单调），可长缓存
-            .header(header::CACHE_CONTROL, "private, max-age=31536000, immutable")
+            .header(
+                header::CACHE_CONTROL,
+                "private, max-age=31536000, immutable",
+            )
             .body(bytes)
             .unwrap_or_else(|_| not_found("附件读取失败")),
         Err(_) => not_found("附件不存在"),
@@ -54,9 +60,12 @@ fn attachment_protocol(request: tauri::http::Request<Vec<u8>>) -> tauri::http::R
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // 运行目录：日志与数据文件均落于此（提前解析，log 插件初始化需用）
-    let exe_dir = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+    let exe_dir = todo_kanban_core::svc::db_cmds::data_dir().ok();
+    if let Some(dir) = &exe_dir {
+        if let Err(error) = std::fs::create_dir_all(dir) {
+            eprintln!("无法创建数据目录：{error}");
+        }
+    }
 
     let log_targets = match &exe_dir {
         Some(dir) => vec![
@@ -70,6 +79,7 @@ pub fn run() {
     };
 
     tauri::Builder::default()
+        .on_window_event(desktop::on_window_event)
         .plugin(
             tauri_plugin_log::Builder::new()
                 .targets(log_targets)
@@ -77,11 +87,21 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::SIZE
+                        | tauri_plugin_window_state::StateFlags::POSITION
+                        | tauri_plugin_window_state::StateFlags::MAXIMIZED,
+                )
+                .build(),
+        )
         .plugin(tauri_plugin_clipboard_manager::init())
-        .register_uri_scheme_protocol("attachment", |_ctx, request| {
-            attachment_protocol(request)
-        })
+        .register_uri_scheme_protocol("attachment", |_ctx, request| attachment_protocol(request))
         .setup(move |_app| {
+            #[cfg(target_os = "macos")]
+            menu::install(_app)?;
             // 启动自举：初始化运行目录 todo-kanban.db 并写演示数据
             match &exe_dir {
                 Some(dir) => match todo_kanban_core::svc::db_cmds::ensure_db_at(dir) {
@@ -93,6 +113,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            desktop::finish_quit,
             commands::git_info,
             commands::git_info_refresh,
             commands::git_info_remote,
@@ -111,8 +132,9 @@ pub fn run() {
             commands::attachment_migrate_inline,
             commands::attachment_gc_orphans,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("应用初始化失败")
+        .run(desktop::on_run_event);
 }
 
 #[cfg(test)]

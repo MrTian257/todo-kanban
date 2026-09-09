@@ -1,3 +1,4 @@
+import { shortcutLabel } from "@/lib/platform";
 import { deleteWithUndo } from "@/lib/deleteWithUndo";
 // 泳道看板行：列=泳道、行=待办。支持开始/完成(自动补录)/重开/归档/切分支/打开目录/同步提交/补录/手动加提交(多行批量)/复制标记/编辑/删除；
 // 卡片整体支持右键菜单（注册制，见 lib/context-menu.ts）：展开/收起详情、编辑、复制标记、打开目录、提交三件套、移动到泳道、归档、删除
@@ -424,13 +425,13 @@ export function TodoRow({ todo, projectName, showProjectName, variant = "list" }
             className="font-mono"
             disabled={busy !== null}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+              if (!e.nativeEvent.isComposing && e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
                 e.preventDefault();
                 void addCommit();
               }
             }}
           />
-          <p className="text-xs text-muted-foreground">Ctrl+Enter 提交；也支持空格/逗号分隔，单条失败不影响其余条目。</p>
+          <p className="text-xs text-muted-foreground">{shortcutLabel("Enter")} 提交；也支持空格/逗号分隔，单条失败不影响其余条目。</p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setAddCommitOpen(false)}>取消</Button>
             <Button onClick={addCommit} disabled={busy !== null || !addText.trim()}>批量添加</Button>

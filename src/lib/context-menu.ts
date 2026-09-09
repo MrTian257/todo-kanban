@@ -1,3 +1,4 @@
+import { shortcutLabel } from "@/lib/platform";
 // 全局右键菜单系统（需求：移除 WebView/Tauri 默认右键菜单，一切右键功能须显式注册）
 //
 // 结构：
@@ -288,21 +289,21 @@ export function registerEditableContextMenu(): () => void {
     return [
       {
         label: "剪切",
-        shortcut: "Ctrl+X",
+        shortcut: shortcutLabel("X"),
         icon: Scissors,
         disabled: !selected || readOnly,
         onSelect: () => execEdit("cut", snapshot),
       },
-      { label: "复制", shortcut: "Ctrl+C", icon: Copy, disabled: !selected, onSelect: () => execEdit("copy", snapshot) },
+      { label: "复制", shortcut: shortcutLabel("C"), icon: Copy, disabled: !selected, onSelect: () => execEdit("copy", snapshot) },
       {
         label: "粘贴",
-        shortcut: "Ctrl+V",
+        shortcut: shortcutLabel("V"),
         icon: ClipboardPaste,
         disabled: readOnly,
         onSelect: () => void pasteIntoEditable(snapshot),
       },
       { type: "separator" },
-      { label: "全选", shortcut: "Ctrl+A", icon: TextSelect, onSelect: () => selectAllEditable(snapshot) },
+      { label: "全选", shortcut: shortcutLabel("A"), icon: TextSelect, onSelect: () => selectAllEditable(snapshot) },
     ];
   });
 }

@@ -9,7 +9,9 @@ use std::path::PathBuf;
 use serde_json::{json, Value};
 use todo_kanban_core::db;
 use todo_kanban_core::error::{AppError, AppResult};
-use todo_kanban_core::models::{DbProject, DbState, DbTodo};
+use todo_kanban_core::models::DbState;
+#[cfg(test)]
+use todo_kanban_core::models::{DbProject, DbTodo};
 use todo_kanban_core::svc::{db_cmds, git_cmds};
 
 use crate::config;
@@ -82,11 +84,11 @@ fn save_state(state: DbState, expected: &DbState) -> AppResult<()> {
     Ok(())
 }
 
-/// MCP server 进程的备份目录：exe 所在目录/backup（与 app 同目录部署时共用）
+/// 备份始终跟随实际数据源，包括 --db-config 覆盖目录。
 fn mcp_backup_dir() -> PathBuf {
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+    config::get()
+        .and_then(|cfg| cfg.db_config_dir)
+        .or_else(|| db_cmds::data_dir().ok())
         .unwrap_or_else(|| PathBuf::from("."))
         .join("backup")
 }
@@ -148,8 +150,10 @@ fn call_tool(name: &str, args: &Value) -> AppResult<Value> {
             let mut state: DbState =
                 serde_json::from_value(args.get("payload").cloned().unwrap_or(Value::Null))?;
             // MCP 写打标：新建 todo/project → created_by=ai；修改 todo → ai_coordinated=true
-            let expected: DbState = serde_json::from_value(args.get("expected").cloned()
-                .ok_or_else(|| AppError::invalid("保存必须携带 db_load_state 返回的 expected 原始快照"))?)?;
+            let expected: DbState =
+                serde_json::from_value(args.get("expected").cloned().ok_or_else(|| {
+                    AppError::invalid("保存必须携带 db_load_state 返回的 expected 原始快照")
+                })?)?;
             apply_ai_markers(&mut state, &expected);
             save_state(state, &expected)?;
             Ok(json!({ "ok": true }))

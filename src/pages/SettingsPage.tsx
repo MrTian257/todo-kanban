@@ -235,7 +235,7 @@ export function SettingsPage() {
           <CardContent className="space-y-2 text-sm text-muted-foreground">
             <p>• 开源地址: <code className="font-mono">git clone https://github.com/MrTian257/todo-kanban.git</code></p>
             <p>
-              • 数据来源：桌面端 SQLite（固定路径为程序运行目录 <code>todo-kanban.db</code>）；
+              • 数据来源：桌面端 SQLite（固定路径为数据目录 <code>todo-kanban.db</code>（macOS：~/Library/Application Support/com.todo-kanban.app；其他平台：程序目录））；
               当前数据版本 <Badge variant="outline" className="ml-0.5 font-mono">v{version?.dataVersion ?? "…"}</Badge>
               （软件支持 v{version?.appMin ?? 1} ~ v{version?.appMax ?? 7}）。
             </p>
