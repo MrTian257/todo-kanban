@@ -1,0 +1,46 @@
+# macOS 产物构建：由 build.sh 触发（workflow_dispatch），产出桌面端 dmg + mcp-server 双架构。
+name: build-macos
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 安装 Rust 双架构 target
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - name: 安装前端依赖
+        run: npm ci
+
+      - name: 构建桌面端（dmg）
+        run: npm run tauri build -- --bundles dmg --ci
+
+      - name: 构建 mcp-server（aarch64）
+        run: cargo build --release -p mcp-server --manifest-path src-tauri/Cargo.toml --target aarch64-apple-darwin
+
+      - name: 构建 mcp-server（x86_64）
+        run: cargo build --release -p mcp-server --manifest-path src-tauri/Cargo.toml --target x86_64-apple-darwin
+
+      - name: 整理产物
+        run: |
+          mkdir -p dist
+          cp src-tauri/target/release/bundle/dmg/*.dmg dist/
+          cp src-tauri/target/aarch64-apple-darwin/release/mcp-server dist/mcp-server-aarch64-apple-darwin
+          cp src-tauri/target/x86_64-apple-darwin/release/mcp-server dist/mcp-server-x86_64-apple-darwin
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: todo-kanban-macos
+          path: dist/

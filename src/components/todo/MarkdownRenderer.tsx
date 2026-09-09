@@ -9,6 +9,7 @@ import rehypeKatex from "rehype-katex";
 import rehypeHighlight from "rehype-highlight";
 import type { PluggableList } from "unified";
 import "katex/dist/katex.min.css";
+import { attachmentDisplayUrl } from "@/lib/attachments";
 import { cn } from "@/lib/utils";
 
 const remarkPlugins: PluggableList = [remarkGfm, remarkMath];
@@ -25,7 +26,8 @@ const rehypePlugins: PluggableList = [
         ["className", /^language-./, "math-inline", "math-display"],
       ],
     },
-    protocols: { ...defaultSchema.protocols, src: [...(defaultSchema.protocols?.src ?? []), "data"] },
+    // attachment：macOS/Linux 上附件展示 URL 的协议形态（Windows 为 http://attachment.localhost）
+    protocols: { ...defaultSchema.protocols, src: [...(defaultSchema.protocols?.src ?? []), "data", "attachment"] },
   }],
   [rehypeKatex, { trust: false, strict: "ignore" }],
   [rehypeHighlight, { detect: false }],
@@ -48,6 +50,8 @@ const components: Components = {
 };
 
 function safeUrl(url: string, key: string) {
+  // 附件引用 → 自定义协议展示 URL（app 壳注册的 attachment 协议按相对路径供图）
+  if (url.startsWith("attachment://")) return attachmentDisplayUrl(url);
   // The previous editor stores compressed images inline. Keep only raster image data URLs.
   if (key === "src" && /^data:image\/(?:png|jpeg|gif|webp);base64,[a-z\d+/=\s]+$/i.test(url)) return url;
   return defaultUrlTransform(url);

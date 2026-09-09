@@ -117,7 +117,7 @@ mod tests {
         let db = dir.join("t.db");
         {
             let conn = rusqlite::Connection::open(&db).unwrap();
-            conn.execute_batch("PRAGMA user_version = 8;").unwrap();
+            conn.execute_batch("PRAGMA user_version = 9;").unwrap();
         }
         let conn = rusqlite::Connection::open(&db).unwrap();
         let err = ensure(&conn, &db, &dir.join("backup")).unwrap_err();
@@ -126,7 +126,7 @@ mod tests {
                 data_version,
                 max_supported,
             } => {
-                assert_eq!(data_version, 8);
+                assert_eq!(data_version, 9);
                 assert_eq!(max_supported, CURRENT_VERSION);
             }
             _ => panic!("期望 TooNew"),

@@ -1,9 +1,55 @@
-// 应用入口：注册 13 命令 + opener/log/clipboard-manager 插件 + 启动自举（数据文件初始化 + 演示数据种子）。
+// 应用入口：注册 17 命令 + attachment:// 自定义协议（附件供图）+ opener/log/clipboard-manager 插件 + 启动自举（数据文件初始化 + 演示数据种子）。
 // 日志：运行目录 kanban.log（追加写，超限轮转只保留一份）。
 
 pub mod commands;
 
+use tauri::http::{header, StatusCode};
 use tauri_plugin_log::{Target, TargetKind, TimezoneStrategy};
+
+/// percent-decode（附件协议路径解码；仅处理 %XX，'+' 保持字面量）
+fn percent_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hi = (bytes[i + 1] as char).to_digit(16);
+            let lo = (bytes[i + 2] as char).to_digit(16);
+            if let (Some(hi), Some(lo)) = (hi, lo) {
+                out.push((hi * 16 + lo) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// attachment:// 自定义协议：按相对路径 <todoId>/<file> 直接供图（不查库）。
+/// Windows/Android 形如 http://attachment.localhost/<path>；macOS/Linux 形如 attachment://localhost/<path>，
+/// 两种形态 request.uri().path() 一致，统一去前导 '/' 后交 core 校验并读取。
+fn attachment_protocol(request: tauri::http::Request<Vec<u8>>) -> tauri::http::Response<Vec<u8>> {
+    let raw = request.uri().path().trim_start_matches('/');
+    let relative = percent_decode(raw);
+    let not_found = |msg: &str| {
+        tauri::http::Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+            .body(msg.as_bytes().to_vec())
+            .unwrap_or_else(|_| tauri::http::Response::new(Vec::new()))
+    };
+    match todo_kanban_core::svc::attachments::serve(&relative) {
+        Ok((mime, bytes)) => tauri::http::Response::builder()
+            .header(header::CONTENT_TYPE, mime)
+            // 文件名不复用（seq 单调），可长缓存
+            .header(header::CACHE_CONTROL, "private, max-age=31536000, immutable")
+            .body(bytes)
+            .unwrap_or_else(|_| not_found("附件读取失败")),
+        Err(_) => not_found("附件不存在"),
+    }
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -32,6 +78,9 @@ pub fn run() {
         )
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .register_uri_scheme_protocol("attachment", |_ctx, request| {
+            attachment_protocol(request)
+        })
         .setup(move |_app| {
             // 启动自举：初始化运行目录 todo-kanban.db 并写演示数据
             match &exe_dir {
@@ -58,7 +107,25 @@ pub fn run() {
             commands::mcp_get_config,
             commands::mcp_set_config,
             commands::db_check_version,
+            commands::attachment_import,
+            commands::attachment_migrate_inline,
+            commands::attachment_gc_orphans,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn percent_decode_variants() {
+        assert_eq!(percent_decode("abc"), "abc");
+        assert_eq!(percent_decode("a%2Fb"), "a/b");
+        assert_eq!(percent_decode("t1%2Ft1-0001.png"), "t1/t1-0001.png");
+        assert_eq!(percent_decode("t1/t1-0001.png"), "t1/t1-0001.png");
+        assert_eq!(percent_decode("100%"), "100%");
+        assert_eq!(percent_decode("%zz"), "%zz");
+    }
 }

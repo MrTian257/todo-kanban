@@ -1,7 +1,7 @@
-//! DDL + 迁移。USER_VERSION = 6。
+//! DDL + 迁移。USER_VERSION = 8。
 //! 注意：SQLite 列序是硬契约——schema ↔ row ↔ mod 的 SELECT/INSERT 三处同步。
 
-pub const USER_VERSION: i64 = 7;
+pub const USER_VERSION: i64 = 8;
 
 /// 建表（新库直接完整 v6 形态；旧库缺列由 migrate 补）
 pub fn create_tables(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
@@ -64,6 +64,26 @@ CREATE TABLE IF NOT EXISTS git_repo_cache (
   error TEXT,
   fetched_at INTEGER NOT NULL
 );
+-- v8：附件文件化存储（ADR-013）——文件信息 + 任务关联两表分离
+CREATE TABLE IF NOT EXISTS attachments (
+  id TEXT PRIMARY KEY,
+  file_name TEXT NOT NULL,             -- 落盘名 <todoId>-<seq:04>.<ext>
+  original_name TEXT NOT NULL DEFAULT '',
+  relative_path TEXT NOT NULL,         -- <todoId>/<file_name>（相对 attachments 根）
+  mime_type TEXT NOT NULL,
+  byte_size INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_attachments_relative_path ON attachments(relative_path);
+CREATE TABLE IF NOT EXISTS todo_attachments (
+  todo_id TEXT NOT NULL,
+  attachment_id TEXT NOT NULL REFERENCES attachments(id) ON DELETE CASCADE,
+  seq INTEGER NOT NULL,                -- 任务内序号（导入命名用；引用补链为 0）
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (todo_id, attachment_id)
+);
+CREATE INDEX IF NOT EXISTS idx_todo_attachments_attachment ON todo_attachments(attachment_id);
 ",
     )
 }
@@ -161,6 +181,16 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, USER_VERSION);
+        // v8：附件双表随建表就位（迁移仅推进版本）
+        let tables: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(tables.contains(&"attachments".to_string()));
+        assert!(tables.contains(&"todo_attachments".to_string()));
     }
 
     #[test]

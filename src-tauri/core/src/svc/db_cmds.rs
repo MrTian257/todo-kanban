@@ -10,6 +10,7 @@ use crate::models::{
     DbBranchDef, DbBranchRule, DbBranchRuleStep, DbProject, DbState, DbSwimlane, DbTodo,
     McpSettings,
 };
+use crate::svc::attachments;
 use rusqlite::{Connection, OptionalExtension};
 
 static DB_RW_LOCK: Mutex<()> = Mutex::new(());
@@ -61,7 +62,10 @@ pub fn save_state(payload: DbState) -> AppResult<()> {
         .lock()
         .map_err(|_| AppError::invalid("写锁获取失败"))?;
     let (conn, _report) = db::open_and_init(&path, &backup_dir()?)?;
-    db::save_state(&conn, &payload)?;
+    let trash = db::save_state(&conn, &payload)?;
+    if !trash.is_empty() {
+        attachments::move_to_trash_at(&attachments::attachments_root_at(&path), &trash);
+    }
     let mut cache = FP_CACHE
         .lock()
         .map_err(|_| AppError::invalid("缓存锁获取失败"))?;
@@ -70,11 +74,15 @@ pub fn save_state(payload: DbState) -> AppResult<()> {
 }
 
 /// UI snapshot save: stale snapshots cannot delete concurrent records.
+/// 附件联动：被删任务的附件文件在库事务提交后移入 attachments/trash/。
 pub fn save_state_checked(payload: DbState, expected: DbState) -> AppResult<DbState> {
     let path = db_path()?;
     let _guard = DB_RW_LOCK.lock().map_err(|_| AppError::invalid("写锁获取失败"))?;
     let (conn, _report) = db::open_and_init(&path, &backup_dir()?)?;
-    let saved = db::save_state_checked(&conn, &payload, &expected)?;
+    let (saved, trash) = db::save_state_checked(&conn, &payload, &expected)?;
+    if !trash.is_empty() {
+        attachments::move_to_trash_at(&attachments::attachments_root_at(&path), &trash);
+    }
     *FP_CACHE.lock().map_err(|_| AppError::invalid("缓存锁获取失败"))? = None;
     Ok(saved)
 }
@@ -350,7 +358,7 @@ fn seed_demo_state(conn: &Connection) -> AppResult<()> {
             ),
         ],
     };
-    db::save_state(conn, &state)
+    db::save_state(conn, &state).map(|_| ())
 }
 
 /// 演示待办参数（避免 demo_todo 长参数列表）

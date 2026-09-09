@@ -46,7 +46,7 @@ export function TodoListPage() {
       .filter((t) => (showArchived ? t.archived : !t.archived))
       .filter((t) => (status === "all" ? true : t.status === status))
       .filter((t) => (projectId === "all" ? true : t.projectId === projectId))
-      .filter(t => !deferredQuery || [t.title, t.note.replace(/data:image\/[^)\s]+/g, ""), t.branch, t.tag, t.blocker, projectById.get(t.projectId)?.name ?? ""].some(text => text.toLowerCase().includes(deferredQuery)))
+      .filter(t => !deferredQuery || [t.title, t.note.replace(/data:image\/[^)\s]+/g, "").replace(/attachment:\/\/[^)\s]+/g, ""), t.branch, t.tag, t.blocker, projectById.get(t.projectId)?.name ?? ""].some(text => text.toLowerCase().includes(deferredQuery)))
       .sort((a, b) => b.updatedAt - a.updatedAt);
   }, [todos, status, projectId, showArchived, deferredQuery, projectById]);
 

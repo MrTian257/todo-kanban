@@ -1,66 +1,89 @@
+// 附件（图片）引用与导入（ADR-013）：
+// note 持久化只存 attachment://<todoId>/<file> 短引用；展示/编辑时前缀互换为自定义协议 URL，
+// 由 app 壳注册的 attachment 协议直接按相对路径供图（Windows: http://attachment.localhost/…，
+// macOS/Linux: attachment://localhost/…）。历史内嵌 data URL 图片继续兼容显示，不做强制迁移。
+
 import { invoke } from "@tauri-apps/api/core";
 import { isTauri } from "./storage";
 
+/** 单张图片上限（压缩后；后端同规则校验） */
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
-export const MAX_NOTE_BYTES = 64 * 1024;
-export const attachmentPattern = /^attachment:\/\/([a-f0-9]{64})$/;
-const legacyPattern = /^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/=]+)$/;
 
-export interface Attachment { id: string; url: string; mimeType: string; byteSize: number }
+/** note 持久化引用前缀 */
+export const ATTACHMENT_REF_PREFIX = "attachment://";
+const IS_WINDOWS = typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent);
+/** 编辑器/预览展示前缀（自定义协议平台差异） */
+export const ATTACHMENT_DISPLAY_PREFIX = IS_WINDOWS
+  ? "http://attachment.localhost/"
+  : "attachment://localhost/";
 
-export async function importImage(file: File): Promise<Attachment> {
+export interface Attachment {
+  id: string;
+  /** note 引用形态：attachment://<todoId>/<file> */
+  ref: string;
+  fileName: string;
+  relativePath: string;
+  mimeType: string;
+  byteSize: number;
+}
+
+export interface MigrateSummary {
+  scannedTodos: number;
+  migratedImages: number;
+  failedTodos: { id: string; reason: string }[];
+}
+
+export interface GcSummary {
+  removedRelations: number;
+  removedAttachments: number;
+  movedFiles: number;
+}
+
+/** 单个引用 → 展示 URL（非引用原样返回） */
+export function attachmentDisplayUrl(ref: string): string {
+  return ref.startsWith(ATTACHMENT_REF_PREFIX)
+    ? ATTACHMENT_DISPLAY_PREFIX + ref.slice(ATTACHMENT_REF_PREFIX.length)
+    : ref;
+}
+
+/** 整段 markdown：引用形态 → 展示形态（纯前缀互换，精确可逆；用户手输的 attachment:// 原样保留） */
+export function attachmentRefToDisplay(markdown: string): string {
+  return markdown.split(ATTACHMENT_REF_PREFIX).join(ATTACHMENT_DISPLAY_PREFIX);
+}
+
+/** 整段 markdown：展示形态 → 引用形态（保存/对外发布时调用） */
+export function attachmentDisplayToRef(markdown: string): string {
+  return markdown.split(ATTACHMENT_DISPLAY_PREFIX).join(ATTACHMENT_REF_PREFIX);
+}
+
+/** 导入一张图片：按任务归档到 <运行目录>/attachments/<todoId>/<todoId>-<seq>.<ext> */
+export async function importImage(file: File, todoId: string): Promise<Attachment> {
   if (!isTauri()) throw new Error("请在桌面应用中导入附件");
   if (!file.size || file.size > MAX_IMAGE_BYTES) throw new Error("单张图片不能超过 5 MiB");
-  return invoke<Attachment>("attachment_import", {
-    bytes: Array.from(new Uint8Array(await file.arrayBuffer())), filename: file.name,
+  const bytesBase64 = await blobToBase64(file);
+  return invoke<Attachment>("attachment_import", { todoId, filename: file.name, bytesBase64 });
+}
+
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result);
+      resolve(result.slice(result.indexOf(",") + 1));
+    };
+    reader.onerror = () => reject(new Error("图片读取失败，请重试"));
+    reader.readAsDataURL(blob);
   });
 }
 
-export function legacyImageBlob(url: string): Blob | null {
-  if (url.length > MAX_IMAGE_BYTES * 1.4) return null;
-  const match = legacyPattern.exec(url);
-  if (!match) return null;
-  try {
-    const bytes = Uint8Array.from(atob(match[2]), c => c.charCodeAt(0));
-    if (bytes.length > MAX_IMAGE_BYTES) return null;
-    return new Blob([bytes], { type: "image/" + match[1] });
-  } catch { return null; }
+/** 迁移历史内嵌 base64 图片为附件（逐条任务全成或全不动） */
+export async function migrateInlineImages(): Promise<MigrateSummary> {
+  if (!isTauri()) throw new Error("请在桌面应用中执行附件维护");
+  return invoke<MigrateSummary>("attachment_migrate_inline");
 }
 
-export async function imageBlob(url: string): Promise<Blob> {
-  const match = attachmentPattern.exec(url);
-  if (match) {
-    if (!isTauri()) throw new Error("本地附件只能在桌面应用中查看");
-    const bytes = await invoke<ArrayBuffer | number[]>("attachment_read", { id: match[1] });
-    const raw = bytes instanceof ArrayBuffer ? new Uint8Array(bytes) : new Uint8Array(bytes);
-    const mime = raw[0] === 0x89 ? "image/png" : raw[0] === 0xff ? "image/jpeg" : "image/webp";
-    return new Blob([raw], { type: mime });
-  }
-  const legacy = legacyImageBlob(url);
-  if (legacy) return legacy;
-  throw new Error("图片引用不受支持，请导入本地附件");
-}
-
-export function noteError(note: string, original?: string): string | undefined {
-  if (note === original) return undefined;
-  if (new TextEncoder().encode(note).length > MAX_NOTE_BYTES) return "描述不能超过 64 KiB，请先迁移历史内嵌图片";
-  if (note.includes("data:image/")) return "请先将内嵌图片迁移为附件";
-  if ((note.match(/attachment:\/\/[a-f0-9]{64}/g) ?? []).length > 20) return "每条待办最多引用 20 张图片";
-  return undefined;
-}
-
-// 全部成功后由编辑器一次性更新草稿；失败保留原文。
-export async function migrateInlineImages(note: string): Promise<string> {
-  const urls = [...new Set(note.match(/data:image\/[A-Za-z0-9.+-]+;base64,[A-Za-z0-9+/=]+/g) ?? [])];
-  if (urls.length > 20) throw new Error("内嵌图片超过 20 张，请分拆任务后再迁移");
-  let result = note;
-  for (const url of urls) {
-    const blob = legacyImageBlob(url);
-    if (!blob) throw new Error("存在不支持或超限的内嵌图片，原文已保留");
-    const attachment = await importImage(new File([blob], "历史图片", { type: blob.type }));
-    result = result.split(url).join(attachment.url);
-  }
-  const error = noteError(result);
-  if (error) throw new Error(error);
-  return result;
+/** 清理孤儿附件（关系指向已删除任务 / 无任何关系的附件；文件移入 attachments/trash/） */
+export async function gcOrphanAttachments(): Promise<GcSummary> {
+  if (!isTauri()) throw new Error("请在桌面应用中执行附件维护");
+  return invoke<GcSummary>("attachment_gc_orphans");
 }

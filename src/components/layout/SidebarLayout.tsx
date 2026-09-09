@@ -200,7 +200,7 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
                   size="icon"
                   className="h-8 w-8 hover:bg-destructive/15 hover:text-destructive"
                   aria-label="关闭"
-                  onClick={() => appWindow.close()}
+                  onClick={() => appWindow?.close?.()}
                 >
                   <X className="h-4 w-4" />
                 </Button>

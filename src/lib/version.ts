@@ -21,18 +21,31 @@ export interface VersionReport {
   from?: number | null;
   to?: number | null;
   steps?: VersionStep[] | null;
+
+  tauriVersion?: string;
+  reactVersion?: string;
+  sqliteVersion?: string;
+  gitVersion?: string;
+  vditor?: string;
+
 }
 
 /** 浏览器预览模式默认报告（无真实数据） */
 const PREVIEW_REPORT: VersionReport = {
   status: "ok",
-  dataVersion: 7,
+  dataVersion: 8,
   appMin: 1,
-  appMax: 7,
+  appMax: 8,
   softwareVersion: "2.0.0",
   from: null,
   to: null,
   steps: null,
+
+  tauriVersion: "^2.5.0",
+  reactVersion: "18.0.0",
+  sqliteVersion: "3.0.0",
+  gitVersion: "--",
+  vditor: "4.0.0",
 };
 
 /** 启动时执行数据版本检查与升级，返回报告 */

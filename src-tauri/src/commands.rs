@@ -1,9 +1,11 @@
-//! 14 个 Tauri 命令薄壳：一行转调 core::svc，错误 map_err 转中文 String（命令内不 panic）。
+//! 17 个 Tauri 命令薄壳：一行转调 core::svc，错误 map_err 转中文 String（命令内不 panic）。
 //! 契约见 docs/02-development（backend-contract）。
 
 use todo_kanban_core::db::VersionReport;
-use todo_kanban_core::models::{CommitInfo, DbState, GitInfo, McpSettings};
-use todo_kanban_core::svc::{db_cmds, git_cmds, repo_cache};
+use todo_kanban_core::models::{
+    AttachmentInfo, CommitInfo, DbState, GcSummary, GitInfo, McpSettings, MigrateSummary,
+};
+use todo_kanban_core::svc::{attachments, db_cmds, git_cmds, repo_cache};
 
 fn err_str(e: impl ToString) -> String {
     e.to_string()
@@ -114,4 +116,27 @@ pub fn mcp_set_config(payload: McpSettings) -> Result<(), String> {
 #[tauri::command]
 pub fn db_check_version() -> Result<VersionReport, String> {
     db_cmds::check_version().map_err(err_str)
+}
+
+/// 15. 导入附件图片：按任务归档到 <运行目录>/attachments/<todoId>/<todoId>-<seq>.<ext>，
+/// 写 attachments + todo_attachments 两表，返回 note 用的 attachment:// 引用
+#[tauri::command]
+pub fn attachment_import(
+    todo_id: String,
+    filename: String,
+    bytes_base64: String,
+) -> Result<AttachmentInfo, String> {
+    attachments::import_b64(&todo_id, &bytes_base64, &filename).map_err(err_str)
+}
+
+/// 16. 迁移历史内嵌 base64 图片为附件（逐条 todo 全成或全不动；结果含失败原因清单）
+#[tauri::command]
+pub fn attachment_migrate_inline() -> Result<MigrateSummary, String> {
+    attachments::migrate_inline().map_err(err_str)
+}
+
+/// 17. 清理孤儿附件（关系指向已删除任务 / 无任何关系的附件；文件移入 attachments/trash/）
+#[tauri::command]
+pub fn attachment_gc_orphans() -> Result<GcSummary, String> {
+    attachments::gc_orphans().map_err(err_str)
 }

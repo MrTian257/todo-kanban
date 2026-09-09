@@ -97,6 +97,10 @@ pub fn migrate(conn: &Connection) -> UpgradeResult<MigrateOutcome> {
             )?;
         }
     }
+    if from < 8 {
+        // v7 → v8：附件表 attachments + todo_attachments 已由 core 建表（CREATE TABLE IF NOT EXISTS，
+        // 新库直接完整形态）；此处仅推进版本（同 v2→v3 模式），无存量数据需要回填。
+    }
 
     tx.execute_batch(&format!("PRAGMA user_version = {CURRENT_VERSION};"))?;
     tx.commit().map_err(UpgradeError::from)?;
