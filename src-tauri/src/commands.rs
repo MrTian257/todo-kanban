@@ -32,13 +32,22 @@ pub fn git_info_remote(repo: String, repo_url: String, token: String) -> Result<
 /// 4. 基于当前位置新建分支（不切换）；创建后 push -u 建立远端同名上游
 #[tauri::command]
 pub fn git_create_branch(repo: String, branch: String) -> Result<(), String> {
-    git_cmds::git_create_branch(&repo, &branch).map_err(err_str)
+    let r = git_cmds::git_create_branch(&repo, &branch).map_err(err_str);
+    // 成功后失效分支缓存：否则 30s TTL 内仍返回旧分支列表（新分支看不到）
+    if r.is_ok() {
+        repo_cache::invalidate(&repo);
+    }
+    r
 }
 
 /// 5. 从切出源新建分支：先 fetch origin <from>，再基于 origin/<from> 切出（失败回退本地源）；创建后 push -u 建立远端同名上游
 #[tauri::command]
 pub fn git_create_branch_from(repo: String, branch: String, from: String) -> Result<(), String> {
-    git_cmds::git_create_branch_from(&repo, &branch, &from).map_err(err_str)
+    let r = git_cmds::git_create_branch_from(&repo, &branch, &from).map_err(err_str);
+    if r.is_ok() {
+        repo_cache::invalidate(&repo);
+    }
+    r
 }
 
 /// 6. 检出目标分支（成功后失效分支缓存）
@@ -112,10 +121,14 @@ pub fn mcp_set_config(payload: McpSettings) -> Result<(), String> {
 }
 
 /// 14. 数据版本检查/升级（前端启动门禁）：TooNew/TooOld 以 status 返回而非抛错；
-/// 兼容升级在此执行（备份+逐级迁移），返回 upgraded 报告供提示
+/// 兼容升级在此执行（备份+逐级迁移），返回 upgraded 报告供提示；同时补齐依赖版本供设置页展示
 #[tauri::command]
 pub fn db_check_version() -> Result<VersionReport, String> {
-    db_cmds::check_version().map_err(err_str)
+    let mut report = db_cmds::check_version().map_err(err_str)?;
+    report.tauri_version = Some(tauri::VERSION.to_string());
+    report.sqlite_version = todo_kanban_core::db::sqlite_version();
+    report.git_version = todo_kanban_core::tool::git_cli::git_version();
+    Ok(report)
 }
 
 /// 15. 导入附件图片：按任务归档到 <运行目录>/attachments/<todoId>/<todoId>-<seq>.<ext>，

@@ -21,16 +21,26 @@ pub mod schema;
 
 pub const NEXT_SEQ_KEY: &str = "next_seq";
 
-/// 打开数据库（WAL 模式）
+/// 打开数据库（WAL 模式 + 5s 忙等待）
 pub fn open(path: &Path) -> AppResult<Connection> {
     let conn = Connection::open(path)?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
+    // app（2s 轮询 + 保存）与 MCP server 跨进程并发：无忙等待会直接 SQLITE_BUSY
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
     Ok(conn)
 }
 
 /// 内存库（测试用）
 pub fn open_in_memory() -> rusqlite::Result<Connection> {
     Connection::open_in_memory()
+}
+
+/// 运行时 SQLite 版本（设置页展示用；内存连接，不碰数据文件）
+pub fn sqlite_version() -> Option<String> {
+    Connection::open_in_memory()
+        .ok()?
+        .query_row("SELECT sqlite_version()", [], |r| r.get::<_, String>(0))
+        .ok()
 }
 
 /// 幂等建表 + 迁移到最新（主路径；迁移引擎在 upgrade 分包）

@@ -1,9 +1,11 @@
+import { NavigationGuard } from "@/components/layout/NavigationGuard";
+import { DesktopLifecycle } from "@/components/layout/DesktopLifecycle";
 // 路由根：HashRouter + ThemeProvider + TooltipProvider + Toaster + ContextMenuOverlay + SidebarLayout
 // 副作用集中：initAppStore / startExternalSync / startGitCacheWarm / 皮肤初始化
 // （右键菜单系统与输入建议控制在 main.tsx 全局安装，弹层在下方挂载）
 
 import { lazy, Suspense, useEffect, useState } from "react";
-import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
+import { createHashRouter, RouterProvider, Navigate, Route, Routes } from "react-router-dom";
 import { ThemeProvider } from "next-themes";
 import { Toaster, toast } from "sonner";
 import { ContextMenuOverlay } from "@/components/layout/ContextMenuOverlay";
@@ -34,7 +36,7 @@ function RootRedirect() {
   return <Navigate to="/focus" replace />;
 }
 
-export default function App() {
+function Application() {
   const initAppStore = useAppStore((s) => s.initAppStore);
   const loaded = useAppStore((s) => s.loaded);
   const loadError = useAppStore((s) => s.loadError);
@@ -81,10 +83,12 @@ export default function App() {
       <TooltipProvider delayDuration={0}>
         <Toaster position="bottom-right" richColors />
         <ContextMenuOverlay />
+        <DesktopLifecycle />
         {versionBlocked && versionReport ? (
           <VersionBlockedPage report={versionReport} onRetry={() => window.location.reload()} />
         ) : (
-        <HashRouter>
+        <>
+          <NavigationGuard />
           <SidebarLayout>
             <div className="min-h-0 flex-1 overflow-auto"><Suspense fallback={<div className="p-6 text-muted-foreground">正在加载页面…</div>}>
             {loaded ? <Routes>
@@ -101,9 +105,12 @@ export default function App() {
             </Suspense></div>
             {loaded && <PersistenceStatus />}
           </SidebarLayout>
-        </HashRouter>
+        </>
         )}
       </TooltipProvider>
     </ThemeProvider>
   );
 }
+const router = createHashRouter([{ path: "*", element: <Application /> }]);
+
+export default function App() { return <RouterProvider router={router} />; }

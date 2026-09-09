@@ -115,8 +115,10 @@ export function MarkdownEditor(props: Props) {
 
     const upload = async (files: File[]): Promise<null> => {
       if (busy.current || latest.current.disabled || disposed || !ready.current) return null;
-      if (files.length > IMAGE_BATCH_MAX_COUNT || files.some(file => file.size > IMAGE_MAX_BYTES) || files.reduce((sum, file) => sum + file.size, 0) > IMAGE_BATCH_MAX_BYTES) {
-        setError("每次最多插入 5 张图片，单张不超过 10 MB，合计不超过 20 MB。");
+      // GIF/WebP 不压缩（保留动画），直接受附件上限 5 MB 约束；PNG/JPEG 先压缩再判 5 MB
+      const perFileLimit = (file: File) => (file.type === "image/gif" || file.type === "image/webp" ? MAX_IMAGE_BYTES : IMAGE_MAX_BYTES);
+      if (files.length > IMAGE_BATCH_MAX_COUNT || files.some(file => file.size > perFileLimit(file)) || files.reduce((sum, file) => sum + file.size, 0) > IMAGE_BATCH_MAX_BYTES) {
+        setError("每次最多插入 5 张图片；PNG/JPEG 单张不超过 10 MB（会压缩），GIF/WebP 单张不超过 5 MB（原样保留），合计不超过 20 MB。");
         return null;
       }
       if (!files.length || files.some(file => !IMAGE_TYPES.has(file.type))) {

@@ -26,9 +26,24 @@ pub fn exe_dir() -> AppResult<PathBuf> {
         .unwrap_or_else(|| PathBuf::from(".")))
 }
 
-/// 固定数据文件路径：程序运行目录 / todo-kanban.db
+/// macOS 的应用包不可作为数据目录；桌面端与 MCP 共用同一用户目录。
+pub fn data_dir() -> AppResult<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        let home = std::env::var_os("HOME")
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| AppError::invalid("无法定位 macOS 用户主目录"))?;
+        Ok(PathBuf::from(home).join("Library/Application Support/com.todo-kanban.app"))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        exe_dir()
+    }
+}
+
+/// 固定数据文件路径：平台数据目录 / todo-kanban.db
 pub fn db_path() -> AppResult<PathBuf> {
-    Ok(exe_dir()?.join("todo-kanban.db"))
+    Ok(data_dir()?.join("todo-kanban.db"))
 }
 
 /// 指定目录下的固定数据文件路径
@@ -77,19 +92,23 @@ pub fn save_state(payload: DbState) -> AppResult<()> {
 /// 附件联动：被删任务的附件文件在库事务提交后移入 attachments/trash/。
 pub fn save_state_checked(payload: DbState, expected: DbState) -> AppResult<DbState> {
     let path = db_path()?;
-    let _guard = DB_RW_LOCK.lock().map_err(|_| AppError::invalid("写锁获取失败"))?;
+    let _guard = DB_RW_LOCK
+        .lock()
+        .map_err(|_| AppError::invalid("写锁获取失败"))?;
     let (conn, _report) = db::open_and_init(&path, &backup_dir()?)?;
     let (saved, trash) = db::save_state_checked(&conn, &payload, &expected)?;
     if !trash.is_empty() {
         attachments::move_to_trash_at(&attachments::attachments_root_at(&path), &trash);
     }
-    *FP_CACHE.lock().map_err(|_| AppError::invalid("缓存锁获取失败"))? = None;
+    *FP_CACHE
+        .lock()
+        .map_err(|_| AppError::invalid("缓存锁获取失败"))? = None;
     Ok(saved)
 }
 
-/// 启动自举：使用运行目录 todo-kanban.db；
-/// 空库（无种子标记）→ 建表并写入演示数据。返回数据库路径。
-/// 已有数据（含用户清空后的库）绝不覆盖——种子标记落在 app_meta，与业务数据解耦。
+/// 启动自举：使用平台数据目录 todo-kanban.db；
+/// 仅当「两表都为空且无种子标记」时写入演示数据。返回数据库路径。
+/// 已有数据（含用户清空后的库）绝不覆盖——双条件避免既有库因缺失 seeded 键被演示数据覆盖。
 pub fn ensure_db_at(dir: &Path) -> AppResult<PathBuf> {
     let path = db_path_in(dir);
     let (conn, _report) = db::open_and_init(&path, &dir.join("backup"))?;
@@ -100,7 +119,9 @@ pub fn ensure_db_at(dir: &Path) -> AppResult<PathBuf> {
             |r| r.get(0),
         )
         .map_err(AppError::from)?;
-    if !seeded {
+    // 只有真正的空库才播种：旧库（v1~v7 / 早期构建）可能没有 seeded 键，但绝不能因此被覆盖
+    let empty = db::storage_fingerprint(&conn)? == (0, 0, 0);
+    if !seeded && empty {
         seed_demo_state(&conn)?;
         conn.execute(
             "INSERT INTO app_meta (key, value) VALUES ('seeded', '1')",
@@ -113,7 +134,7 @@ pub fn ensure_db_at(dir: &Path) -> AppResult<PathBuf> {
 
 /// 备份目录：程序运行目录下的 backup/
 fn backup_dir() -> AppResult<PathBuf> {
-    Ok(exe_dir()?.join("backup"))
+    Ok(data_dir()?.join("backup"))
 }
 
 /// 版本检查（前端启动门禁）：无数据源 → 默认 ok 报告；否则执行检查/升级并返回报告。
@@ -491,9 +512,18 @@ pub fn mcp_set_config(s: McpSettings) -> AppResult<()> {
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "macos")]
     #[test]
-    fn db_path_returns_exe_dir_db() {
-        let exe = exe_dir().unwrap();
+    fn macos_data_and_backups_share_user_directory() {
+        let expected = PathBuf::from(std::env::var_os("HOME").unwrap())
+            .join("Library/Application Support/com.todo-kanban.app");
+        assert_eq!(data_dir().unwrap(), expected);
+        assert_eq!(backup_dir().unwrap(), expected.join("backup"));
+    }
+
+    #[test]
+    fn db_path_returns_data_dir_db() {
+        let exe = data_dir().unwrap();
         let path = db_path().unwrap();
         assert_eq!(path, exe.join("todo-kanban.db"));
     }

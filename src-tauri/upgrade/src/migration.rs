@@ -33,6 +33,13 @@ fn column_exists(conn: &Connection, table: &str, column: &str) -> rusqlite::Resu
 /// 逐级迁移到 CURRENT_VERSION（需在建表之后调用；版本判定由 upgrade::ensure 负责）
 pub fn migrate(conn: &Connection) -> UpgradeResult<MigrateOutcome> {
     let from = read_version(conn)?;
+    // 防御性拦截：更高版本的数据文件绝不能被改写成当前版本标记（否则 TooNew 信号永久消失）
+    if from > CURRENT_VERSION {
+        return Err(UpgradeError::TooNew {
+            data_version: from,
+            max_supported: CURRENT_VERSION,
+        });
+    }
     if from == CURRENT_VERSION {
         return Ok(MigrateOutcome {
             from,
@@ -46,8 +53,9 @@ pub fn migrate(conn: &Connection) -> UpgradeResult<MigrateOutcome> {
     let tx = conn.unchecked_transaction().map_err(UpgradeError::from)?;
 
     if from < 2 {
-        // v1 → v2：app_meta 已由建表建好；存量数字标记清洗由 repair_duplicate_tags 承担
-        tx.execute_batch("DELETE FROM app_meta")?;
+        // v1 → v2：app_meta 已由建表建好；只清序号计数，其余键（seeded / data_version）
+        // 必须保留——否则启动自举会把既有库误判成空库并用演示数据覆盖用户数据。
+        tx.execute_batch("DELETE FROM app_meta WHERE key = 'next_seq'")?;
     }
     if from < 4 {
         // v3 → v4：projects 补 GitLab Token 两列（幂等保护）

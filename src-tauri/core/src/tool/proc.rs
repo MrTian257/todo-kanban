@@ -7,12 +7,15 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// 统一子进程构造器：quiet（无控制台窗口）
 pub fn quiet_command(program: &str) -> Command {
-    let mut cmd = Command::new(program);
+    let cmd = Command::new(program);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
+        let mut cmd = cmd;
         cmd.creation_flags(CREATE_NO_WINDOW);
+        return cmd;
     }
+    #[cfg(not(windows))]
     cmd
 }
 

@@ -49,9 +49,28 @@ pub fn ensure(
         write_app_meta_version(conn, CURRENT_VERSION)?;
         return Ok(build_ok_report(CURRENT_VERSION));
     }
-    // 版本已是最新：确保 app_meta 与 PRAGMA user_version 同步（便于诊断）
-    write_app_meta_version(conn, CURRENT_VERSION)?;
+    // 版本已是最新：app_meta 与 PRAGMA user_version 已同步则不再写库
+    // （open_and_init 在每次读取路径都会走到这里，无条件 UPSERT 会让「读」变成「写」）
+    sync_app_meta_version(conn)?;
     Ok(build_ok_report(data_version))
+}
+
+/// 仅在 app_meta 记录与目标版本不一致时写入（避免读路径持有写锁）
+fn sync_app_meta_version(conn: &Connection) -> UpgradeResult<()> {
+    use crate::version::APP_META_DATA_VERSION_KEY;
+    use rusqlite::OptionalExtension;
+    let stored: Option<String> = conn
+        .query_row(
+            "SELECT value FROM app_meta WHERE key = ?1",
+            [APP_META_DATA_VERSION_KEY],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(UpgradeError::from)?;
+    if stored.as_deref() != Some(CURRENT_VERSION.to_string().as_str()) {
+        write_app_meta_version(conn, CURRENT_VERSION)?;
+    }
+    Ok(())
 }
 
 /// 只读版本检查（不迁移、不备份）：返回当前数据版本与软件支持范围。

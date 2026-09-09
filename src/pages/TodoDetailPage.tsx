@@ -1,3 +1,5 @@
+import { useEditingGuard } from "@/lib/editingGuard";
+import { DirectoryInput } from "@/components/project/DirectoryInput";
 // 待办详情页（新建/编辑一体）：中间标题 + Markdown 源文与预览 备注；右侧字段栏
 // 字段栏：代码目录 Select / 仓库状态条 / 分支 BranchSelect（可新建，切出源默认生产分支）/ 泳道 Select / 日期范围 / 卡点
 
@@ -176,10 +178,7 @@ function TodoDetailForm() {
   }, [draftKey, watch, getValues]);
   const clearDraft = () => { try { localStorage.removeItem(draftKey); } catch { /* Surface future save failures through draftError. */ } setDraft(null); };
 
-  React.useEffect(() => {
-    useAppStore.setState({ editingDirty: isDirty });
-    return () => { useAppStore.setState({ editingDirty: false }); };
-  }, [isDirty]);
+  useEditingGuard(isDirty && !finishedSave.current);
 
   const [customRepo, setCustomRepo] = React.useState(false);
   const [saveError, setSaveError] = React.useState("");
@@ -190,29 +189,7 @@ function TodoDetailForm() {
     descriptionBusy.current = busy;
     setDescriptionProcessing(busy);
   }, []);
-  React.useEffect(() => {
-    if (!isDirty) return;
-    const guard = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ""; };
-    const guardLink = (e: MouseEvent) => {
-      const link = e.target instanceof Element ? e.target.closest<HTMLAnchorElement>("a[href]") : null;
-      if (!link || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-      if (link.closest(".md-instant")) return;
-      if (link.hasAttribute("download") || (link.target && link.target !== "_self")) return;
-      const href = link.getAttribute("href") ?? "";
-      // Markdown fragment links scroll inside the preview; HashRouter links navigate.
-      if (link.closest(".md-editor") && href.startsWith("#")) return;
-      const destination = new URL(link.href, window.location.href);
-      if (!["http:", "https:"].includes(destination.protocol) || destination.href === window.location.href) return;
-      if (!window.confirm("还有未保存的修改，确定离开？")) {
-        e.preventDefault();
-        e.stopPropagation();
-      }
-    };
-    window.addEventListener("beforeunload",guard);
-    document.addEventListener("click",guardLink,true);
-    return () => {window.removeEventListener("beforeunload",guard);document.removeEventListener("click",guardLink,true);};
-  },[isDirty]);
-  const leave = () => {if (!isDirty || window.confirm("还有未保存的修改，确定离开？")) navigate(`/project/${projectId}`);};
+  const leave = () => navigate(`/project/${projectId}`);
   const repoPath = watch("repoPath");
   const createBranch = watch("createBranch");
   const branchValue = watch("branch");
@@ -340,6 +317,7 @@ function TodoDetailForm() {
     finishedSave.current = true;
     dirtyRef.current = false;
     clearDraft();
+    useAppStore.setState({ editingDirty: false });
     toast.success(isNew ? "待办已创建" : "待办已保存");
     navigate(`/project/${project.id}`);
     } catch(e) {setSaveError(String(e));toast.error("保存失败，请重试");} finally {submitLock.current=false;}
@@ -463,9 +441,8 @@ function TodoDetailForm() {
               <option value="__custom__">自定义路径…</option>
             </select>
             {customRepo && (
-              <Input
-                placeholder="输入自定义代码目录（git 仓库根目录）"
-                value={repoPath} onChange={(e) => setValue("repoPath", e.target.value, {shouldDirty:true,shouldValidate:true})}
+              <DirectoryInput id="custom-repo-path"
+                value={repoPath} onChange={(value) => setValue("repoPath", value, {shouldDirty:true,shouldValidate:true})}
                 autoFocus
               />
             )}

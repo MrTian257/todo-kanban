@@ -1,7 +1,10 @@
+import { isMacOS, shortcutLabel } from "@/lib/platform";
 // 全局侧边导航壳（shadcn sidebar 简化版）：品牌 + 工作台导航 + 明暗切换 + 设置入口
 // 无边框窗口：顶栏 data-tauri-drag-region 拖动窗口 + 自绘最小化/最大化/关闭；侧栏可拖宽 + 收起/展开。
 
 import React from "react";
+import { listen } from "@tauri-apps/api/event";
+import { toast } from "sonner";
 import { useNavigate, useLocation, NavLink } from "react-router-dom";
 import { useTheme } from "next-themes";
 import {
@@ -71,7 +74,7 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
     const change = () => { setNarrow(media.matches); setMobileExpanded(false); };
     media.addEventListener("change", change);
     const key = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k" && !(event.target instanceof Element && event.target.closest("input,textarea,[contenteditable=true]"))) {
+      if (!event.isComposing && ((isMacOS && event.metaKey && event.shiftKey && event.key.toLowerCase() === "f") || (!isMacOS && event.ctrlKey && event.key.toLowerCase() === "k" && !(event.target instanceof Element && event.target.closest("input,textarea,[contenteditable=true]"))))) {
         event.preventDefault(); searchRef.current?.focus();
       }
     };
@@ -100,7 +103,7 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
       .onResized(() => {
         appWindow.isMaximized().then((m) => alive && setMaximized(m)).catch(() => {});
       })
-      .then((u) => (unlisten = u))
+      .then((u) => { if (alive) unlisten = u; else u(); })
       .catch(() => {});
     return () => {
       alive = false;
@@ -132,6 +135,23 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
   };
 
   const toggleCollapsed = () => { if (narrow) setMobileExpanded(value => !value); else setCollapsed(value => !value); };
+  React.useEffect(() => {
+    if (!isTauri() || !isMacOS) return;
+    let alive = true;
+    let stop: (() => void) | undefined;
+    void listen<string>("app-menu", ({ payload }) => {
+      if (!alive) return;
+      if (["focus", "todos", "projects", "settings"].includes(payload)) navigate(`/${payload}`);
+      else if (payload === "search") { searchRef.current?.focus(); searchRef.current?.select(); }
+      else if (payload === "sidebar") {
+        if (narrow) setMobileExpanded(value => !value);
+        else setCollapsed(value => !value);
+      } else if (payload === "theme") setTheme(resolvedTheme === "dark" ? "light" : "dark");
+    }).then(unlisten => { if (alive) stop = unlisten; else unlisten(); })
+      .catch(error => toast.error(`菜单连接失败：${String(error)}`));
+    return () => { alive = false; stop?.(); };
+  }, [navigate, narrow, resolvedTheme, setTheme]);
+
   const appWindow = isTauri() ? getCurrentWindow() : null;
 
   return (
@@ -155,14 +175,14 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
         </Tooltip>
 
         <form className="mx-2 flex w-full min-w-0 max-w-sm items-center gap-1" onSubmit={event => { event.preventDefault(); navigate(`/todos?q=${encodeURIComponent(search)}`); }}>
-          <Input ref={searchRef} aria-label="全局搜索" value={search} onChange={event => setSearch(event.target.value)} placeholder="搜索任务 · ⌘/Ctrl K" className="h-7 min-w-0 text-xs" />
+          <Input ref={searchRef} aria-label="全局搜索" value={search} onChange={event => setSearch(event.target.value)} placeholder={`搜索任务 · ${(isMacOS ? "⌘⇧F" : shortcutLabel("K"))}`} className="h-7 min-w-0 text-xs" />
           <Button type="submit" variant="ghost" size="icon" className="h-7 w-7" aria-label="搜索"><Search className="h-3.5 w-3.5" /></Button>
         </form>
 
         {/* 拖动区：点击穿透到窗口移动；双击切换最大化（Tauri 内建） */}
         <div data-tauri-drag-region className="h-full min-w-0 flex-1" />
 
-        {appWindow && (
+        {appWindow && !isMacOS && (
           <div className="flex shrink-0 items-center gap-0.5">
             <Tooltip>
               <TooltipTrigger asChild>

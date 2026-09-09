@@ -16,6 +16,8 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-window-state = "2"
 tauri-plugin-log = "2"
 # 右键菜单「粘贴」依赖：读系统剪贴板（前端经 plugin:clipboard-manager|read_text 调用）
 tauri-plugin-clipboard-manager = "2"
@@ -23,6 +25,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 log = "0.4"
 todo-kanban-core = { path = "core" }
+
+# macOS：接管 applicationShouldTerminate: 让 Dock「退出」也走保存保护
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder"] }
 
 [workspace]
 members = ["config", "core", "upgrade", "mcp-server"]

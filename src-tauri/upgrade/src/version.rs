@@ -45,6 +45,13 @@ pub struct VersionReport {
     pub to: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub steps: Option<Vec<MigrationStep>>,
+    /// 依赖版本（由壳 crate 在命令层补齐；浏览器预览为空）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tauri_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sqlite_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_version: Option<String>,
 }
 
 /// app_meta 中记录数据版本的键
@@ -108,6 +115,9 @@ pub fn build_upgraded_report(
         from: Some(outcome.from),
         to: Some(outcome.to),
         steps: Some(steps),
+        tauri_version: None,
+        sqlite_version: None,
+        git_version: None,
     }
 }
 
@@ -122,6 +132,9 @@ pub fn build_ok_report(data_version: i64) -> VersionReport {
         from: None,
         to: None,
         steps: None,
+        tauri_version: None,
+        sqlite_version: None,
+        git_version: None,
     }
 }
 
@@ -136,5 +149,8 @@ pub fn build_incompatible_report(status: VersionStatus, data_version: i64) -> Ve
         from: None,
         to: None,
         steps: None,
+        tauri_version: None,
+        sqlite_version: None,
+        git_version: None,
     }
 }

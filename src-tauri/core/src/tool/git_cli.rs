@@ -12,6 +12,18 @@ use crate::tool::proc::quiet_command;
 pub const GIT_TIMEOUT: Duration = Duration::from_secs(30);
 const FIELD_SEP: char = '\x1f';
 
+/// 系统 git 版本（设置页展示用；失败返回 None，不影响主流程）
+pub fn git_version() -> Option<String> {
+    let out = quiet_command("git").arg("--version").output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    text.trim()
+        .strip_prefix("git version ")
+        .map(|v| v.to_string())
+}
+
 /// 执行 git 命令（路径已存在的仓库；错误转中文 Git 错误）
 pub fn run_git(repo: &str, args: &[&str]) -> AppResult<String> {
     let mut cmd = quiet_command("git");
@@ -32,35 +44,60 @@ pub fn run_git(repo: &str, args: &[&str]) -> AppResult<String> {
         ))
     })?;
 
+    // 必须先并发抽干 stdout/stderr：管道缓冲写满后子进程会阻塞在 write，
+    // 若先 try_wait 再读管道，大输出（rev-list --all / log --all 等）会一直等不到退出，
+    // 最终被 30s 超时误杀。读取线程 + try_wait 轮询既避免死锁又保留超时能力。
+    let mut out_pipe = child
+        .stdout
+        .take()
+        .ok_or_else(|| AppError::git("无法读取 git 标准输出"))?;
+    let mut err_pipe = child
+        .stderr
+        .take()
+        .ok_or_else(|| AppError::git("无法读取 git 标准错误"))?;
+    let out_reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = out_pipe.read_to_end(&mut buf);
+        buf
+    });
+    let err_reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = err_pipe.read_to_end(&mut buf);
+        buf
+    });
+
     let start = Instant::now();
+    let mut timed_out = false;
     loop {
         match child.try_wait() {
             Ok(Some(_)) => break,
             Ok(None) => {
                 if start.elapsed() > GIT_TIMEOUT {
+                    // 超时必须 kill + wait，否则留下僵尸/孤儿 git 进程
                     let _ = child.kill();
-                    return Err(AppError::git("git 命令执行超时（30s）"));
+                    let _ = child.wait();
+                    timed_out = true;
+                    break;
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
-            Err(e) => return Err(AppError::Io(e)),
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(AppError::Io(e));
+            }
         }
     }
 
-    let mut out = String::new();
-    child
-        .stdout
-        .take()
-        .map(|mut s| s.read_to_string(&mut out))
-        .transpose()
-        .map_err(AppError::Io)?;
-    let mut err = String::new();
-    child
-        .stderr
-        .take()
-        .map(|mut s| s.read_to_string(&mut err))
-        .transpose()
-        .map_err(AppError::Io)?;
+    // 读取线程随管道关闭自然结束（超时分支已 kill 子进程）
+    let out_bytes = out_reader.join().unwrap_or_default();
+    let err_bytes = err_reader.join().unwrap_or_default();
+    if timed_out {
+        return Err(AppError::git("git 命令执行超时（30s）"));
+    }
+    // git 输出可能是 GBK 等非 UTF-8（i18n.commitEncoding），按有损解码避免整条命令失败
+    let out = String::from_utf8_lossy(&out_bytes).into_owned();
+    let err = String::from_utf8_lossy(&err_bytes).into_owned();
 
     let status = child.wait().map_err(AppError::Io)?;
     if !status.success() {
@@ -130,6 +167,10 @@ pub fn validate_branch_name(name: &str) -> AppResult<()> {
     if name.trim().is_empty() {
         return Err(AppError::invalid("分支名不能为空"));
     }
+    // 前导 '-' 会被 git 解析成选项（如 `git checkout -f`），必须拒绝（git 自身也不允许这种分支名）
+    if name.starts_with('-') {
+        return Err(AppError::invalid("分支名不能以 - 开头"));
+    }
     let invalid = ['#', '@', '%', '&', '*'];
     if name
         .chars()
@@ -174,10 +215,11 @@ mod tests {
         // 合法：常规 git 分支名
         assert!(validate_branch_name("feature/todo-12").is_ok());
         assert!(validate_branch_name("main").is_ok());
-        // 放宽后合法：.. // 前导 - : ~ ^ 等任意合法字符
+        // 放宽后合法：.. // : ~ ^ 等任意合法字符
         assert!(validate_branch_name("a..b").is_ok());
         assert!(validate_branch_name("a//b").is_ok());
-        assert!(validate_branch_name("-leading").is_ok());
+        // 前导 - 必须拒绝：会被 git 当成选项（注入面），git 自身也不允许
+        assert!(validate_branch_name("-leading").is_err());
         assert!(validate_branch_name("hotfix:wip").is_ok());
         assert!(validate_branch_name("v1.0.x").is_ok());
         assert!(validate_branch_name("修复登录问题").is_ok());

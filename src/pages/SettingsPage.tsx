@@ -234,31 +234,30 @@ export function SettingsPage() {
           </CardHeader>
           <CardContent className="space-y-2 text-sm text-muted-foreground">
             <p>• 开源地址: <code className="font-mono">git clone https://github.com/MrTian257/todo-kanban.git</code></p>
-            <p>
-              • 数据来源：桌面端 SQLite（固定路径为程序运行目录 <code>todo-kanban.db</code>）；
+            <div>
+              • 数据来源：桌面端 SQLite（固定路径为数据目录 <code>todo-kanban.db</code>（macOS：~/Library/Application Support/com.todo-kanban.app；其他平台：程序目录））；
               当前数据版本 <Badge variant="outline" className="ml-0.5 font-mono">v{version?.dataVersion ?? "…"}</Badge>
-              （软件支持 v{version?.appMin ?? 1} ~ v{version?.appMax ?? 7}）。
-            </p>
+              （软件支持 v{version?.appMin ?? 1} ~ v{version?.appMax ?? 8}）。
+            </div>
             <p>
               • 数据升级：启动时自动检查数据版本——兼容则先硬备份到运行目录 <code>backup/</code> 再逐级升级；
               数据由更高版本创建或版本过旧时拒绝打开并提示（见设置页顶部错误页）。
             </p>
             <p>• 浏览器预览模式无本地存储（演示数据只读），完整功能仅桌面端。</p>
             <p>• Git 操作依赖本机 <code>git</code>（PATH，版本 ≥ 2.20）；GitLab 远端增强可选系统 <code>curl</code>。</p>
-            <p>
+            <div>
               • 软件版本 <Badge variant="secondary">{version?.softwareVersion ?? "2.0.0"}</Badge>（泳道看板） 当前主题皮肤：
               <Badge variant="outline" className="ml-1">{SKINS.find((s) => s.id === skin)?.name}</Badge>
-            </p>
-            <p>
-              • 依赖版本:
+            </div>
+            <div className="space-y-1">
+              <p>• 依赖版本（未知项显示 —，不再用占位版本号）：</p>
               <p>
-                • Tauri-UI {version?.tauriVersion ?? "1.0.0"}（桌面端）； <br/>
-                • React {version?.reactVersion ?? "18.0.0"}（浏览器端）； <br/>
-                • SQLite {version?.sqliteVersion ?? "3.0.0"}（桌面端）； <br/>
-                • Git {version?.gitVersion ?? "2.20.0"}（桌面端）； <br/>
-                • vditor {version?.vditor ?? "15.0.0"}（远端）； <br/>
+                • Tauri {version?.tauriVersion ?? "—"}（桌面端）； <br/>
+                • React {React.version}（前端）； <br/>
+                • SQLite {version?.sqliteVersion ?? "—"}（桌面端）； <br/>
+                • Git {version?.gitVersion ?? "—"}（桌面端）； <br/>
               </p>
-            </p>
+            </div>
           </CardContent>
         </Card>
       </div>

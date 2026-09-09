@@ -1,3 +1,5 @@
+import { useEditingGuard } from "@/lib/editingGuard";
+import { DirectoryInput } from "@/components/project/DirectoryInput";
 // 项目表单（RHF + zod）：名称*、目录、仓库地址与 Token、生产分支名、分支规则（可视化） 
 // 泳道配置使用独立 SwimlaneManageDialog（看板内管理）
 
@@ -79,16 +81,24 @@ export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
   const newProjectId = React.useRef(newId());
   React.useEffect(() => { if (open) newProjectId.current = newId(); }, [open]);
 
+  const [discardOpen, setDiscardOpen] = React.useState(false);
+  const [ruleDirty, setRuleDirty] = React.useState(false);
   const [showToken, setShowToken] = React.useState(false);
-  const [ruleEnabled, setRuleEnabled] = React.useState(true);
-  const [steps, setSteps] = React.useState<BranchRuleStep[]>(BRANCH_RULE_TEMPLATE.map((s) => ({ ...s })));
-  const [defs, setDefs] = React.useState<BranchDef[]>(BRANCH_DEF_TEMPLATE.map((b) => ({ ...b })));
+  const [ruleEnabled, setRuleEnabledRaw] = React.useState(true);
+  const [steps, setStepsRaw] = React.useState<BranchRuleStep[]>(BRANCH_RULE_TEMPLATE.map((s) => ({ ...s })));
+  const [defs, setDefsRaw] = React.useState<BranchDef[]>(BRANCH_DEF_TEMPLATE.map((b) => ({ ...b })));
+
+  const setRuleEnabled: typeof setRuleEnabledRaw = value => { setRuleDirty(true); setRuleEnabledRaw(value); };
+  const setSteps: typeof setStepsRaw = value => { setRuleDirty(true); setStepsRaw(value); };
+  const setDefs: typeof setDefsRaw = value => { setRuleDirty(true); setDefsRaw(value); };
 
   const {
     register,
+    watch,
+    setValue,
     handleSubmit,
     reset,
-    formState: { errors, isSubmitting },
+    formState: { errors, isSubmitting, isDirty },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
     defaultValues: {
@@ -106,6 +116,7 @@ export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
 
   React.useEffect(() => {
     if (open) {
+      setRuleDirty(false);
       setShowToken(false);
       reset({
         name: project?.name ?? "",
@@ -118,8 +129,8 @@ export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
         backendRepoToken: project?.backendRepoToken ?? "",
         productionBranch: project?.productionBranch ?? "",
       });
-      setRuleEnabled(project?.branchRule?.enabled ?? true);
-      setSteps(
+      setRuleEnabledRaw(project?.branchRule?.enabled ?? true);
+      setStepsRaw(
         project?.branchRule
           ? project.branchRule.steps.map((s) => ({ ...s }))
           : BRANCH_RULE_TEMPLATE.map((s) => ({ ...s })),
@@ -129,13 +140,19 @@ export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
       const merged = BRANCH_ROLES.map(
         (r) => existing.find((b) => b.role === r) ?? { role: r, name: BRANCH_ROLE_LABEL[r], code: "" },
       );
-      setDefs(
+      setDefsRaw(
         existing.length > 0
           ? merged
           : BRANCH_DEF_TEMPLATE.map((b) => ({ ...b })),
       );
     }
   }, [open, project, reset]);
+
+  useEditingGuard(open && (isDirty || ruleDirty));
+  const requestOpenChange = (next: boolean) => {
+    if (!next && (isDirty || ruleDirty)) { setDiscardOpen(true); return; }
+    onOpenChange(next);
+  };
 
   const onSubmit = async (values: FormValues) => {
     try {
@@ -196,7 +213,8 @@ export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <>
+    <Dialog open={open} onOpenChange={requestOpenChange}>
       <DialogContent className="flex h-[min(90vh,820px)] max-h-[90vh] w-[calc(100%-32px)] max-w-2xl flex-col gap-0 overflow-clip rounded-2xl bg-card p-0">
         <DialogHeader className="shrink-0 border-b px-7 py-6">
           <DialogTitle className="flex items-center gap-3 text-xl"><FolderKanban className="h-5 w-5 text-primary"/>{isEdit ? "编辑项目" : "新建项目"}</DialogTitle>
@@ -215,15 +233,15 @@ export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="space-y-2 sm:col-span-2">
               <Label htmlFor="projectDir">项目根目录</Label>
-              <Input id="projectDir" placeholder="C:\work\project" {...register("projectDir")} />
+              <DirectoryInput id="projectDir" value={watch("projectDir")} onChange={value => setValue("projectDir", value, { shouldDirty: true, shouldValidate: true })} />
             </div>
             <div className="space-y-2">
               <Label htmlFor="frontendDir">前端代码目录</Label>
-              <Input id="frontendDir" placeholder="C:\work\project\web" {...register("frontendDir")} />
+              <DirectoryInput id="frontendDir" value={watch("frontendDir")} onChange={value => setValue("frontendDir", value, { shouldDirty: true, shouldValidate: true })} />
             </div>
             <div className="space-y-2">
               <Label htmlFor="backendDir">后端代码目录</Label>
-              <Input id="backendDir" placeholder="C:\work\project\server" {...register("backendDir")} />
+              <DirectoryInput id="backendDir" value={watch("backendDir")} onChange={value => setValue("backendDir", value, { shouldDirty: true, shouldValidate: true })} />
             </div>
             <div className="space-y-2">
               <Label htmlFor="productionBranch">生产分支名</Label>
@@ -347,7 +365,7 @@ export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
 
           </div></details></div>
           <DialogFooter className="shrink-0 border-t bg-muted/30 px-7 py-4">
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+            <Button type="button" variant="outline" onClick={() => requestOpenChange(false)}>
               取消
             </Button>
             <Button type="submit" disabled={isSubmitting}>{isEdit ? "保存" : "创建"}</Button>
@@ -355,5 +373,13 @@ export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
         </form>
       </DialogContent>
     </Dialog>
+    <Dialog open={discardOpen} onOpenChange={setDiscardOpen}>
+      <DialogContent><DialogTitle>放弃未保存的项目修改？</DialogTitle>
+        <DialogDescription>项目表单不会自动保存，关闭后这些修改将丢失。</DialogDescription>
+        <div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setDiscardOpen(false)}>继续编辑</Button>
+          <Button onClick={() => { setDiscardOpen(false); onOpenChange(false); }}>放弃修改</Button></div>
+      </DialogContent>
+    </Dialog>
+    </>
   );
 }
