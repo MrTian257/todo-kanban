@@ -71,7 +71,15 @@ fn save_state(state: DbState, expected: &DbState) -> AppResult<()> {
         return Err(AppError::invalid("未配置数据文件，无法保存"));
     };
     let (conn, _report) = db::open_and_init(&path, &mcp_backup_dir())?;
-    db::save_state_checked(&conn, &state, expected).map(|_| ())
+    let (_saved, trash) = db::save_state_checked(&conn, &state, expected)?;
+    // 附件联动：被删任务的附件文件移入数据文件旁 attachments/trash/（按实际 db 路径定位根目录）
+    if !trash.is_empty() {
+        todo_kanban_core::svc::attachments::move_to_trash_at(
+            &todo_kanban_core::svc::attachments::attachments_root_at(&path),
+            &trash,
+        );
+    }
+    Ok(())
 }
 
 /// MCP server 进程的备份目录：exe 所在目录/backup（与 app 同目录部署时共用）

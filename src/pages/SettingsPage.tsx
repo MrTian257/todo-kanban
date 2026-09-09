@@ -1,4 +1,4 @@
-// 设置：明暗、主题皮肤（5 套）、侧边导航、MCP 集成、数据说明
+// 设置：明暗、主题皮肤（5 套）、MCP 集成、附件维护、数据说明
 
 import * as React from "react";
 import { useTheme } from "next-themes";
@@ -12,11 +12,13 @@ import {
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Bot, Eye, EyeOff } from "lucide-react";
+import { Bot, Eye, EyeOff, Paperclip } from "lucide-react";
 import { toast } from "sonner";
+import { gcOrphanAttachments, migrateInlineImages } from "@/lib/attachments";
 import { DEFAULT_MCP_TOKEN, mcpGetConfig, mcpSetConfig } from "@/lib/mcp";
 import { useSkin, SKINS } from "@/lib/theme";
 import { cn } from "@/lib/utils";
@@ -63,10 +65,55 @@ export function SettingsPage() {
     }
   };
 
+  // 附件维护：迁移历史内嵌图片 / 清理无效附件（均带确认对话框）
+  const [migrateOpen, setMigrateOpen] = React.useState(false);
+  const [gcOpen, setGcOpen] = React.useState(false);
+  const [maintaining, setMaintaining] = React.useState(false);
+
+  const runMigrate = async () => {
+    setMaintaining(true);
+    try {
+      const summary = await migrateInlineImages();
+      if (summary.failedTodos.length > 0) {
+        toast.warning(
+          "已迁移 " + summary.migratedImages + " 张图片；" + summary.failedTodos.length + " 条任务失败（" + summary.failedTodos[0].reason + "）",
+        );
+      } else {
+        toast.success(
+          summary.scannedTodos === 0
+            ? "未发现内嵌图片，无需迁移"
+            : "已迁移 " + summary.migratedImages + " 张图片为附件（" + summary.scannedTodos + " 条任务）",
+        );
+      }
+      setMigrateOpen(false);
+    } catch (e) {
+      toast.error(String(e));
+    } finally {
+      setMaintaining(false);
+    }
+  };
+
+  const runGc = async () => {
+    setMaintaining(true);
+    try {
+      const summary = await gcOrphanAttachments();
+      toast.success(
+        summary.removedAttachments === 0
+          ? "没有需要清理的附件"
+          : "已清理 " + summary.removedAttachments + " 个附件（" + summary.movedFiles + " 个文件移入回收目录）",
+      );
+      setGcOpen(false);
+    } catch (e) {
+      toast.error(String(e));
+    } finally {
+      setMaintaining(false);
+    }
+  };
+
   return (
     <div className="h-full w-full overflow-y-auto bg-background p-6">
       <h1 className="mb-4 text-xl font-semibold">设置</h1>
-      <div className="max-w-2xl space-y-4">
+      <div className="w-full flex flex-wrap space-y-4">
         <Card>
           <CardHeader>
             <CardTitle>外观</CardTitle>
@@ -105,13 +152,6 @@ export function SettingsPage() {
               </div>
             </div>
           </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>侧边导航</CardTitle>
-            <CardDescription>工作台：今日焦点 / Todo List / 项目资料；底部为明暗切换与设置入口。</CardDescription>
-          </CardHeader>
         </Card>
 
         <Card>
@@ -164,9 +204,36 @@ export function SettingsPage() {
 
         <Card>
           <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Paperclip className="h-4 w-4 text-primary" />
+              附件维护
+            </CardTitle>
+            <CardDescription>
+              任务图片以文件形式存放在运行目录 attachments/&lt;任务ID&gt;/ 下（备注中仅保留 attachment:// 短引用，不再写入数据库）；历史内嵌图片可一键迁移。
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <Button variant="outline" onClick={() => setMigrateOpen(true)} disabled={maintaining}>
+                迁移历史内嵌图片
+              </Button>
+              <Button variant="outline" onClick={() => setGcOpen(true)} disabled={maintaining}>
+                清理无效附件
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              迁移按任务逐条进行（单条全部成功才生效，失败任务保留原文并提示原因），完成后看板数据自动刷新；
+              清理针对关联任务已删除的附件，文件移入 attachments/trash/ 以便找回。
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
             <CardTitle>数据说明</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2 text-sm text-muted-foreground">
+            <p>• 开源地址: <code className="font-mono">git clone https://github.com/MrTian257/todo-kanban.git</code></p>
             <p>
               • 数据来源：桌面端 SQLite（固定路径为程序运行目录 <code>todo-kanban.db</code>）；
               当前数据版本 <Badge variant="outline" className="ml-0.5 font-mono">v{version?.dataVersion ?? "…"}</Badge>
@@ -182,9 +249,46 @@ export function SettingsPage() {
               • 软件版本 <Badge variant="secondary">{version?.softwareVersion ?? "2.0.0"}</Badge>（泳道看板） 当前主题皮肤：
               <Badge variant="outline" className="ml-1">{SKINS.find((s) => s.id === skin)?.name}</Badge>
             </p>
+            <p>
+              • 依赖版本:
+              <p>
+                • Tauri-UI {version?.tauriVersion ?? "1.0.0"}（桌面端）； <br/>
+                • React {version?.reactVersion ?? "18.0.0"}（浏览器端）； <br/>
+                • SQLite {version?.sqliteVersion ?? "3.0.0"}（桌面端）； <br/>
+                • Git {version?.gitVersion ?? "2.20.0"}（桌面端）； <br/>
+                • vditor {version?.vditor ?? "15.0.0"}（远端）； <br/>
+              </p>
+            </p>
           </CardContent>
         </Card>
       </div>
+
+      <Dialog open={migrateOpen} onOpenChange={(open) => { if (!maintaining) setMigrateOpen(open); }}>
+        <DialogContent>
+          <DialogTitle>迁移历史内嵌图片</DialogTitle>
+          <DialogDescription>
+            扫描全部任务的描述，把内嵌 base64 图片转为附件文件（单张上限 5 MiB，仅支持 PNG、JPEG、GIF、WebP）。
+            逐条任务全部成功才生效，失败任务保留原文。
+          </DialogDescription>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setMigrateOpen(false)} disabled={maintaining}>取消</Button>
+            <Button onClick={runMigrate} disabled={maintaining}>{maintaining ? "迁移中…" : "开始迁移"}</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={gcOpen} onOpenChange={(open) => { if (!maintaining) setGcOpen(open); }}>
+        <DialogContent>
+          <DialogTitle>清理无效附件</DialogTitle>
+          <DialogDescription>
+            移除关联任务已删除的附件记录，并把对应文件移入 attachments/trash/（不物理删除，可手动找回）。
+            请先保存所有正在编辑的任务，避免误清粘贴后尚未保存的图片。
+          </DialogDescription>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setGcOpen(false)} disabled={maintaining}>取消</Button>
+            <Button onClick={runGc} disabled={maintaining}>{maintaining ? "清理中…" : "开始清理"}</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

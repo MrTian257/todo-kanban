@@ -8,7 +8,7 @@ use rusqlite::{Connection, OptionalExtension};
 
 use crate::error::{AppError, AppResult};
 use crate::models::{DbState, DbTodo};
-use crate::svc::branch_rule;
+use crate::svc::{attachments, branch_rule};
 use todo_kanban_upgrade::error::UpgradeError;
 use todo_kanban_upgrade::version::build_incompatible_report;
 /// 重导出升级包类型（MCP server 等依赖 core 的消费方使用）
@@ -107,16 +107,26 @@ pub fn load_state(conn: &Connection) -> AppResult<DbState> {
 }
 
 /// 差异写落库（单事务）：UPSERT 变更行（updated_at 较新者胜）+ 差集删除 + seq/tag 收敛 + 提交全局去重 + 泳道校验
-pub fn save_state(conn: &Connection, state: &DbState) -> AppResult<()> {
-    save_state_inner(conn, state, None).map(|_| ())
+/// 返回待移入 trash 的附件路径清单（调用方负责移动文件；种子场景直接忽略）
+pub fn save_state(conn: &Connection, state: &DbState) -> AppResult<Vec<String>> {
+    save_state_inner(conn, state, None).map(|(_, trash)| trash)
 }
 
 /// Compare the caller's read snapshot under a cross-process SQLite write lock.
-pub fn save_state_checked(conn: &Connection, state: &DbState, expected: &DbState) -> AppResult<DbState> {
+/// 返回 (保存后快照, 待移入 trash 的附件路径清单)——调用方负责在提交后移动文件。
+pub fn save_state_checked(
+    conn: &Connection,
+    state: &DbState,
+    expected: &DbState,
+) -> AppResult<(DbState, Vec<String>)> {
     save_state_inner(conn, state, Some(expected))
 }
 
-fn save_state_inner(conn: &Connection, state: &DbState, expected: Option<&DbState>) -> AppResult<DbState> {
+fn save_state_inner(
+    conn: &Connection,
+    state: &DbState,
+    expected: Option<&DbState>,
+) -> AppResult<(DbState, Vec<String>)> {
     // 分支规则校验（保存前兜底，与前端 zod 同规则）
     for p in &state.projects {
         branch_rule::validate(&p.branch_rule)?;
@@ -219,6 +229,9 @@ fn save_state_inner(conn: &Connection, state: &DbState, expected: Option<&DbStat
         row::upsert_todo(&tx, &todo)?;
     }
 
+    // note 引用补链：为备注中出现的附件引用补建任务关系（不删除既有关系）
+    attachments::link_note_refs(&tx, &state.todos)?;
+
     // 差集删除：库中存在但传入快照缺失的行（多窗口以 2s 轮询 + updated_at 较新者胜收敛）
     let exist_ids: HashSet<&str> = existing.projects.iter().map(|p| p.id.as_str()).collect();
     let in_ids: HashSet<&str> = state.projects.iter().map(|p| p.id.as_str()).collect();
@@ -227,13 +240,24 @@ fn save_state_inner(conn: &Connection, state: &DbState, expected: Option<&DbStat
     }
     let exist_ids: HashSet<&str> = existing.todos.iter().map(|t| t.id.as_str()).collect();
     let in_ids: HashSet<&str> = state.todos.iter().map(|t| t.id.as_str()).collect();
-    for id in exist_ids.difference(&in_ids) {
+    let deleted_todo_ids: Vec<String> = exist_ids
+        .difference(&in_ids)
+        .map(|id| id.to_string())
+        .collect();
+    for id in &deleted_todo_ids {
         tx.execute("DELETE FROM todos WHERE id = ?1", [id])?;
     }
 
+    // 附件联动（事务内）：删除被删任务的关系 + 无关系残留的附件行；文件由调用方提交后移入 trash
+    let trash_paths = if deleted_todo_ids.is_empty() {
+        Vec::new()
+    } else {
+        attachments::on_todos_deleted(&tx, &deleted_todo_ids)?
+    };
+
     let saved = row::load_state_from_conn(&tx)?;
     tx.commit()?;
-    Ok(saved)
+    Ok((saved, trash_paths))
 }
 
 fn ensure_next_seq(conn: &Connection) -> AppResult<()> {

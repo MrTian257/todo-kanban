@@ -3,10 +3,19 @@ import Vditor from "vditor";
 import { useTheme } from "next-themes";
 import "vditor/dist/index.css";
 import { cn } from "@/lib/utils";
+import {
+  attachmentDisplayToRef,
+  attachmentDisplayUrl,
+  attachmentRefToDisplay,
+  importImage,
+  MAX_IMAGE_BYTES,
+} from "@/lib/attachments";
 import { compressImage, IMAGE_BATCH_MAX_BYTES, IMAGE_BATCH_MAX_COUNT, IMAGE_MAX_BYTES, IMAGE_TYPES } from "./markdownImages";
 
 interface Props {
   value: string;
+  /** 附件归属任务（粘贴即落盘到 attachments/<todoId>/；新建页用预生成 id） */
+  todoId: string;
   onChange: (markdown: string) => void;
   className?: string;
   disabled?: boolean;
@@ -56,9 +65,11 @@ export function MarkdownEditor(props: Props) {
 
     const publish = () => {
       if (disposed || !ready.current || applyingValue.current || composing.current) return;
-      const markdown = editor.getValue();
-      if (markdown === lastRendered.current) return;
-      lastRendered.current = markdown;
+      const display = editor.getValue();
+      if (display === lastRendered.current) return;
+      lastRendered.current = display;
+      // 展示形态 → 引用形态：note 持久化只存 attachment:// 短引用（图片由自定义协议供图）
+      const markdown = attachmentDisplayToRef(display);
       lastSent.current = markdown;
       latest.current.onChange(markdown);
     };
@@ -126,8 +137,14 @@ export function MarkdownEditor(props: Props) {
         const images: string[] = [];
         for (const file of files) {
           if (disposed) return null;
-          const url = await compressImage(file);
-          images.push(`![${file.name.replace(/[\[\]\\\r\n]/g, "_")}](${url})`);
+          // 压缩 → 附件落盘（按任务归档）→ 插入自定义协议展示 URL；保存时自动换回 attachment:// 引用
+          const blob = await compressImage(file);
+          if (blob.size > MAX_IMAGE_BYTES) throw new Error("「" + file.name + "」压缩后仍超过 5 MB，请缩小后重试");
+          const attachment = await importImage(
+            new File([blob], file.name, { type: blob.type || file.type }),
+            latest.current.todoId,
+          );
+          images.push(`![${file.name.replace(/[\[\]\\\r\n]/g, "_")}](${attachmentDisplayUrl(attachment.ref)})`);
         }
         if (disposed) return null;
         if (version !== externalVersion.current || editor.getValue() !== original) throw new Error("描述已更新，请重新插入图片。");
@@ -158,7 +175,8 @@ export function MarkdownEditor(props: Props) {
         cdn: assetRoot,
         lang: "zh_CN",
         theme: theme.current === "dark" ? "dark" : "classic",
-        value: latest.current.value,
+        // 初始值进入编辑器前转为展示形态（attachment:// → 自定义协议 URL），getValue 后再换回引用形态
+        value: attachmentRefToDisplay(latest.current.value),
         cache: { enable: false },
         height: "100%",
         minHeight: 280,
@@ -187,7 +205,7 @@ export function MarkdownEditor(props: Props) {
           setError("");
           instance.current = editor;
           applyingValue.current = true;
-          editor.setValue(latest.current.value, true);
+          editor.setValue(attachmentRefToDisplay(latest.current.value), true);
           lastSent.current = latest.current.value;
           lastRendered.current = editor.getValue();
           applyingValue.current = false;
@@ -237,7 +255,7 @@ export function MarkdownEditor(props: Props) {
     lastSent.current = props.value;
     applyingValue.current = true;
     try {
-      editor.setValue(props.value, true);
+      editor.setValue(attachmentRefToDisplay(props.value), true);
       lastRendered.current = editor.getValue();
     } finally {
       applyingValue.current = false;
@@ -255,9 +273,9 @@ export function MarkdownEditor(props: Props) {
   }, [resolvedTheme, assetRoot]);
 
   return <div className={cn("md-instant flex h-full min-h-0 flex-col", props.className)}>
-    <p className="shrink-0 border-y px-5 py-2 text-xs text-muted-foreground">直接输入，格式即时显示 · 输入 # 和空格创建标题，选中文字可设置格式</p>
+    <p className="shrink-0 border-y px-5 py-2 text-xs text-muted-foreground">直接输入，格式即时显示 · 输入 # 和空格创建标题，选中文字可设置格式 · 粘贴图片自动存为附件</p>
     {loading && <p role="status" className="px-5 py-2 text-sm text-muted-foreground">正在加载编辑器…</p>}
-    {uploading && <p role="status" className="px-5 py-2 text-sm text-muted-foreground">图片处理中，完成后可保存…</p>}
+    {uploading && <p role="status" className="px-5 py-2 text-sm text-muted-foreground">图片处理中（存为任务附件），完成后可保存…</p>}
     {error && <div role="alert" className="px-5 py-2 text-sm text-destructive">{error}{!ready.current && <button type="button" className="ml-3 underline" onClick={() => setGeneration(value => value + 1)}>重新加载</button>}</div>}
     <div ref={root} inert={loading || !ready.current} aria-busy={loading || uploading} className="min-h-0 flex-1 overflow-auto" />
   </div>;

@@ -387,6 +387,7 @@ function TodoDetailForm() {
           <div className="min-h-0 flex-1">
             <MarkdownEditor
               value={watch("note")}
+              todoId={editing?.id ?? newTodoId.current}
               disabled={isSubmitting}
               onProcessingChange={handleDescriptionProcessing}
               onChange={(md) => setValue("note", md, { shouldDirty: true })}

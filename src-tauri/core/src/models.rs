@@ -226,6 +226,47 @@ pub struct DbState {
     pub todos: Vec<DbTodo>,
 }
 
+/// 附件导入结果（camelCase，与前端 src/lib/attachments.ts 对齐）
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentInfo {
+    pub id: String,
+    /// note 中的引用形态：attachment://<todoId>/<fileName>
+    #[serde(rename = "ref")]
+    pub r#ref: String,
+    pub file_name: String,
+    /// 相对附件根目录的路径：<todoId>/<fileName>
+    pub relative_path: String,
+    pub mime_type: String,
+    pub byte_size: usize,
+}
+
+/// 历史内嵌图片迁移：单条失败原因
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MigrateFailure {
+    pub id: String,
+    pub reason: String,
+}
+
+/// 历史内嵌图片迁移结果（设置页展示）
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MigrateSummary {
+    pub scanned_todos: usize,
+    pub migrated_images: usize,
+    pub failed_todos: Vec<MigrateFailure>,
+}
+
+/// 孤儿附件清理结果（设置页展示）
+#[derive(Debug, Clone, Serialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GcSummary {
+    pub removed_relations: usize,
+    pub removed_attachments: usize,
+    pub moved_files: usize,
+}
+
 /// 默认全局固定 MCP 授权 Token（设置页可修改；MCP server 启动认证用）
 pub const DEFAULT_MCP_TOKEN: &str = "sk-GLOBAl_MCP_BY_ADMIN";
 
