@@ -277,7 +277,7 @@ pub fn serve_at(root: &Path, relative_path: &str) -> AppResult<(&'static str, Ve
     }
     let ext = file_name.rsplit_once('.').map(|(_, e)| e).unwrap_or("");
     let mime = mime_of_ext(ext).ok_or_else(|| AppError::invalid("附件路径无效"))?;
-    let mut file = fs::File::open(&canonical)?;
+    let file = fs::File::open(&canonical)?;
     if file.metadata()?.len() > SERVE_MAX_BYTES as u64 {
         return Err(AppError::invalid("附件超过大小上限"));
     }
@@ -538,7 +538,6 @@ pub fn gc_orphans_at(db_path: &Path) -> AppResult<GcSummary> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use base64::Engine as _;
     use crate::models::{DbProject, DbState};
 
     /// 带合法 PNG 魔数的伪图片（嗅探只看魔数；CRC 无关紧要）
@@ -586,6 +585,7 @@ mod tests {
                     updated_at: 1,
                     ..Default::default()
                 }],
+                resources: vec![],
                 todos,
             },
         )
@@ -626,7 +626,7 @@ mod tests {
             assert_eq!(count(&conn, "SELECT COUNT(*) FROM todo_attachments"), 2);
             let (orig, seq): (String, i64) = conn
                 .query_row(
-                    "SELECT original_name, seq FROM todo_attachments WHERE attachment_id = ?1",
+                    "SELECT a.original_name, ta.seq FROM attachments a JOIN todo_attachments ta ON ta.attachment_id = a.id WHERE ta.attachment_id = ?1",
                     [&first.id],
                     |r| Ok((r.get(0)?, r.get(1)?)),
                 )
@@ -684,7 +684,7 @@ mod tests {
     fn link_note_refs_creates_and_skips_invalid() {
         let (dir, db_path) = temp_db("link");
         {
-            let conn = db::open_and_init(&db_path, &dir.join("backup")).unwrap();
+            let (conn, _) = db::open_and_init(&db_path, &dir.join("backup")).unwrap();
             let info = import_at(&db_path, "t1", png_bytes(), "x.png").unwrap();
             seed(
                 &conn,
@@ -706,7 +706,7 @@ mod tests {
     fn delete_todo_cleans_relations_and_moves_files() {
         let (dir, db_path) = temp_db("delete");
         let root = attachments_root_at(&db_path);
-        let mut conn = db::open_and_init(&db_path, &dir.join("backup")).unwrap();
+        let (mut conn, _) = db::open_and_init(&db_path, &dir.join("backup")).unwrap();
         let info = import_at(&db_path, "t1", png_bytes(), "x.png").unwrap();
         seed(
             &conn,
@@ -756,7 +756,7 @@ mod tests {
         let b64 = base64::engine::general_purpose::STANDARD.encode(&png);
         let note = format!("说明 ![图](data:image/png;base64,{b64}) 结尾");
         {
-            let conn = db::open_and_init(&db_path, &dir.join("backup")).unwrap();
+            let (conn, _) = db::open_and_init(&db_path, &dir.join("backup")).unwrap();
             seed(&conn, vec![todo_row("t1", &note), todo_row("t2", "纯文本")]);
         }
         let summary = migrate_inline_at(&db_path).unwrap();
@@ -782,7 +782,7 @@ mod tests {
         let bad = base64::engine::general_purpose::STANDARD.encode(b"definitely not an image");
         let note = format!("![坏图](data:image/bmp;base64,{bad})");
         {
-            let conn = db::open_and_init(&db_path, &dir.join("backup")).unwrap();
+            let (conn, _) = db::open_and_init(&db_path, &dir.join("backup")).unwrap();
             seed(&conn, vec![todo_row("t1", &note)]);
         }
         let summary = migrate_inline_at(&db_path).unwrap();
@@ -804,7 +804,7 @@ mod tests {
         let (dir, db_path) = temp_db("gc");
         let info = import_at(&db_path, "t1", png_bytes(), "x.png").unwrap();
         {
-            let conn = db::open_and_init(&db_path, &dir.join("backup")).unwrap();
+            let (conn, _) = db::open_and_init(&db_path, &dir.join("backup")).unwrap();
             seed(&conn, vec![todo_row("t1", &format!("![x]({})", info.r#ref))]);
             // t9 关系指向不存在的任务（模拟"新建任务粘贴后放弃"）
             conn.execute(
@@ -825,7 +825,7 @@ mod tests {
             conn.execute("DELETE FROM todos WHERE id = 't1'", []).unwrap();
         }
         let summary = gc_orphans_at(&db_path).unwrap();
-        assert_eq!(summary.removed_relations, 0);
+        assert_eq!(summary.removed_relations, 1);
         assert_eq!(summary.removed_attachments, 1);
         assert_eq!(summary.moved_files, 1);
         assert!(!attachments_root_at(&db_path).join("t1/t1-0001.png").exists());

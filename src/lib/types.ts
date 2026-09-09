@@ -102,9 +102,22 @@ export interface Todo {
   updatedAt: number;
 }
 
+/** 项目资料：链接、Markdown 笔记与自由标签。projectId 为空表示未归属资料。 */
+export interface LibraryResource {
+  id: string;
+  projectId: string | null;
+  title: string;
+  url: string;
+  note: string;
+  tags: string[];
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface AppState {
   projects: Project[];
   todos: Todo[];
+  resources: LibraryResource[];
 }
 
 // ── 泳道常量 ───────────────────────────────────────────

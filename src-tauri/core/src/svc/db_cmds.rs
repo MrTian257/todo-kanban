@@ -357,6 +357,7 @@ fn seed_demo_state(conn: &Connection) -> AppResult<()> {
                 day,
             ),
         ],
+        resources: vec![],
     };
     db::save_state(conn, &state).map(|_| ())
 }

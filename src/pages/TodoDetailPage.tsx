@@ -80,10 +80,12 @@ function TodoDetailForm() {
   const { projectId = "", todoId = "new" } = useParams();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const { projects, todos, upsertTodo } = useAppStore();
+  const { projects, todos, upsertTodo, setActiveProjectId } = useAppStore();
   const project = projects.find((p) => p.id === projectId);
   const isNew = todoId === "new";
   const editing = isNew ? null : todos.find((t) => t.id === todoId);
+  // 进入待办详情即同步当前项目（计划：待办详情页使用当前项目）
+  React.useEffect(() => { if (project) setActiveProjectId(project.id); }, [project?.id, setActiveProjectId]);
 
   const lanes = React.useMemo(() => {
     const list = project?.swimlanes && project.swimlanes.length > 0 ? project.swimlanes : [];

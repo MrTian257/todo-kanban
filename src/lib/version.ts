@@ -33,9 +33,9 @@ export interface VersionReport {
 /** 浏览器预览模式默认报告（无真实数据） */
 const PREVIEW_REPORT: VersionReport = {
   status: "ok",
-  dataVersion: 8,
+  dataVersion: 9,
   appMin: 1,
-  appMax: 8,
+  appMax: 9,
   softwareVersion: "2.0.0",
   from: null,
   to: null,

@@ -1,7 +1,7 @@
-//! DDL + 迁移。USER_VERSION = 8。
+//! DDL + 迁移。USER_VERSION = 9。
 //! 注意：SQLite 列序是硬契约——schema ↔ row ↔ mod 的 SELECT/INSERT 三处同步。
 
-pub const USER_VERSION: i64 = 8;
+pub const USER_VERSION: i64 = 9;
 
 /// 建表（新库直接完整 v6 形态；旧库缺列由 migrate 补）
 pub fn create_tables(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
@@ -84,6 +84,18 @@ CREATE TABLE IF NOT EXISTS todo_attachments (
   PRIMARY KEY (todo_id, attachment_id)
 );
 CREATE INDEX IF NOT EXISTS idx_todo_attachments_attachment ON todo_attachments(attachment_id);
+-- v9：项目资料库。project_id 可为空，项目删除后保留为未归属资料。
+CREATE TABLE IF NOT EXISTS resources (
+  id TEXT PRIMARY KEY,
+  project_id TEXT,
+  title TEXT NOT NULL,
+  url TEXT NOT NULL DEFAULT '',
+  note TEXT NOT NULL DEFAULT '',
+  tags TEXT NOT NULL DEFAULT '[]',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_resources_project ON resources(project_id);
 ",
     )
 }
@@ -191,6 +203,54 @@ mod tests {
             .unwrap();
         assert!(tables.contains(&"attachments".to_string()));
         assert!(tables.contains(&"todo_attachments".to_string()));
+        // v9：resources 表随建表就位
+        assert!(tables.contains(&"resources".to_string()));
+    }
+
+    #[test]
+    fn migrate_v8_db_adds_resources() {
+        let conn = open_in_memory().unwrap();
+        // 模拟 v8 库：无 resources 表
+        conn.execute_batch(
+            "CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL,
+               project_dir TEXT NOT NULL DEFAULT '', frontend_dir TEXT, backend_dir TEXT,
+               frontend_repo_url TEXT, backend_repo_url TEXT, production_branch TEXT,
+               branch_rule TEXT, archived INTEGER, created_at INTEGER, updated_at INTEGER,
+               frontend_repo_token TEXT, backend_repo_token TEXT, swimlanes TEXT,
+               created_by TEXT NOT NULL DEFAULT 'human');
+             CREATE TABLE todos (id TEXT PRIMARY KEY, project_id TEXT, title TEXT,
+               note TEXT, repo_path TEXT, branch TEXT, status TEXT, swimlane_id TEXT,
+               quadrant TEXT, seq INTEGER, tag TEXT, start_date TEXT, end_date TEXT,
+               blocker TEXT, archived INTEGER, started_at INTEGER, done_at INTEGER,
+               commits TEXT, sort_order INTEGER, created_at INTEGER, updated_at INTEGER,
+               created_by TEXT NOT NULL DEFAULT 'human', ai_coordinated INTEGER NOT NULL DEFAULT 0);
+             CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE git_repo_cache (repo_path TEXT PRIMARY KEY, repo_exists INTEGER,
+               is_repo INTEGER, current_branch TEXT, branches TEXT, error TEXT, fetched_at INTEGER);
+             CREATE TABLE attachments (id TEXT PRIMARY KEY, file_name TEXT NOT NULL,
+               original_name TEXT NOT NULL DEFAULT '', relative_path TEXT NOT NULL,
+               mime_type TEXT NOT NULL, byte_size INTEGER NOT NULL,
+               created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+             CREATE TABLE todo_attachments (todo_id TEXT NOT NULL, attachment_id TEXT NOT NULL,
+               seq INTEGER NOT NULL, created_at INTEGER NOT NULL,
+               PRIMARY KEY (todo_id, attachment_id));
+             PRAGMA user_version = 8;",
+        )
+        .unwrap();
+        // 主路径：幂等建表（IF NOT EXISTS 补 resources）+ 迁移推进版本
+        crate::db::init(&conn).unwrap();
+        let tables: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(tables.contains(&"resources".to_string()), "v8→v9 应补建 resources 表");
+        let v: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, USER_VERSION);
     }
 
     #[test]

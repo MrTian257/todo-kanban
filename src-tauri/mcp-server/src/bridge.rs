@@ -14,10 +14,11 @@ use todo_kanban_core::svc::{db_cmds, git_cmds};
 
 use crate::config;
 
-pub const RESOURCES: [(&str, &str); 3] = [
+pub const RESOURCES: [(&str, &str); 4] = [
     ("todo-kanban://state", "全部状态（项目 + 待办）JSON"),
     ("todo-kanban://projects", "项目列表 JSON"),
     ("todo-kanban://todos", "待办列表 JSON"),
+    ("todo-kanban://resources", "资料库列表 JSON"),
 ];
 
 const WRITE_TOOLS: [&str; 7] = [
@@ -231,6 +232,7 @@ fn read_resource(uri: &str) -> AppResult<Value> {
         "todo-kanban://state" => Ok(serde_json::to_value(state)?),
         "todo-kanban://projects" => Ok(serde_json::to_value(state.projects)?),
         "todo-kanban://todos" => Ok(serde_json::to_value(state.todos)?),
+        "todo-kanban://resources" => Ok(serde_json::to_value(state.resources)?),
         _ => Err(AppError::invalid(format!("未知资源：{uri}"))),
     }
 }
@@ -297,6 +299,7 @@ mod tests {
                 created_by: "human".into(),
                 ..Default::default()
             }],
+            resources: vec![],
             todos: vec![DbTodo {
                 id: "t1".into(),
                 created_by: "human".into(),
@@ -318,6 +321,7 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            resources: vec![],
             todos: vec![
                 // 修改 → ai_coordinated=true，created_by 保持
                 DbTodo {

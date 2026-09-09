@@ -262,7 +262,12 @@ fn detect_cherry_picks(repo: &str, ref_branch: &str) -> (HashSet<String>, HashMa
             if let Ok(body) = run_git(repo, &["show", "-s", "--format=%B", h]) {
                 for line in body.lines() {
                     let line = line.trim();
-                    if let Some(rest) = line.strip_prefix("cherry picked from commit ") {
+                    // git cherry-pick -x 尾注格式：`(cherry picked from commit <sha>)`，兼容有无括号两种写法
+                    let stripped = line
+                        .strip_prefix('(')
+                        .and_then(|s| s.strip_suffix(')'))
+                        .unwrap_or(line);
+                    if let Some(rest) = stripped.strip_prefix("cherry picked from commit ") {
                         if let Some(sha) = rest.split_whitespace().next() {
                             source.insert(h.to_string(), short_hash(sha));
                             break;
@@ -520,6 +525,9 @@ mod tests {
 
         // main: 无 -x 剪切 B → cp（不合并 feature）
         run_git(r, &["checkout", "main"]).unwrap();
+        // Windows 上 B 与 cp 内容/父提交/消息完全一致时，同秒提交会产生相同 hash（cp==B，
+        // 分类歧义）。等 1s 使 committer 时间戳不同，保证 cp 与 B 哈希可区分。
+        std::thread::sleep(std::time::Duration::from_secs(1));
         run_git(r, &["cherry-pick", b.as_str()]).unwrap();
         let cp = run_git(r, &["rev-parse", "HEAD"]).unwrap().trim().to_string();
 

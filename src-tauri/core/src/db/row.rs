@@ -4,7 +4,7 @@
 use rusqlite::Row;
 
 use crate::error::AppResult;
-use crate::models::{DbBranchRule, DbCommitInfo, DbProject, DbState, DbSwimlane, DbTodo};
+use crate::models::{DbBranchRule, DbCommitInfo, DbLibraryResource, DbProject, DbState, DbSwimlane, DbTodo};
 
 fn parse_json_or<T: serde::de::DeserializeOwned>(raw: Option<String>, default: T) -> T {
     match raw {
@@ -167,6 +167,40 @@ pub const PROJECT_UPSERT: &str = "INSERT INTO projects (id, name, project_dir, f
     swimlanes=excluded.swimlanes, created_by=excluded.created_by
   WHERE excluded.updated_at >= projects.updated_at";
 
+pub const RESOURCE_SELECT: &str = "SELECT id, project_id, title, url, note, tags, created_at, updated_at FROM resources";
+
+pub fn row_to_resource(row: &Row) -> AppResult<DbLibraryResource> {
+    Ok(DbLibraryResource {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        title: row.get(2)?,
+        url: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+        note: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
+        tags: parse_json_or::<Vec<String>>(row.get(5)?, Vec::new()),
+        created_at: row.get(6)?,
+        updated_at: row.get(7)?,
+    })
+}
+
+fn resource_params(resource: &DbLibraryResource) -> Vec<Box<dyn rusqlite::ToSql>> {
+    vec![
+        Box::new(resource.id.clone()),
+        Box::new(resource.project_id.clone()),
+        Box::new(resource.title.clone()),
+        Box::new(resource.url.clone()),
+        Box::new(resource.note.clone()),
+        Box::new(serde_json::to_string(&resource.tags).unwrap_or_else(|_| "[]".into())),
+        Box::new(resource.created_at),
+        Box::new(resource.updated_at),
+    ]
+}
+
+const RESOURCE_UPSERT: &str = "INSERT INTO resources (id, project_id, title, url, note, tags, created_at, updated_at)
+  VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
+  ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id, title=excluded.title,
+    url=excluded.url, note=excluded.note, tags=excluded.tags, updated_at=excluded.updated_at
+  WHERE excluded.updated_at >= resources.updated_at";
+
 pub fn load_state_from_conn(conn: &rusqlite::Connection) -> AppResult<DbState> {
     let mut projects = Vec::new();
     {
@@ -184,7 +218,15 @@ pub fn load_state_from_conn(conn: &rusqlite::Connection) -> AppResult<DbState> {
             todos.push(row_to_todo(row)?);
         }
     }
-    Ok(DbState { projects, todos })
+    let mut resources = Vec::new();
+    {
+        let mut stmt = conn.prepare(RESOURCE_SELECT)?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            resources.push(row_to_resource(row)?);
+        }
+    }
+    Ok(DbState { projects, todos, resources })
 }
 
 /// UPSERT 待办（updated_at 较新者胜）
@@ -199,5 +241,10 @@ pub fn upsert_project(conn: &rusqlite::Connection, p: &DbProject) -> AppResult<(
         PROJECT_UPSERT,
         rusqlite::params_from_iter(project_params(p)),
     )?;
+    Ok(())
+}
+
+pub fn upsert_resource(conn: &rusqlite::Connection, resource: &DbLibraryResource) -> AppResult<()> {
+    conn.execute(RESOURCE_UPSERT, rusqlite::params_from_iter(resource_params(resource)))?;
     Ok(())
 }

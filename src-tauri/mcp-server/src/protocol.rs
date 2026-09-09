@@ -89,11 +89,11 @@ mod tests {
     }
 
     #[test]
-    fn resources_list_has_3() {
+    fn resources_list_has_4() {
         let resp =
             handle_request(&json!({ "jsonrpc": "2.0", "id": 3, "method": "resources/list" }))
                 .unwrap();
-        assert_eq!(resp["result"]["resources"].as_array().unwrap().len(), 3);
+        assert_eq!(resp["result"]["resources"].as_array().unwrap().len(), 4);
     }
 
     #[test]
