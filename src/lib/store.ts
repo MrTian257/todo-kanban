@@ -1,6 +1,6 @@
 // zustand 唯一 store：视图与数据解耦（页面不直接碰 storage/Tauri API）
-// 写链：action → useAppStore.subscribe → writeChain 串行队列 → saveState（浏览器模式 no-op）
-// 外部同步：startExternalSync 2s 轮询 + focus 立即同步（磁盘优先整体覆盖）
+// 本地数据变更 → 合并写队列 → 快照比较保存 → 全局状态反馈
+// 外部同步仅在无待保存变更时应用；读取失败不会创建或保存空状态。
 
 import { moveTask } from "./boardOrder";
 import { create } from "zustand";
@@ -9,18 +9,69 @@ import { isTauri, loadState, saveState } from "./storage";
 import { normalizeProject, normalizeState } from "./normalize";
 import { gitInfoCached } from "./git";
 
-// ── 串行写链 ───────────────────────────────────────────
-let writeChain: Promise<void> = Promise.resolve();
-// 写后冷却：本地写落库完成后短暂窗口内，外部同步不得用磁盘态覆盖内存
-// （防竞态：轮询 loadState 可能读到写链在途的旧快照，覆盖会丢刚保存的数据）
-let lastWriteAt = 0;
-const WRITE_COOLDOWN_MS = 3000;
+// Persistence tracks only user mutations; reads and status updates never write back.
+let persisted: AppState = { projects: [], todos: [] };
+let version = 0;
+let savedVersion = 0;
+let applyingRemote = false;
+let activeSave: Promise<void> | null = null;
+let initialization: Promise<void> | null = null;
 
-function enqueueSave(state: AppState) {
-  lastWriteAt = Date.now();
-  writeChain = writeChain
-    .then(() => saveState({ projects: state.projects, todos: state.todos }))
-    .catch((e) => console.error("落库失败", e));
+function applyWithoutSave(state: Partial<AppStore>) {
+  applyingRemote = true;
+  try { useAppStore.setState(state); } finally { applyingRemote = false; }
+}
+
+export async function flushPersistence(): Promise<void> {
+  if (activeSave) return activeSave;
+  const initial = useAppStore.getState();
+  if (!initial.loaded) throw new Error("数据未加载，无法保存");
+  if (initial.persistence === "error" || initial.persistence === "conflict") throw new Error(initial.persistenceError);
+  const run = async () => {
+    while (savedVersion < version) {
+      const writingVersion = version;
+      const current = useAppStore.getState();
+      const snapshot = { projects: current.projects, todos: current.todos };
+      useAppStore.setState({ persistence: "saving", persistenceError: "" });
+      try {
+        const saved = await saveState(snapshot, persisted);
+        persisted = saved;
+        savedVersion = writingVersion;
+        // Preserve newer edits while applying server-generated seq/tag to unchanged records.
+        const latest = useAppStore.getState();
+        const rebase = <T extends { id: string }>(items: T[], sent: T[], returned: T[]) => {
+          const sentById = new Map(sent.map(item => [item.id, item]));
+          const returnedById = new Map(returned.map(item => [item.id, item]));
+          return items.map(item => JSON.stringify(item) === JSON.stringify(sentById.get(item.id)) ? returnedById.get(item.id) ?? item : item);
+        };
+        applyWithoutSave({ projects: rebase(latest.projects, snapshot.projects, saved.projects), todos: rebase(latest.todos, snapshot.todos, saved.todos) });
+      } catch (error) {
+        const message = String(error);
+        useAppStore.setState({ persistence: message.includes("STATE_CONFLICT") ? "conflict" : "error", persistenceError: message });
+        throw error;
+      }
+    }
+    useAppStore.setState({ persistence: "saved", persistenceError: "", lastSavedAt: Date.now() });
+  };
+  activeSave = run().finally(() => { activeSave = null; });
+  return activeSave;
+}
+
+export async function retryPersistence() {
+  if (useAppStore.getState().persistence === "conflict") throw new Error("请先处理数据冲突");
+  useAppStore.setState({ persistence: "saved", persistenceError: "" });
+  await flushPersistence();
+}
+
+/** Explicit discard/reload only; the UI must offer a local export before calling. */
+export async function reloadRemoteState() {
+  if (activeSave) await activeSave;
+  const before = version;
+  const disk = await loadState() ?? { projects: [], todos: [] };
+  if (version !== before) throw new Error("读取期间仍有本地修改，请重试");
+  persisted = disk;
+  savedVersion = version;
+  applyWithoutSave({ ...normalizeState(disk), persistence: "saved", persistenceError: "", syncError: "" });
 }
 
 // ── 演示数据（浏览器预览模式） ─────────────────────────────
@@ -114,8 +165,14 @@ function demoState(): AppState {
 // ── store ───────────────────────────────────────────────
 interface AppStore extends AppState {
   loaded: boolean;
+  loadError: string;
+  editingDirty: boolean;
+  persistence: "saved" | "saving" | "error" | "conflict";
+  persistenceError: string;
+  syncError: string;
+  lastSavedAt: number | null;
   initAppStore: () => Promise<void>;
-  /** 外部同步整体覆盖（不经写链回写回路：值相同 → UPSERT 条件不满足，无副作用） */
+  /** 应用外部数据，不触发写回。 */
   replaceState: (state: AppState) => void;
   upsertProject: (p: Project) => void;
   removeProject: (id: string) => void;
@@ -131,29 +188,38 @@ interface AppStore extends AppState {
   deleteSwimlane: (projectId: string, laneId: string) => void;
 }
 
-let initialized = false;
+
 
 export const useAppStore = create<AppStore>((set, get) => ({
   projects: [],
   todos: [],
   loaded: false,
+  loadError: "",
+  editingDirty: false,
+  persistence: "saved",
+  persistenceError: "",
+  syncError: "",
+  lastSavedAt: null,
 
   initAppStore: async () => {
-    if (initialized) return;
-    initialized = true;
-    let state: AppState;
-    if (isTauri()) {
-      const disk = await loadState();
-      state = normalizeState(disk ?? { projects: [], todos: [] });
-    } else {
-      state = normalizeState((await loadState()) ?? demoState());
-    }
-    set({ ...state, loaded: true });
+    if (get().loaded) return;
+    if (initialization) return initialization;
+    initialization = (async () => {
+      set({ loadError: "" });
+      try {
+        const disk = await loadState();
+        persisted = disk ?? { projects: [], todos: [] };
+        const state = normalizeState(disk ?? (isTauri() ? persisted : demoState()));
+        applyWithoutSave({ ...state, loaded: true, loadError: "", persistence: "saved" });
+      } catch (error) {
+        set({ loaded: false, loadError: String(error) });
+      }
+    })().finally(() => { initialization = null; });
+    return initialization;
   },
 
   replaceState: (state) => {
-    const norm = normalizeState(state);
-    set({ projects: norm.projects, todos: norm.todos });
+    applyWithoutSave(normalizeState(state));
   },
 
   upsertProject: (p) => {
@@ -270,54 +336,66 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
 }));
 
-// 写链：任何 state 变化 → 串行落库
-useAppStore.subscribe((state) => {
-  if (state.loaded) enqueueSave({ projects: state.projects, todos: state.todos });
+// Only domain-array changes are persisted; status updates, initialization and sync are excluded.
+useAppStore.subscribe((state, previous) => {
+  if (applyingRemote || !state.loaded || (state.projects === previous.projects && state.todos === previous.todos)) return;
+  version++;
+  if (state.persistence === "error" || state.persistence === "conflict") return;
+  // Mark pending synchronously so window-close guards see writes before the microtask runs.
+  useAppStore.setState({ persistence: "saving" });
+  queueMicrotask(() => { void flushPersistence().catch(() => { /* Persistent status banner reports the error. */ }); });
 });
 
-// ── 外部变更感知：2s 轮询 + focus 立即同步 ──────────────────
+let stopSync: (() => void) | null = null;
 export function startExternalSync() {
-  if (!isTauri()) return;
+  stopSync?.();
+  let stopped = false;
+  let running = false;
   const sync = async () => {
+    const state = useAppStore.getState();
+    if (stopped || running || !state.loaded || version !== savedVersion || state.persistence !== "saved") return;
+    running = true;
+    const startedVersion = version;
     try {
-      // 本地写后冷却期内跳过：写链在途时磁盘是旧快照，覆盖会丢刚保存的数据
-      const syncStart = Date.now();
-      if (syncStart - lastWriteAt < WRITE_COOLDOWN_MS) return;
-      await writeChain;
       const disk = await loadState();
-      if (!disk) return;
-      // 双保险：本轮同步期间又有新写排队 → 刚读的磁盘快照可能已过时，放弃覆盖
-      if (lastWriteAt > syncStart) return;
-      const current = useAppStore.getState();
-      const diskNorm = normalizeState(disk);
-      const curNorm = normalizeState({ projects: current.projects, todos: current.todos });
-      if (JSON.stringify(diskNorm) !== JSON.stringify(curNorm)) {
-        useAppStore.getState().replaceState(diskNorm);
+      if (stopped || version !== startedVersion || activeSave) return;
+      if (disk) {
+        persisted = disk;
+        const normalized = normalizeState(disk);
+        const current = useAppStore.getState();
+        if (JSON.stringify(normalized) !== JSON.stringify({ projects: current.projects, todos: current.todos })) applyWithoutSave(normalized);
       }
-    } catch (e) {
-      console.error("外部同步失败", e);
-    }
+      useAppStore.setState({ syncError: "" });
+    } catch (error) { if (!stopped) useAppStore.setState({ syncError: String(error) }); }
+    finally { running = false; }
   };
-  window.setInterval(sync, 2000);
-  window.addEventListener("focus", sync);
+  const timer = isTauri() ? window.setInterval(() => { if (!document.hidden) void sync(); }, 2000) : null;
+  const focus = () => { if (isTauri()) void sync(); };
+  window.addEventListener("focus", focus);
+  const stop = () => {
+    stopped = true;
+    if (timer !== null) clearInterval(timer);
+    window.removeEventListener("focus", focus);
+    if (stopSync === stop) stopSync = null;
+  };
+  stopSync = stop;
+  return stop;
 }
 
-// ── git 仓库信息预热：启动 60s 后预热全部仓库路径（仅桌面端） ──────
+let stopWarm: (() => void) | null = null;
 export function startGitCacheWarm() {
-  if (!isTauri()) return;
-  window.setTimeout(() => {
+  stopWarm?.();
+  let stopped = false;
+  const timer = window.setTimeout(async () => {
+    if (!isTauri()) return;
     const { projects, todos } = useAppStore.getState();
-    const repos = new Set<string>([
-      ...projects.map((p) => p.projectDir),
-      ...projects.map((p) => p.frontendDir),
-      ...projects.map((p) => p.backendDir),
-      ...todos.map((t) => t.repoPath),
-    ]);
+    const repos = new Set([...projects.flatMap(p => [p.projectDir, p.frontendDir, p.backendDir]), ...todos.map(t => t.repoPath)]);
     for (const repo of repos) {
-      if (!repo) continue;
-      gitInfoCached(repo).catch(() => {
-        /* 预热失败静默 */
-      });
+      if (stopped) return;
+      if (repo) await gitInfoCached(repo).catch(() => {});
     }
   }, 60_000);
+  const stop = () => { stopped = true; clearTimeout(timer); if (stopWarm === stop) stopWarm = null; };
+  stopWarm = stop;
+  return stop;
 }

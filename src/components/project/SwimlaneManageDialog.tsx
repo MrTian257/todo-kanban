@@ -21,7 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useAppStore } from "@/lib/store";
+import { flushPersistence, useAppStore } from "@/lib/store";
 import { STATUS_LABEL, STATUS_ORDER, Swimlane, TodoStatus } from "@/lib/types";
 import { newId } from "@/lib/utils";
 
@@ -34,6 +34,7 @@ interface Props {
 export function SwimlaneManageDialog({ projectId, open, onOpenChange }: Props) {
   const { projects, saveSwimlanes } = useAppStore();
   const project = projects.find((p) => p.id === projectId);
+  const [saving, setSaving] = React.useState(false);
   const [lanes, setLanes] = React.useState<Swimlane[]>([]);
   const [newName, setNewName] = React.useState("");
   const [newStatus, setNewStatus] = React.useState<TodoStatus>("todo");
@@ -48,7 +49,8 @@ export function SwimlaneManageDialog({ projectId, open, onOpenChange }: Props) {
     }
   }, [open, project]);
 
-  const save = () => {
+  const save = async () => {
+    if (saving) return;
     if (lanes.length === 0) {
       toast.error("至少保留一个泳道");
       return;
@@ -60,9 +62,13 @@ export function SwimlaneManageDialog({ projectId, open, onOpenChange }: Props) {
       toast.error("泳道名称不能重复");
       return;
     }
+    setSaving(true);
+    try {
     saveSwimlanes(projectId, lanes.map((l, i) => ({ ...l, name:l.name.trim(), sortOrder: i })));
+    await flushPersistence();
     toast.success("泳道配置已保存");
     onOpenChange(false);
+    } catch (error) { toast.error(String(error)); } finally { setSaving(false); }
   };
 
   const add = () => {
@@ -190,7 +196,7 @@ export function SwimlaneManageDialog({ projectId, open, onOpenChange }: Props) {
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             取消
           </Button>
-          <Button onClick={save}>保存</Button>
+          <Button onClick={save} disabled={saving}>{saving ? "保存中…" : "保存"}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

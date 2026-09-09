@@ -5,6 +5,7 @@ import React from "react";
 import { useNavigate, useLocation, NavLink } from "react-router-dom";
 import { useTheme } from "next-themes";
 import {
+  Search,
   CalendarDays,
   Copy,
   KanbanSquare,
@@ -22,6 +23,7 @@ import {
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isTauri } from "@/lib/storage";
 import { cn } from "@/lib/utils";
+import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
@@ -41,8 +43,11 @@ const SIDEBAR_DEFAULT = 224;
 const clampSidebarW = (w: number) => Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, Math.round(w)));
 
 function loadSidebarW(): number {
-  const v = Number(window.localStorage.getItem(SIDEBAR_W_KEY));
-  return Number.isFinite(v) ? clampSidebarW(v) : SIDEBAR_DEFAULT;
+  try {
+    const raw = window.localStorage.getItem(SIDEBAR_W_KEY);
+    const v = raw === null ? NaN : Number(raw);
+    return Number.isFinite(v) ? clampSidebarW(v) : SIDEBAR_DEFAULT;
+  } catch { return SIDEBAR_DEFAULT; }
 }
 
 export function SidebarLayout({ children }: { children: React.ReactNode }) {
@@ -51,18 +56,36 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
 
   const [sidebarW, setSidebarW] = React.useState<number>(loadSidebarW);
-  const [collapsed, setCollapsed] = React.useState<boolean>(
-    () => window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1",
+  const [desktopCollapsed, setCollapsed] = React.useState<boolean>(
+    () => { try { return window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1"; } catch { return false; } },
   );
+  const [narrow, setNarrow] = React.useState(() => window.matchMedia("(max-width: 700px)").matches);
+  const [mobileExpanded, setMobileExpanded] = React.useState(false);
+  const collapsed = narrow ? !mobileExpanded : desktopCollapsed;
+  const searchRef = React.useRef<HTMLInputElement>(null);
+  const [search, setSearch] = React.useState("");
+  React.useEffect(() => {
+    const media = window.matchMedia("(max-width: 700px)");
+    const change = () => { setNarrow(media.matches); setMobileExpanded(false); };
+    media.addEventListener("change", change);
+    const key = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k" && !(event.target instanceof Element && event.target.closest("input,textarea,[contenteditable=true]"))) {
+        event.preventDefault(); searchRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", key);
+    return () => { media.removeEventListener("change", change); window.removeEventListener("keydown", key); };
+  }, []);
+  React.useEffect(() => { setMobileExpanded(false); }, [location.pathname]);
   const [resizing, setResizing] = React.useState(false);
   const [maximized, setMaximized] = React.useState(false);
 
   React.useEffect(() => {
-    window.localStorage.setItem(SIDEBAR_W_KEY, String(sidebarW));
+    try { window.localStorage.setItem(SIDEBAR_W_KEY, String(sidebarW)); } catch { /* Optional preference */ }
   }, [sidebarW]);
   React.useEffect(() => {
-    window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? "1" : "0");
-  }, [collapsed]);
+    try { window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, desktopCollapsed ? "1" : "0"); } catch { /* Optional preference */ }
+  }, [desktopCollapsed]);
 
   // ── 窗口最大化状态跟踪（仅 Tauri）────────────────────────
   React.useEffect(() => {
@@ -106,7 +129,7 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
     e.preventDefault();
   };
 
-  const toggleCollapsed = () => setCollapsed((c) => !c);
+  const toggleCollapsed = () => { if (narrow) setMobileExpanded(value => !value); else setCollapsed(value => !value); };
   const appWindow = isTauri() ? getCurrentWindow() : null;
 
   return (
@@ -128,6 +151,11 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
           </TooltipTrigger>
           <TooltipContent>{collapsed ? "展开侧栏" : "收起侧栏"}</TooltipContent>
         </Tooltip>
+
+        <form className="mx-2 flex w-full min-w-0 max-w-sm items-center gap-1" onSubmit={event => { event.preventDefault(); navigate(`/todos?q=${encodeURIComponent(search)}`); }}>
+          <Input ref={searchRef} aria-label="全局搜索" value={search} onChange={event => setSearch(event.target.value)} placeholder="搜索任务 · ⌘/Ctrl K" className="h-7 min-w-0 text-xs" />
+          <Button type="submit" variant="ghost" size="icon" className="h-7 w-7" aria-label="搜索"><Search className="h-3.5 w-3.5" /></Button>
+        </form>
 
         {/* 拖动区：点击穿透到窗口移动；双击切换最大化（Tauri 内建） */}
         <div data-tauri-drag-region className="h-full min-w-0 flex-1" />
@@ -181,6 +209,7 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
             </Tooltip>
           </div>
         )}
+
       </header>
 
       <div className={cn("flex min-h-0 flex-1", resizing && "select-none")}>
@@ -189,6 +218,7 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
           className={cn(
             "flex h-full shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground",
             !resizing && "transition-[width] duration-150",
+            narrow && mobileExpanded && "fixed bottom-0 left-0 top-10 z-40 shadow-xl",
           )}
           style={{ width: collapsed ? 56 : sidebarW }}
         >
@@ -265,7 +295,7 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
         </aside>
 
         {/* 拖宽把手（仅展开态）：视觉 4px，热区 10px */}
-        {!collapsed && (
+        {!collapsed && !narrow && (
           <div
             role="separator"
             aria-orientation="vertical"
@@ -289,7 +319,7 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
         )}
 
         {/* 内容区 */}
-        <main className="h-full min-w-0 flex-1">{children}</main>
+        <main className="flex h-full min-w-0 flex-1 flex-col">{children}</main>
       </div>
     </div>
   );

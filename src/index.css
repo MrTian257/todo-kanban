@@ -231,36 +231,57 @@ body {
 .tk-rise-4 { animation-delay: 0.12s; }
 .tk-rise-5 { animation-delay: 0.15s; }
 
-/* Markdown 编辑器基础样式 */
-.md-editor :is(h1, h2, h3, h4) {
-  font-weight: 600;
-  line-height: 1.3;
+/* Markdown source and shared preview typography. */
+.md-workspace { display: grid; grid-template-columns: minmax(0, 1fr); }
+.md-workspace-split { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.md-workspace-split .md-preview { border-left: 1px solid var(--border); }
+.md-source { tab-size: 4; overflow-wrap: anywhere; }
+.md-editor { overflow-wrap: anywhere; min-width: 0; }
+.md-editor > :first-child { margin-top: 0; }
+.md-editor > :last-child { margin-bottom: 0; }
+.md-editor :is(h1,h2,h3,h4,h5,h6) { margin: 1.3em 0 .6em; font-weight: 600; line-height: 1.35; }
+.md-editor h1 { font-size: 1.8em; }
+.md-editor h2 { font-size: 1.5em; }
+.md-editor h3 { font-size: 1.25em; }
+.md-editor h4 { font-size: 1.1em; }
+.md-editor h5 { font-size: 1em; }
+.md-editor h6 { font-size: .9em; color: var(--muted-foreground); }
+.md-editor :is(p,ul,ol,blockquote,pre,table,details) { margin: .8em 0; }
+.md-editor ul { list-style: disc; padding-left: 1.6em; }
+.md-editor ol { list-style: decimal; padding-left: 1.6em; }
+.md-editor li > :is(ul,ol) { margin: .25em 0; }
+.md-editor li + li { margin-top: .25em; }
+.md-editor ul ul { list-style: circle; }
+.md-editor ul ul ul { list-style: square; }
+.md-editor .contains-task-list { list-style: none; }
+.md-editor .task-list-item > input { margin: 0 .5em 0 -1.4em; accent-color: var(--primary); }
+.md-editor blockquote { border-left: 3px solid var(--primary); padding-left: 1em; color: var(--muted-foreground); }
+.md-editor :not(pre) > code { background: var(--muted); border-radius: 4px; padding: .12em .35em; font-size: .9em; }
+.md-editor pre { background: var(--muted); border: 1px solid var(--border); border-radius: var(--radius); padding: 1em; overflow-x: auto; }
+.md-editor pre code { padding: 0; background: transparent; font-size: .9em; white-space: pre; overflow-wrap: normal; }
+.md-editor a { color: var(--primary); text-decoration: underline; text-underline-offset: 3px; }
+.md-editor img { max-width: 100%; height: auto; border-radius: var(--radius); }
+.md-editor hr { border: 0; border-top: 1px solid var(--border); margin: 1.5em 0; }
+.md-table-scroll { max-width: 100%; overflow-x: auto; }
+.md-editor table { border-collapse: collapse; min-width: 50%; }
+.md-editor :is(th,td) { border: 1px solid var(--border); padding: .5em .8em; }
+.md-editor th { background: var(--muted); font-weight: 600; }
+.md-editor tr:nth-child(even) { background: color-mix(in srgb, var(--muted) 45%, transparent); }
+.md-editor details { border: 1px solid var(--border); border-radius: var(--radius); padding: .7em 1em; }
+.md-editor summary { cursor: pointer; font-weight: 600; }
+.md-editor .footnotes { border-top: 1px solid var(--border); margin-top: 2em; font-size: .85em; }
+.md-editor .katex-display { overflow-x: auto; overflow-y: hidden; padding: .3em 0; }
+.md-editor :is(.hljs-keyword,.hljs-selector-tag,.hljs-literal) { color: #9144b8; }
+.md-editor :is(.hljs-string,.hljs-attr,.hljs-template-variable) { color: #167247; }
+.md-editor :is(.hljs-number,.hljs-title,.hljs-built_in) { color: #a64b16; }
+.md-editor :is(.hljs-comment,.hljs-quote) { color: var(--muted-foreground); font-style: italic; }
+.dark .md-editor :is(.hljs-keyword,.hljs-selector-tag,.hljs-literal) { color: #d7a5fa; }
+.dark .md-editor :is(.hljs-string,.hljs-attr,.hljs-template-variable) { color: #8edbb2; }
+.dark .md-editor :is(.hljs-number,.hljs-title,.hljs-built_in) { color: #ffc28f; }
+@media (max-width: 900px) {
+  .md-workspace-split { grid-template-columns: minmax(0, 1fr); }
+  .md-workspace-split .md-preview { border-left: 0; border-top: 1px solid var(--border); }
 }
-.md-editor h1 { font-size: 1.5em; }
-.md-editor h2 { font-size: 1.25em; }
-.md-editor h3 { font-size: 1.1em; }
-.md-editor ul { list-style: disc; padding-left: 1.5rem; }
-.md-editor ol { list-style: decimal; padding-left: 1.5rem; }
-.md-editor blockquote {
-  border-left: 3px solid var(--border);
-  padding-left: 0.75rem;
-  color: var(--muted-foreground);
-}
-.md-editor code {
-  background: var(--muted);
-  border-radius: 4px;
-  padding: 0.1rem 0.35rem;
-  font-size: 0.875em;
-}
-.md-editor pre {
-  background: var(--muted);
-  border-radius: var(--radius);
-  padding: 0.75rem;
-  overflow-x: auto;
-}
-.md-editor a { color: var(--primary); text-decoration: underline; }
-.md-editor img { max-width: 100%; border-radius: var(--radius); }
-.md-editor:focus { outline: none; }
 
 /* Shared visual foundation; explicit border color for Tailwind v4. */
 @layer base {
@@ -306,3 +327,11 @@ body {
 }
 .dark[data-theme="sunset"] { --primary: oklch(0.76 0.14 40); --primary-foreground: oklch(0.19 0.012 265); }
 .dark[data-theme="forest"] { --primary: oklch(0.75 0.12 155); --primary-foreground: oklch(0.19 0.012 265); }
+
+/* Match native controls to the selected application theme. */
+:root { color-scheme: light; }
+.dark { color-scheme: dark; }
+input, textarea, select, button { font-family: inherit; }
+.dark input:not([type="checkbox"]):not([type="radio"]), .dark textarea, .dark select { color: var(--foreground); }
+.dark select { background-color: var(--background); }
+.dark input::placeholder, .dark textarea::placeholder { color: var(--muted-foreground); opacity: 1; }

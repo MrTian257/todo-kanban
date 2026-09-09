@@ -1,3 +1,4 @@
+import { deleteWithUndo } from "@/lib/deleteWithUndo";
 // 泳道看板行：列=泳道、行=待办。支持开始/完成(自动补录)/重开/归档/切分支/打开目录/同步提交/补录/手动加提交(多行批量)/复制标记/编辑/删除；
 // 卡片整体支持右键菜单（注册制，见 lib/context-menu.ts）：展开/收起详情、编辑、复制标记、打开目录、提交三件套、移动到泳道、归档、删除
 
@@ -46,7 +47,7 @@ import {
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useAppStore } from "@/lib/store";
+import { flushPersistence, useAppStore } from "@/lib/store";
 import { CommitInfo, Todo } from "@/lib/types";
 import { fmtDateTime, shortHash } from "@/lib/format";
 import { todoUrgency } from "@/lib/todo";
@@ -100,7 +101,7 @@ interface Props {
 
 export function TodoRow({ todo, projectName, showProjectName, variant = "list" }: Props) {
   const navigate = useNavigate();
-  const { todos, projects, patchTodo, removeTodo, moveTodo } = useAppStore();
+  const { todos, projects, patchTodo, moveTodo } = useAppStore();
   const lanes = [...(projects.find(p=>p.id===todo.projectId)?.swimlanes ?? [])].sort((a,b)=>a.sortOrder-b.sortOrder);
   const [addCommitOpen, setAddCommitOpen] = React.useState(false);
   const [addText, setAddText] = React.useState("");
@@ -116,10 +117,12 @@ export function TodoRow({ todo, projectName, showProjectName, variant = "list" }
   const start = () => patchTodo(todo.id, { status: "doing", startedAt: Date.now() });
   const complete = async () => {
     setBusy("complete");
+    try {
     const updated = await autoRecaptureOnDone(todo, todo.repoPath, todo.branch, todos);
     patchTodo(todo.id, { status: "done", doneAt: updated.doneAt, commits: updated.commits });
-    setBusy(null);
+    await flushPersistence();
     toast.success("已完成并自动补录提交");
+    } catch (error) { toast.error(String(error)); } finally { setBusy(null); }
   };
   const reopen = () => patchTodo(todo.id, { status: "todo", startedAt: null, doneAt: null });
 
@@ -133,6 +136,7 @@ export function TodoRow({ todo, projectName, showProjectName, variant = "list" }
       await gitCheckoutBranch(todo.repoPath, branch);
       invalidateGitInfo(todo.repoPath);
       patchTodo(todo.id, { branch });
+      await flushPersistence();
       toast.success(`已检出 ${branch}`);
     } catch (e) {
       toast.error(String(e));
@@ -168,6 +172,7 @@ export function TodoRow({ todo, projectName, showProjectName, variant = "list" }
       patchTodo(todo.id, {
         commits: [...commits.filter((c) => !todo.commits.some((x) => x.hash === c.hash)), ...todo.commits],
       });
+      await flushPersistence();
       toast.success(`同步到 ${commits.length} 条提交`);
     } catch (e) {
       toast.error(String(e));
@@ -179,10 +184,12 @@ export function TodoRow({ todo, projectName, showProjectName, variant = "list" }
   const doRecapture = async () => {
     if (!todo.repoPath || !todo.branch) return toast.error("未绑定代码目录或分支");
     setBusy("recapture");
-    const updated = await recapture(todo, todo.repoPath, todo.branch, todos);
-    patchTodo(todo.id, { commits: updated.commits });
-    setBusy(null);
-    toast.success("已按时间窗补录");
+    try {
+      const updated = await recapture(todo, todo.repoPath, todo.branch, todos);
+      patchTodo(todo.id, { commits: updated.commits });
+      await flushPersistence();
+      toast.success("已按时间窗补录");
+    } catch (error) { toast.error(String(error)); } finally { setBusy(null); }
   };
 
   // 手动添加提交（多行批量）：按空白/逗号拆分逐个查询，单条失败不中断其余条目
@@ -206,7 +213,10 @@ export function TodoRow({ todo, projectName, showProjectName, variant = "list" }
           failed.push(token);
         }
       }
-      if (added.length > 0) patchTodo(todo.id, { commits: [...added, ...todo.commits] });
+      if (added.length > 0) {
+        patchTodo(todo.id, { commits: [...added, ...todo.commits] });
+        await flushPersistence();
+      }
       const summary = [`新增 ${added.length}`, duplicated > 0 ? `重复 ${duplicated}` : "", failed.length > 0 ? `失败 ${failed.length}` : ""].filter(Boolean).join("、");
       if (failed.length > 0) {
         // 失败项留在输入框，便于修正后重试
@@ -221,7 +231,7 @@ export function TodoRow({ todo, projectName, showProjectName, variant = "list" }
         setAddCommitOpen(false);
         toast.info("输入的提交均已存在");
       }
-    } finally {
+    } catch (error) { toast.error(`提交记录未保存：${String(error)}`); } finally {
       setBusy(null);
     }
   };
@@ -437,7 +447,7 @@ export function TodoRow({ todo, projectName, showProjectName, variant = "list" }
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setConfirmDeleteOpen(false)}>取消</Button>
-            <Button variant="destructive" onClick={() => { setConfirmDeleteOpen(false); removeTodo(todo.id); }}>删除</Button>
+            <Button variant="destructive" onClick={() => { setConfirmDeleteOpen(false); deleteWithUndo("todo", todo.id, todo.title); }}>删除</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

@@ -1,4 +1,4 @@
-// 待办详情页（新建/编辑一体）：中间标题 + WYSIWYG Markdown 备注；右侧字段栏
+// 待办详情页（新建/编辑一体）：中间标题 + Markdown 源文与预览 备注；右侧字段栏
 // 字段栏：代码目录 Select / 仓库状态条 / 分支 BranchSelect（可新建，切出源默认生产分支）/ 泳道 Select / 日期范围 / 卡点
 
 import * as React from "react";
@@ -8,6 +8,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { toast } from "sonner";
 import { ArrowLeft, GitBranch, ListTodo, RefreshCw, RotateCcw, Save } from "lucide-react";
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -15,7 +16,7 @@ import { Label } from "@/components/ui/label";
 import { BranchSelect } from "@/components/board/BranchSelect";
 import { DateRangePicker, type DateRangeValue } from "@/components/board/DateRangePicker";
 import { MarkdownEditor } from "@/components/todo/MarkdownEditor";
-import { useAppStore } from "@/lib/store";
+import { flushPersistence, useAppStore } from "@/lib/store";
 import {
   gitCreateBranchFrom,
   gitInfoCached,
@@ -72,6 +73,11 @@ type FormValues = z.infer<typeof schema>;
 
 export function TodoDetailPage() {
   const { projectId = "", todoId = "new" } = useParams();
+  return <TodoDetailForm key={`${projectId}/${todoId}`} />;
+}
+
+function TodoDetailForm() {
+  const { projectId = "", todoId = "new" } = useParams();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const { projects, todos, upsertTodo } = useAppStore();
@@ -88,15 +94,7 @@ export function TodoDetailPage() {
   const [gitLoading, setGitLoading] = React.useState(false);
   const reqSeq = React.useRef(0);
 
-  const {
-    register,
-    handleSubmit,
-    watch,
-    setValue,
-    formState: { errors, isDirty, isSubmitting },
-  } = useForm<FormValues>({
-    resolver: zodResolver(schema),
-    defaultValues: {
+  const initialValues: FormValues = {
       title: editing?.title ?? "",
       note: editing?.note ?? "",
       repoPath: editing?.repoPath ?? (project?.frontendDir || project?.backendDir || project?.projectDir || ""),
@@ -113,17 +111,99 @@ export function TodoDetailPage() {
       endDate: editing?.endDate ?? null,
       blocker: editing?.blocker ?? "",
       tag: editing?.tag ?? "",
-    },
+    };
+
+  const {
+    register,
+    reset,
+    getValues,
+    handleSubmit,
+    watch,
+    setValue,
+    formState: { errors, isDirty, isSubmitting },
+  } = useForm<FormValues>({
+    resolver: zodResolver(schema),
+    defaultValues: initialValues,
   });
+
+  const newTodoId = React.useRef(newId());
+  const finishedSave = React.useRef(false);
+  const createdBranch = React.useRef("");
+  const draftKey = `todo-draft-v1:${projectId}:${todoId}`;
+  const [draft, setDraft] = React.useState<Partial<FormValues> | null>(() => {
+    try {
+      const raw = JSON.parse(localStorage.getItem(draftKey) ?? "null");
+      if (!raw || typeof raw !== "object") return null;
+      const safe: Partial<FormValues> = {};
+      for (const key of Object.keys(initialValues) as (keyof FormValues)[]) {
+        const item = raw[key];
+        if ((key === "startDate" || key === "endDate") ? (item === null || typeof item === "string") : typeof item === typeof initialValues[key]) Object.assign(safe, { [key]: item });
+      }
+      return safe;
+    } catch { return null; }
+  });
+  const [draftError, setDraftError] = React.useState("");
+  const [resolution, setResolution] = React.useState<"remote" | "local" | null>(null);
+  const [externalChange, setExternalChange] = React.useState(false);
+  const original = React.useRef(JSON.stringify(editing ?? null));
+  const dirtyRef = React.useRef(isDirty);
+  dirtyRef.current = isDirty;
+  React.useEffect(() => {
+    const current = JSON.stringify(editing ?? null);
+    if (current === original.current || isSubmitting) return;
+    if (isDirty) setExternalChange(true);
+    else {
+      original.current = current;
+      reset(initialValues);
+      setExternalChange(false);
+    }
+  }, [editing, isDirty, isSubmitting, reset]);
+  React.useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const saveDraft = () => {
+      if (!dirtyRef.current || finishedSave.current) return;
+      try {
+        localStorage.setItem(draftKey, JSON.stringify(getValues()));
+        setDraftError("");
+      } catch { setDraftError("草稿写入失败（可能空间不足），请复制内容后再离开。"); }
+    };
+    const subscription = watch(() => { clearTimeout(timer); timer = setTimeout(saveDraft, 500); });
+    window.addEventListener("pagehide", saveDraft);
+    window.addEventListener("todo-save-draft", saveDraft);
+    return () => { clearTimeout(timer); saveDraft(); subscription.unsubscribe(); window.removeEventListener("pagehide", saveDraft); window.removeEventListener("todo-save-draft", saveDraft); };
+  }, [draftKey, watch, getValues]);
+  const clearDraft = () => { try { localStorage.removeItem(draftKey); } catch { /* Surface future save failures through draftError. */ } setDraft(null); };
+
+  React.useEffect(() => {
+    useAppStore.setState({ editingDirty: isDirty });
+    return () => { useAppStore.setState({ editingDirty: false }); };
+  }, [isDirty]);
 
   const [customRepo, setCustomRepo] = React.useState(false);
   const [saveError, setSaveError] = React.useState("");
   const submitLock = React.useRef(false);
+  const descriptionBusy = React.useRef(false);
+  const [imageProcessing, setImageProcessing] = React.useState(false);
+  const handleImageProcessing = React.useCallback((busy: boolean) => {
+    descriptionBusy.current = busy;
+    setImageProcessing(busy);
+  }, []);
   React.useEffect(() => {
     if (!isDirty) return;
     const guard = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ""; };
     const guardLink = (e: MouseEvent) => {
-      if ((e.target as HTMLElement).closest("a[href]") && !window.confirm("还有未保存的修改，确定离开？")) {e.preventDefault(); e.stopPropagation();}
+      const link = e.target instanceof Element ? e.target.closest<HTMLAnchorElement>("a[href]") : null;
+      if (!link || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      if (link.hasAttribute("download") || (link.target && link.target !== "_self")) return;
+      const href = link.getAttribute("href") ?? "";
+      // Markdown fragment links scroll inside the preview; HashRouter links navigate.
+      if (link.closest(".md-editor") && href.startsWith("#")) return;
+      const destination = new URL(link.href, window.location.href);
+      if (!["http:", "https:"].includes(destination.protocol) || destination.href === window.location.href) return;
+      if (!window.confirm("还有未保存的修改，确定离开？")) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
     };
     window.addEventListener("beforeunload",guard);
     document.addEventListener("click",guardLink,true);
@@ -186,6 +266,14 @@ export function TodoDetailPage() {
   };
 
   const onSubmit = async (values: FormValues) => {
+    if (externalChange || (!isNew && !editing)) {
+      setSaveError("任务已被外部修改或删除，请先处理冲突。");
+      return;
+    }
+    if (descriptionBusy.current) {
+      setSaveError("图片正在处理，请完成后再保存。");
+      return;
+    }
     if (!project || submitLock.current) return;
     submitLock.current=true; setSaveError("");
     try {
@@ -198,7 +286,11 @@ export function TodoDetailPage() {
         return;
       }
       try {
-        await gitCreateBranchFrom(values.repoPath, newBranch, values.branchFrom);
+        const branchRequest = JSON.stringify([values.repoPath, newBranch, values.branchFrom]);
+        if (createdBranch.current !== branchRequest) {
+          await gitCreateBranchFrom(values.repoPath, newBranch, values.branchFrom);
+          createdBranch.current = branchRequest;
+        }
         invalidateGitInfo(values.repoPath);
         branch = newBranch;
       } catch (e) {
@@ -209,7 +301,7 @@ export function TodoDetailPage() {
 
     const now = Date.now();
     const base: Partial<Todo> = editing ?? {
-      id: newId(),
+      id: newTodoId.current,
       projectId: project.id,
       status: (lanes.find((l) => l.id === values.swimlaneId)?.status as TodoStatus) ?? "todo",
       quadrant: "schedule",
@@ -239,7 +331,12 @@ export function TodoDetailPage() {
     // 提交标记手动编辑支持：用户输入（含空串）为权威值，覆盖 normalize 的兜底；
     // 空串 → 后端 save_state 自动生成 todo-<seq>；非空 → 保留用户标记（全局唯一校验在后端）
     todo.tag = values.tag.trim();
+    original.current = JSON.stringify(todo);
     upsertTodo(todo);
+    await flushPersistence();
+    finishedSave.current = true;
+    dirtyRef.current = false;
+    clearDraft();
     toast.success(isNew ? "待办已创建" : "待办已保存");
     navigate(`/project/${project.id}`);
     } catch(e) {setSaveError(String(e));toast.error("保存失败，请重试");} finally {submitLock.current=false;}
@@ -265,9 +362,17 @@ export function TodoDetailPage() {
         </Button>
         <h1 className="text-xl font-semibold">{isNew ? "新建待办" : "编辑待办"}</h1>
         {editing?.tag && <span className="font-mono text-xs text-muted-foreground">{editing.tag}</span>}
-        <span className="ml-auto text-xs text-muted-foreground">{isSubmitting ? "正在保存…" : isDirty ? "有未保存的修改" : isNew ? "填写任务内容" : "所有修改已保存"}</span><Button className="gap-2" disabled={isSubmitting} onClick={handleSubmit(onSubmit)}><Save className="h-4 w-4"/>{isSubmitting ? "保存中…" : "保存任务"}</Button>
+        <span className="ml-auto text-xs text-muted-foreground">{isSubmitting ? "正在保存…" : isDirty ? "有未保存的修改" : isNew ? "填写任务内容" : "所有修改已保存"}</span><Button className="gap-2" disabled={isSubmitting || imageProcessing} onClick={handleSubmit(onSubmit)}><Save className="h-4 w-4"/>{imageProcessing ? "图片处理中…" : isSubmitting ? "保存中…" : "保存任务"}</Button>
       </div>
 
+      <Dialog open={resolution !== null} onOpenChange={open => { if (!open) setResolution(null); }}><DialogContent><DialogTitle>处理编辑冲突</DialogTitle><DialogDescription>{resolution === "remote" ? "使用最新内容将替换当前编辑并清除本地草稿。" : "保留自己的编辑后，下一次保存将用当前表单字段覆盖外部修改。"}</DialogDescription><div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setResolution(null)}>取消</Button><Button onClick={() => {
+        original.current = JSON.stringify(editing ?? null);
+        if (resolution === "remote") { reset(initialValues); clearDraft(); }
+        setExternalChange(false); setResolution(null);
+      }}>确认</Button></div></DialogContent></Dialog>
+      {draft && <div className="mb-3 flex flex-wrap items-center gap-2 rounded border bg-card p-3 text-sm"><span>发现本地未保存草稿</span><Button type="button" size="sm" onClick={() => { const values = { ...getValues(), ...draft }; for (const key of Object.keys(values) as (keyof FormValues)[]) setValue(key, values[key], { shouldDirty: true }); setDraft(null); }}>恢复草稿</Button><Button type="button" size="sm" variant="ghost" onClick={clearDraft}>丢弃草稿</Button></div>}
+      {draftError && <p role="alert" className="mb-3 text-sm text-destructive">{draftError}</p>}
+      {externalChange && <div role="alert" className="mb-3 flex flex-wrap items-center gap-2 rounded border p-3 text-sm"><span>任务已被其他窗口或 MCP 修改；你的编辑仍保留。</span><Button type="button" size="sm" onClick={() => setResolution("remote")}>使用最新内容</Button>{editing && <Button type="button" size="sm" variant="outline" onClick={() => setResolution("local")}>保留我的编辑</Button>}</div>}
       {saveError && <p role="alert" className="mb-3 text-sm text-destructive">{saveError}</p>}
       <form className="tk-editor-layout" onSubmit={handleSubmit(onSubmit)}>
         {/* 中间主体 */}
@@ -280,7 +385,9 @@ export function TodoDetailPage() {
           {errors.title && <p className="text-xs text-destructive">{errors.title.message}</p>}
           <div className="min-h-0 flex-1">
             <MarkdownEditor
-              value={editing?.note ?? ""}
+              value={watch("note")}
+              disabled={isSubmitting}
+              onProcessingChange={handleImageProcessing}
               onChange={(md) => setValue("note", md, { shouldDirty: true })}
             />
           </div>

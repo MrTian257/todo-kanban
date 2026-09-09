@@ -1,16 +1,7 @@
-// 备注只读渲染（react-markdown + remark-gfm）
+import { lazy, Suspense } from "react";
 
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import { cn } from "@/lib/utils";
-
-export function MarkdownView({ content, className }: { content: string; className?: string }) {
-  if (!content?.trim()) {
-    return <span className="text-muted-foreground">（无备注）</span>;
-  }
-  return (
-    <div className={cn("md-editor text-sm leading-relaxed", className)}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
-    </div>
-  );
+const Renderer = lazy(() => import("./MarkdownRenderer").then(module => ({ default: module.MarkdownView })));
+export function MarkdownView(props: { content: string; className?: string }) {
+  if (!props.content.trim()) return <span className="text-muted-foreground">（无备注）</span>;
+  return <Suspense fallback={<span className="text-muted-foreground" role="status">正在加载预览…</span>}><Renderer {...props} /></Suspense>;
 }
