@@ -35,7 +35,7 @@ import {
   BranchRuleStep,
   Project,
 } from "@/lib/types";
-import { useAppStore } from "@/lib/store";
+import { flushPersistence, useAppStore } from "@/lib/store";
 import { newId } from "@/lib/utils";
 
 const schema = z.object({
@@ -74,6 +74,10 @@ const BRANCH_DEF_TEMPLATE: BranchDef[] = [
 export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
   const { upsertProject } = useAppStore();
   const isEdit = !!project;
+  const submittedProject = React.useRef<Project | null>(null);
+  React.useEffect(() => { submittedProject.current = null; }, [open, project]);
+  const newProjectId = React.useRef(newId());
+  React.useEffect(() => { if (open) newProjectId.current = newId(); }, [open]);
 
   const [showToken, setShowToken] = React.useState(false);
   const [ruleEnabled, setRuleEnabled] = React.useState(true);
@@ -84,7 +88,7 @@ export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
     register,
     handleSubmit,
     reset,
-    formState: { errors },
+    formState: { errors, isSubmitting },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
     defaultValues: {
@@ -133,7 +137,15 @@ export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
     }
   }, [open, project, reset]);
 
-  const onSubmit = (values: FormValues) => {
+  const onSubmit = async (values: FormValues) => {
+    try {
+    if (project) {
+      const latest = useAppStore.getState().projects.find(item => item.id === project.id);
+      if (JSON.stringify(latest) !== JSON.stringify(submittedProject.current ?? project)) {
+        toast.error("项目已被外部修改，请关闭后重新打开再编辑。");
+        return;
+      }
+    }
     const now = Date.now();
     const rule: BranchRule | null = {
       enabled: ruleEnabled,
@@ -144,7 +156,7 @@ export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
         .filter((b) => b.code !== ""),
     };
     const p: Project = {
-      id: project?.id ?? newId(),
+      id: project?.id ?? newProjectId.current,
       name: values.name.trim(),
       projectDir: values.projectDir.trim(),
       frontendDir: values.frontendDir.trim(),
@@ -162,8 +174,11 @@ export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
       updatedAt: now,
     };
     upsertProject(p);
+    submittedProject.current = useAppStore.getState().projects.find(item => item.id === p.id) ?? p;
+    await flushPersistence();
     toast.success(isEdit ? "项目已更新" : "项目已创建");
     onOpenChange(false);
+    } catch (error) { toast.error(`项目未保存：${String(error)}`); }
   };
 
   const updateStep = (id: string, patch: Partial<BranchRuleStep>) => {
@@ -335,7 +350,7 @@ export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               取消
             </Button>
-            <Button type="submit">{isEdit ? "保存" : "创建"}</Button>
+            <Button type="submit" disabled={isSubmitting}>{isEdit ? "保存" : "创建"}</Button>
           </DialogFooter>
         </form>
       </DialogContent>

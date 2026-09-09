@@ -61,7 +61,7 @@ fn load_state() -> AppResult<Option<DbState>> {
     Ok(Some(db::load_state(&conn)?))
 }
 
-fn save_state(state: DbState) -> AppResult<()> {
+fn save_state(state: DbState, expected: &DbState) -> AppResult<()> {
     if is_readonly() {
         return Err(AppError::invalid(
             "只读模式（MCP_TODO_READONLY=1），写操作被拒绝",
@@ -71,7 +71,7 @@ fn save_state(state: DbState) -> AppResult<()> {
         return Err(AppError::invalid("未配置数据文件，无法保存"));
     };
     let (conn, _report) = db::open_and_init(&path, &mcp_backup_dir())?;
-    db::save_state(&conn, &state)
+    db::save_state_checked(&conn, &state, expected).map(|_| ())
 }
 
 /// MCP server 进程的备份目录：exe 所在目录/backup（与 app 同目录部署时共用）
@@ -137,9 +137,10 @@ fn call_tool(name: &str, args: &Value) -> AppResult<Value> {
             let mut state: DbState =
                 serde_json::from_value(args.get("payload").cloned().unwrap_or(Value::Null))?;
             // MCP 写打标：新建 todo/project → created_by=ai；修改 todo → ai_coordinated=true
-            let existing = load_state()?.unwrap_or_default();
-            apply_ai_markers(&mut state, &existing);
-            save_state(state)?;
+            let expected: DbState = serde_json::from_value(args.get("expected").cloned()
+                .ok_or_else(|| AppError::invalid("保存必须携带 db_load_state 返回的 expected 原始快照"))?)?;
+            apply_ai_markers(&mut state, &expected);
+            save_state(state, &expected)?;
             Ok(json!({ "ok": true }))
         }
         _ => Err(AppError::invalid(format!("未知工具：{name}"))),
@@ -251,7 +252,7 @@ pub fn tool_schemas() -> Value {
         { "name": "git_commits_between", "description": "时间窗抓取提交（ISO 8601 起止）", "inputSchema": { "type": "object", "properties": { "repo": { "type": "string" }, "branch": { "type": "string" }, "since": { "type": "string" }, "until": { "type": "string" } }, "required": ["repo", "branch", "since", "until"] } },
         { "name": "git_commit_info", "description": "按短 hash 查询单条提交", "inputSchema": { "type": "object", "properties": { "repo": { "type": "string" }, "hash": { "type": "string" } }, "required": ["repo", "hash"] } },
         { "name": "db_load_state", "description": "全量读取状态 { projects, todos }", "inputSchema": { "type": "object", "properties": { } } },
-        { "name": "db_save_state", "description": "全量保存状态（差异写 + 校验）", "inputSchema": { "type": "object", "properties": { "payload": { "type": "object" } }, "required": ["payload"] } },
+        { "name": "db_save_state", "description": "保存状态；expected 必须为修改前 db_load_state 的原始返回值，冲突需重新读取，禁止直接覆盖", "inputSchema": { "type": "object", "properties": { "payload": { "type": "object" }, "expected": { "type": "object" } }, "required": ["payload", "expected"] } },
     ])
 }
 

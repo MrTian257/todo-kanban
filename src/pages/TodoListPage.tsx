@@ -1,7 +1,7 @@
 // 全部待办：全部待办一览（状态/项目筛选，支持快捷创建）
 
-import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useDeferredValue, useEffect, useMemo, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -12,16 +12,32 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { EmptyState } from "@/components/board/EmptyState";
-import { TodoRow } from "@/components/board/TodoRow";
+import { VirtualTodoList } from "@/components/todo/VirtualTodoList";
+import { Input } from "@/components/ui/input";
 import { useAppStore } from "@/lib/store";
 import { STATUS_LABEL, STATUS_ORDER } from "@/lib/types";
 
 export function TodoListPage() {
   const navigate = useNavigate();
   const { projects, todos } = useAppStore();
-  const [status, setStatus] = useState<string>("all");
-  const [projectId, setProjectId] = useState<string>("all");
-  const [showArchived, setShowArchived] = useState(false);
+  const [params] = useSearchParams();
+  const [saved] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("todo-list-filters-v1") ?? "{}"); } catch { return {}; }
+  });
+  const [status, setStatus] = useState<string>(["all", "todo", "doing", "done"].includes(saved?.status) ? saved.status : "all");
+  const [projectId, setProjectId] = useState<string>(typeof saved?.projectId === "string" ? saved.projectId : "all");
+  const [showArchived, setShowArchived] = useState(saved?.showArchived === true);
+  const [query, setQuery] = useState(params.get("q") ?? (typeof saved?.query === "string" ? saved.query : ""));
+  const deferredQuery = useDeferredValue(query.trim().toLowerCase());
+  useEffect(() => {
+    if (params.has("q")) { setQuery(params.get("q") ?? ""); setProjectId("all"); setStatus("all"); }
+  }, [params]);
+  useEffect(() => {
+    if (projectId !== "all" && !projects.some(project => project.id === projectId)) setProjectId("all");
+  }, [projects, projectId]);
+  useEffect(() => {
+    try { localStorage.setItem("todo-list-filters-v1", JSON.stringify({ status, projectId, showArchived, query })); } catch { /* Filters are optional. */ }
+  }, [status, projectId, showArchived, query]);
 
   const projectById = useMemo(() => new Map(projects.map((p) => [p.id, p])), [projects]);
 
@@ -30,11 +46,12 @@ export function TodoListPage() {
       .filter((t) => (showArchived ? t.archived : !t.archived))
       .filter((t) => (status === "all" ? true : t.status === status))
       .filter((t) => (projectId === "all" ? true : t.projectId === projectId))
+      .filter(t => !deferredQuery || [t.title, t.note.replace(/data:image\/[^)\s]+/g, ""), t.branch, t.tag, t.blocker, projectById.get(t.projectId)?.name ?? ""].some(text => text.toLowerCase().includes(deferredQuery)))
       .sort((a, b) => b.updatedAt - a.updatedAt);
-  }, [todos, status, projectId, showArchived]);
+  }, [todos, status, projectId, showArchived, deferredQuery, projectById]);
 
   return (
-    <div className="h-full w-full bg-background tk-page">
+    <div className="flex h-full min-h-0 w-full flex-col bg-background tk-page">
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <h1 className="tk-page-heading">全部待办</h1>
         <div className="ml-auto flex flex-wrap items-center gap-2">
@@ -77,19 +94,11 @@ export function TodoListPage() {
         </div>
       </div>
 
+      <div className="mb-3 flex flex-wrap items-center gap-2"><Input aria-label="搜索全部待办" placeholder="搜索标题、描述、分支、标记或项目…" value={query} onChange={event => setQuery(event.target.value)} className="max-w-lg" /><span className="text-xs text-muted-foreground">{list.length} 条结果</span><Button variant="ghost" onClick={() => { setQuery(""); setStatus("all"); setProjectId("all"); setShowArchived(false); }}>清除筛选</Button></div>
       {list.length === 0 ? (
         <EmptyState text="没有符合条件的待办" />
       ) : (
-        <div className="tk-panel mx-auto max-w-5xl overflow-hidden">
-          {list.map((t) => (
-            <TodoRow
-              key={t.id}
-              todo={t}
-              projectName={projectById.get(t.projectId)?.name}
-              showProjectName
-            />
-          ))}
-        </div>
+        <VirtualTodoList key={`${status}/${projectId}/${showArchived}/${deferredQuery}`} todos={list} projects={projectById} />
       )}
     </div>
   );

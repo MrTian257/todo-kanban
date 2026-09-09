@@ -1,9 +1,19 @@
 // git 封装：9 个 invoke + 3 个缓存函数（60s TTL + 单飞去重 + 路径大小写折叠 + 同步 peek）
 // 浏览器模式（非 Tauri）下函数直接抛错/返回空，由调用方处理。
 
-import { invoke } from "@tauri-apps/api/core";
+import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { CommitInfo, GitInfo } from "./types";
 import { isTauri } from "./storage";
+
+let pendingGit = 0;
+const activityListeners = new Set<() => void>();
+export const getGitActivity = () => pendingGit;
+export const subscribeGitActivity = (listener: () => void) => { activityListeners.add(listener); return () => { activityListeners.delete(listener); }; };
+async function invoke<T>(command: string, args: Record<string, unknown>): Promise<T> {
+  pendingGit++; activityListeners.forEach(listener => listener());
+  try { return await tauriInvoke<T>(command, args); }
+  finally { pendingGit--; activityListeners.forEach(listener => listener()); }
+}
 
 // ── invoke 封装 ─────────────────────────────────────────
 export async function gitInfo(repo: string): Promise<GitInfo> {

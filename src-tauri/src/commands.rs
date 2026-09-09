@@ -85,8 +85,8 @@ pub fn db_load_state() -> Result<Option<DbState>, String> {
 
 /// 11. 差异写落库（写锁 + 分支规则校验 + 泳道归属校验 + seq 收敛 + 提交去重）
 #[tauri::command]
-pub fn db_save_state(payload: DbState) -> Result<(), String> {
-    db_cmds::save_state(payload).map_err(err_str)
+pub fn db_save_state(payload: DbState, expected: DbState) -> Result<DbState, String> {
+    db_cmds::save_state_checked(payload, expected).map_err(err_str)
 }
 
 /// 12. 读取 MCP 集成设置（启用开关 + 授权 Token；缺失返回默认：启用 + sk-GLOBAl_MCP_BY_ADMIN）

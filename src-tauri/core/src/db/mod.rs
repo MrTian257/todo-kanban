@@ -108,15 +108,35 @@ pub fn load_state(conn: &Connection) -> AppResult<DbState> {
 
 /// 差异写落库（单事务）：UPSERT 变更行（updated_at 较新者胜）+ 差集删除 + seq/tag 收敛 + 提交全局去重 + 泳道校验
 pub fn save_state(conn: &Connection, state: &DbState) -> AppResult<()> {
+    save_state_inner(conn, state, None).map(|_| ())
+}
+
+/// Compare the caller's read snapshot under a cross-process SQLite write lock.
+pub fn save_state_checked(conn: &Connection, state: &DbState, expected: &DbState) -> AppResult<DbState> {
+    save_state_inner(conn, state, Some(expected))
+}
+
+fn save_state_inner(conn: &Connection, state: &DbState, expected: Option<&DbState>) -> AppResult<DbState> {
     // 分支规则校验（保存前兜底，与前端 zod 同规则）
     for p in &state.projects {
         branch_rule::validate(&p.branch_rule)?;
     }
 
-    let tx = conn.unchecked_transaction()?;
+    let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)?;
 
     // 库中既有（用于 seq 冲突、提交去重、差集删除）
     let existing = row::load_state_from_conn(&tx)?;
+    if let Some(expected) = expected {
+        let mut actual = existing.clone();
+        let mut expected = expected.clone();
+        actual.projects.sort_by(|a, b| a.id.cmp(&b.id));
+        expected.projects.sort_by(|a, b| a.id.cmp(&b.id));
+        actual.todos.sort_by(|a, b| a.id.cmp(&b.id));
+        expected.todos.sort_by(|a, b| a.id.cmp(&b.id));
+        if actual != expected {
+            return Err(AppError::invalid("STATE_CONFLICT: 数据已被其他窗口或 MCP 修改，请重新读取后处理冲突"));
+        }
+    }
     ensure_next_seq(&tx)?;
 
     // 项目泳道索引
@@ -211,8 +231,9 @@ pub fn save_state(conn: &Connection, state: &DbState) -> AppResult<()> {
         tx.execute("DELETE FROM todos WHERE id = ?1", [id])?;
     }
 
+    let saved = row::load_state_from_conn(&tx)?;
     tx.commit()?;
-    Ok(())
+    Ok(saved)
 }
 
 fn ensure_next_seq(conn: &Connection) -> AppResult<()> {

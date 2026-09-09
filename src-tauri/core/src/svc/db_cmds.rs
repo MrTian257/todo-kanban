@@ -50,24 +50,8 @@ pub fn load_state() -> AppResult<Option<DbState>> {
         .lock()
         .map_err(|_| AppError::invalid("读锁获取失败"))?;
     let (conn, _report) = db::open_and_init(&path, &backup_dir()?)?;
-    let fp = db::storage_fingerprint(&conn)?;
-
-    let cache = FP_CACHE
-        .lock()
-        .map_err(|_| AppError::invalid("缓存锁获取失败"))?;
-    if let Some((cfp, state)) = cache.as_ref() {
-        if *cfp == fp {
-            return Ok(Some(state.clone()));
-        }
-    }
-    drop(cache);
-
-    let state = db::load_state(&conn)?;
-    let mut cache = FP_CACHE
-        .lock()
-        .map_err(|_| AppError::invalid("缓存锁获取失败"))?;
-    *cache = Some((fp, state.clone()));
-    Ok(Some(state))
+    // Read a fresh snapshot: count + max(updated_at) can miss concurrent edits.
+    Ok(Some(db::load_state(&conn)?))
 }
 
 /// 差异写落库：写锁全程互斥 + 保存前校验（分支规则 / 泳道归属由 db::save_state 承担）+ 清指纹缓存
@@ -83,6 +67,16 @@ pub fn save_state(payload: DbState) -> AppResult<()> {
         .map_err(|_| AppError::invalid("缓存锁获取失败"))?;
     *cache = None;
     Ok(())
+}
+
+/// UI snapshot save: stale snapshots cannot delete concurrent records.
+pub fn save_state_checked(payload: DbState, expected: DbState) -> AppResult<DbState> {
+    let path = db_path()?;
+    let _guard = DB_RW_LOCK.lock().map_err(|_| AppError::invalid("写锁获取失败"))?;
+    let (conn, _report) = db::open_and_init(&path, &backup_dir()?)?;
+    let saved = db::save_state_checked(&conn, &payload, &expected)?;
+    *FP_CACHE.lock().map_err(|_| AppError::invalid("缓存锁获取失败"))? = None;
+    Ok(saved)
 }
 
 /// 启动自举：使用运行目录 todo-kanban.db；

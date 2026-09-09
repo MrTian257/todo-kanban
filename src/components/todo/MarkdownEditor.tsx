@@ -1,6 +1,8 @@
 // Store Markdown source verbatim; preview and read-only views share one renderer.
 import * as React from "react";
 import { Bold, Code, FileCode2, Heading2, Image as ImageIcon, Italic, Link, List, ListChecks, ListOrdered, Quote, Strikethrough, Table2, Minus, Sigma, HelpCircle } from "lucide-react";
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { MarkdownView } from "./MarkdownView";
 import { cn } from "@/lib/utils";
@@ -58,22 +60,29 @@ interface Props {
   value: string;
   onChange: (markdown: string) => void;
   className?: string;
+  disabled?: boolean;
+  onProcessingChange?: (busy: boolean) => void;
 }
 
 type Mode = "edit" | "split" | "preview";
 
-export function MarkdownEditor({ value, onChange, className }: Props) {
+export function MarkdownEditor({ value, onChange, className, disabled = false, onProcessingChange }: Props) {
   const ref = React.useRef<HTMLTextAreaElement>(null);
   const fileRef = React.useRef<HTMLInputElement>(null);
   const [mode, setMode] = React.useState<Mode>("edit");
   const [help, setHelp] = React.useState(false);
   const [uploading, setUploading] = React.useState(false);
   const [error, setError] = React.useState("");
+  const [linkDraft, setLinkDraft] = React.useState<{ text: string; url: string; start: number; end: number; original: string } | null>(null);
+  const [linkError, setLinkError] = React.useState("");
+  const pendingLink = React.useRef<{ text: string; start: number; end: number; original: string } | null>(null);
+  const processingCallback = React.useRef(onProcessingChange);
+  processingCallback.current = onProcessingChange;
   const latest = React.useRef(value);
   const mounted = React.useRef(true);
   const imageBusy = React.useRef(false);
   latest.current = value;
-  React.useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  React.useEffect(() => { mounted.current = true; return () => { mounted.current = false; processingCallback.current?.(false); }; }, []);
   const preview = React.useDeferredValue(value);
   const selection = React.useRef({ start: 0, end: 0 });
   const rememberSelection = () => {
@@ -82,7 +91,7 @@ export function MarkdownEditor({ value, onChange, className }: Props) {
 
   const replace = (text: string, start: number, end: number, selectedStart = text.length, selectedEnd = selectedStart) => {
     const editor = ref.current;
-    if (!editor) return;
+    if (!editor || disabled) return;
     editor.focus();
     editor.setSelectionRange(start, end);
     // Native text insertion preserves browser undo/redo. Fall back for WebViews without this command.
@@ -95,8 +104,66 @@ export function MarkdownEditor({ value, onChange, className }: Props) {
   };
   const wrap = (before: string, after: string, placeholder = "文字") => {
     const { start, end } = selection.current;
-    const text = value.slice(start, end) || placeholder;
-    replace(before + text + after, start, end, before.length, before.length + text.length);
+    const selected = value.slice(start, end);
+    if (start >= before.length && value.slice(start - before.length, start) === before && value.slice(end, end + after.length) === after) {
+      replace(selected, start - before.length, end + after.length, 0, selected.length);
+    } else if (selected.length >= before.length + after.length && selected.startsWith(before) && selected.endsWith(after)) {
+      const inner = selected.slice(before.length, -after.length);
+      replace(inner, start, end, 0, inner.length);
+    } else {
+      const text = selected || placeholder;
+      replace(before + text + after, start, end, before.length, before.length + text.length);
+    }
+  };
+  const inlineCode = () => {
+    const { start, end } = selection.current;
+    const text = value.slice(start, end) || "code";
+    const runs = Array.from(text.matchAll(/`+/g), match => match[0].length);
+    const fence = "`".repeat(runs.reduce((max, length) => Math.max(max, length + 1), 1));
+    // CommonMark strips one surrounding space when the content is not all spaces.
+    const padding = /^`|`$/.test(text) || (/^ .* $/s.test(text) && /[^ ]/.test(text)) ? " " : "";
+    replace(fence + padding + text + padding + fence, start, end, fence.length + padding.length, fence.length + padding.length + text.length);
+  };
+  const openLink = () => {
+    let { start, end } = selection.current;
+    let text = value.slice(start, end);
+    let url = "https://";
+    // Edit a standard inline link when the caret/selection is inside it.
+    for (const match of value.matchAll(/(?<!!)\[((?:\\.|[^\]\\\n])*)\]\((<[^>\n]*>|[^\s()]+)\)/g)) {
+      const from = match.index!;
+      if (start >= from && end <= from + match[0].length) {
+        start = from;
+        end = from + match[0].length;
+        text = match[1].replace(/\\([\[\]\\])/g, "$1");
+        url = match[2].replace(/^<|>$/g, "");
+        break;
+      }
+    }
+    setLinkError("");
+    setLinkDraft({ text, url, start, end, original: value });
+  };
+  const saveLink = () => {
+    if (!linkDraft || disabled) return;
+    const url = linkDraft.url.trim();
+    if (!url || /[\r\n]/.test(url) || /^(?:javascript|data|vbscript):/i.test(url) || (/^[a-z][a-z\d+.-]*:/i.test(url) && !/^(?:https?|mailto|tel):/i.test(url))) {
+      setLinkError("请输入有效的 http、https、mailto、tel 地址或相对地址。");
+      return;
+    }
+    if (/^https?:/i.test(url)) {
+      try { new URL(url); } catch {
+        setLinkError("请输入完整的网址，例如 https://example.com。");
+        return;
+      }
+    }
+    if (latest.current !== linkDraft.original) {
+      setLinkError("描述已更新，请关闭窗口后重新选择链接。");
+      return;
+    }
+    const label = (linkDraft.text.trim() || url).replace(/\\/g, "\\\\").replace(/([\[\]])/g, "\\$1").replace(/[\r\n]/g, " ");
+    const destination = url.replace(/ /g, "%20").replace(/</g, "%3C").replace(/>/g, "%3E").replace(/\\/g, "%5C");
+    // Apply after the dialog releases its focus trap, preserving native textarea history.
+    pendingLink.current = { text: `[${label}](<${destination}>)`, start: linkDraft.start, end: linkDraft.end, original: linkDraft.original };
+    setLinkDraft(null);
   };
   const block = (text: string) => {
     const { start, end } = selection.current;
@@ -106,14 +173,23 @@ export function MarkdownEditor({ value, onChange, className }: Props) {
   };
   const prefixLines = (prefix: string) => {
     const { start, end } = selection.current;
-    const from = value.lastIndexOf("\n", start - 1) + 1;
-    const toNewline = value.indexOf("\n", end > start && value[end - 1] === "\n" ? end - 1 : end);
-    const to = toNewline < 0 ? value.length : toNewline;
-    const text = value.slice(from, to).split("\n").map((line, i) => `${prefix === "1. " ? `${i + 1}. ` : prefix}${line}`).join("\n");
+    const from = start === 0 ? 0 : value.lastIndexOf("\n", start - 1) + 1;
+    const last = end > start && value[end - 1] === "\n" ? end - 1 : end;
+    const newline = value.indexOf("\n", last);
+    const to = newline < 0 ? value.length : newline;
+    const lines = value.slice(from, to).split("\n");
+    const pattern = prefix === "## " ? /^(#{1,6}) +/ : prefix === "> " ? /^> ?/ : /^(?:[-+*](?: +\[[ xX]\])?|\d+[.)]) +/;
+    const same = (body: string) => prefix === "1. " ? /^\d+[.)] +/.test(body) : prefix === "- " ? /^[-+*] +(?!\[[ xX]\] )/.test(body) : prefix === "- [ ] " ? /^[-+*] +\[[ xX]\] +/.test(body) : body.startsWith(prefix);
+    const remove = lines.every(line => same(line.trimStart()));
+    const text = lines.map((line, index) => {
+      const indent = line.match(/^[ \t]*/)?.[0] ?? "";
+      const body = line.slice(indent.length).replace(pattern, "");
+      return indent + (remove ? "" : prefix === "1. " ? `${index + 1}. ` : prefix) + body;
+    }).join("\n");
     replace(text, from, to, 0, text.length);
   };
   const insertImages = async (files: File[]) => {
-    if (!files.length || imageBusy.current) return;
+    if (!files.length || imageBusy.current || disabled) return;
     setError("");
     if (files.length > IMAGE_BATCH_MAX_COUNT || files.some(file => file.size > IMAGE_MAX_BYTES) || files.reduce((total, file) => total + file.size, 0) > IMAGE_BATCH_MAX_BYTES) {
       setError("每次最多插入 5 张图片，单张不超过 10 MB，合计不超过 20 MB。");
@@ -124,6 +200,7 @@ export function MarkdownEditor({ value, onChange, className }: Props) {
       return;
     }
     imageBusy.current = true;
+    processingCallback.current?.(true);
     const original = latest.current;
     const { start, end } = selection.current;
     setUploading(true);
@@ -147,23 +224,64 @@ export function MarkdownEditor({ value, onChange, className }: Props) {
       if (mounted.current) setError("图片读取失败，请选择可用的图片重试。");
     } finally {
       imageBusy.current = false;
+      processingCallback.current?.(false);
       if (mounted.current) setUploading(false);
     }
   };
   const keyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.nativeEvent.isComposing || uploading) return;
+    if (event.nativeEvent.isComposing || uploading || disabled) return;
     rememberSelection();
+    const { start, end } = selection.current;
+    const lineStart = start === 0 ? 0 : value.lastIndexOf("\n", start - 1) + 1;
+    const before = value.slice(lineStart, start);
+    // Leave fenced code untouched; Enter retains the native newline behavior there.
+    const inFence = value.slice(0, lineStart).split("\n").reduce<string | null>((fence, line) => {
+      const match = line.match(/^ {0,3}(`{3,}|~{3,})/);
+      if (!match) return fence;
+      if (!fence) return match[1];
+      return match[1][0] === fence[0] && match[1].length >= fence.length && line.slice(match[0].length).trim() === "" ? null : fence;
+    }, null);
+    if (event.key === "Enter" && !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey && !inFence && start === end) {
+      const match = before.match(/^( {0,3}|[ \t]+)((?:[-+*])|(?:\d+[.)])) +(\[[ xX]\] +)?(.*)$/);
+      if (match) {
+        event.preventDefault();
+        const tail = value.slice(start, value.indexOf("\n", start) < 0 ? value.length : value.indexOf("\n", start));
+        if (!match[4].trim() && !tail.trim()) {
+          replace("", lineStart, start);
+        } else {
+          const marker = /^\d/.test(match[2]) ? `${Number.parseInt(match[2], 10) + 1}${match[2].slice(-1)}` : match[2];
+          replace(`\n${match[1]}${marker} ${match[3] ? "[ ] " : ""}`, start, end);
+        }
+        return;
+      }
+    }
+    if (event.key === "Tab" && !event.altKey && !event.metaKey && !event.ctrlKey) {
+      // Keep Tab navigation for plain prose. Indent lists, code, or multi-line selections.
+      if (inFence || /^(?:[ \t]*)(?:[-+*]|\d+[.)]) +/.test(before) || value.slice(start, end).includes("\n")) {
+        event.preventDefault();
+        const last = end > start && value[end - 1] === "\n" ? end - 1 : end;
+        const newline = value.indexOf("\n", last);
+        const to = newline < 0 ? value.length : newline;
+        const lines = value.slice(lineStart, to).split("\n");
+        const text = lines.map(line => event.shiftKey ? line.replace(/^(?: {1,4}|\t)/, "") : `    ${line}`).join("\n");
+        if (start === end) {
+          const delta = text.length - value.slice(lineStart, to).length;
+          replace(text, lineStart, to, Math.max(0, start - lineStart + delta));
+        } else replace(text, lineStart, to, 0, text.length);
+        return;
+      }
+    }
     if ((event.metaKey || event.ctrlKey) && !event.altKey) {
       const key = event.key.toLowerCase();
       if (["b", "i", "k"].includes(key)) {
         event.preventDefault();
         if (key === "b") wrap("**", "**");
         if (key === "i") wrap("*", "*");
-        if (key === "k") wrap("[", "](https://example.com)", "链接文字");
+        if (key === "k") openLink();
       }
     }
   };
-  const toolDisabled = mode === "preview" || uploading;
+  const toolDisabled = mode === "preview" || uploading || disabled;
 
   return (
     <div className={cn("flex h-full min-w-0 flex-col overflow-y-auto", className)}>
@@ -184,18 +302,41 @@ export function MarkdownEditor({ value, onChange, className }: Props) {
         <ToolButton title="有序列表" disabled={toolDisabled} onClick={() => prefixLines("1. ")}><ListOrdered /></ToolButton>
         <ToolButton title="任务列表" disabled={toolDisabled} onClick={() => prefixLines("- [ ] ")}><ListChecks /></ToolButton>
         <ToolButton title="引用" disabled={toolDisabled} onClick={() => prefixLines("> ")}><Quote /></ToolButton>
-        <ToolButton title="行内代码" disabled={toolDisabled} onClick={() => wrap("`", "`", "code")}><Code /></ToolButton>
+        <ToolButton title="行内代码" disabled={toolDisabled} onClick={inlineCode}><Code /></ToolButton>
         <ToolButton title="代码块" disabled={toolDisabled} onClick={() => {
           const text = value.slice(selection.current.start, selection.current.end) || "代码";
           const fence = "`".repeat(Math.max(3, ...Array.from(text.matchAll(/`+/g), m => m[0].length + 1)));
           block(`${fence}text\n${text}\n${fence}`);
         }}><FileCode2 /></ToolButton>
-        <ToolButton title="链接 (⌘/Ctrl+K)" disabled={toolDisabled} onClick={() => wrap("[", "](https://example.com)", "链接文字")}><Link /></ToolButton>
+        <ToolButton title="链接 (⌘/Ctrl+K)" disabled={toolDisabled} onClick={openLink}><Link /></ToolButton>
         <ToolButton title="插入图片" disabled={toolDisabled} onClick={() => fileRef.current?.click()}><ImageIcon /></ToolButton>
         <ToolButton title="表格" disabled={toolDisabled} onClick={() => block("| 标题 | 内容 |\n| --- | --- |\n| 项目 | 说明 |")}><Table2 /></ToolButton>
         <ToolButton title="分隔线" disabled={toolDisabled} onClick={() => block("---")}><Minus /></ToolButton>
         <ToolButton title="数学公式" disabled={toolDisabled} onClick={() => block("$$\nE = mc^2\n$$")}><Sigma /></ToolButton>
       </div>}
+      <Dialog open={linkDraft !== null} onOpenChange={open => { if (!open) setLinkDraft(null); }}>
+        <DialogContent onCloseAutoFocus={event => {
+          event.preventDefault();
+          const pending = pendingLink.current;
+          pendingLink.current = null;
+          if (pending && latest.current === pending.original && !disabled) {
+            replace(pending.text, pending.start, pending.end);
+          } else {
+            if (pending) setError("描述已更新，链接未插入，请重新选择。");
+            ref.current?.focus();
+            ref.current?.setSelectionRange(selection.current.start, selection.current.end);
+          }
+        }} onKeyDown={event => {
+          if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); event.stopPropagation(); saveLink(); }
+        }}>
+          <DialogTitle>插入或编辑链接</DialogTitle>
+          <DialogDescription>填写链接文字和地址。将光标放入已有的内联链接中，可修改该链接。</DialogDescription>
+          <label className="grid gap-2 text-sm">显示文字<Input value={linkDraft?.text ?? ""} onChange={event => setLinkDraft(draft => draft ? { ...draft, text: event.target.value } : draft)} /></label>
+          <label className="grid gap-2 text-sm">链接地址<Input value={linkDraft?.url ?? ""} onChange={event => setLinkDraft(draft => draft ? { ...draft, url: event.target.value } : draft)} placeholder="https://example.com" /></label>
+          {linkError && <p role="alert" className="text-sm text-destructive">{linkError}</p>}
+          <div className="flex justify-end gap-2"><Button type="button" variant="ghost" onClick={() => setLinkDraft(null)}>取消</Button><Button type="button" disabled={disabled} onClick={saveLink}>应用链接</Button></div>
+        </DialogContent>
+      </Dialog>
       <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden onChange={event => {
         void insertImages(Array.from(event.target.files ?? []));
         event.target.value = "";
@@ -203,7 +344,7 @@ export function MarkdownEditor({ value, onChange, className }: Props) {
       {help && <div className="border-b bg-muted/20 px-5 py-3 text-xs leading-6 text-muted-foreground">
         <p>支持 CommonMark + GFM：# 至 ###### 标题、**加粗**、*斜体*、~~删除线~~、嵌套列表、- [ ] 任务、引用、表格、链接、图片、分隔线与脚注 [^1]。</p>
         <p>代码块使用三反引号和语言名；公式使用 $行内公式$ 或独立行的 $$。空行分段，行尾两个空格或反斜杠换行。支持安全 HTML（如 details / summary），不执行脚本。</p>
-        <p>选中文字后使用工具栏或 ⌘/Ctrl+B、I、K；⌘/Ctrl+Z 撤销。图片可直接粘贴（每次最多 5 张，单张 10 MB、合计 20 MB）；GIF/WebP 保留原图。源文原样保存，分栏模式实时预览。</p>
+        <p>选中文字后使用工具栏或 ⌘/Ctrl+B、I、K；⌘/Ctrl+Z 撤销。列表回车续写、空项回车退出，列表/代码或多行选区支持 Tab 缩进、Shift+Tab 取消缩进。图片可直接粘贴（每次最多 5 张，单张 10 MB、合计 20 MB）；GIF/WebP 保留原图。源文原样保存，分栏模式实时预览。</p>
       </div>}
       {uploading && <p role="status" className="px-5 py-2 text-xs text-muted-foreground">正在处理图片…</p>}
       {error && <p role="alert" className="px-5 py-2 text-xs text-destructive">{error}</p>}
@@ -214,7 +355,7 @@ export function MarkdownEditor({ value, onChange, className }: Props) {
           ref={ref}
           aria-label="任务描述"
           value={value}
-          readOnly={uploading}
+          readOnly={uploading || disabled}
           placeholder="使用 Markdown 描述任务目标、实现要点或验收条件…"
           spellCheck={false}
           className="md-source h-full min-h-64 w-full min-w-0 resize-none bg-transparent px-5 py-5 font-mono text-sm leading-7 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"

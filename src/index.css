@@ -327,3 +327,11 @@ body {
 }
 .dark[data-theme="sunset"] { --primary: oklch(0.76 0.14 40); --primary-foreground: oklch(0.19 0.012 265); }
 .dark[data-theme="forest"] { --primary: oklch(0.75 0.12 155); --primary-foreground: oklch(0.19 0.012 265); }
+
+/* Match native controls to the selected application theme. */
+:root { color-scheme: light; }
+.dark { color-scheme: dark; }
+input, textarea, select, button { font-family: inherit; }
+.dark input:not([type="checkbox"]):not([type="radio"]), .dark textarea, .dark select { color: var(--foreground); }
+.dark select { background-color: var(--background); }
+.dark input::placeholder, .dark textarea::placeholder { color: var(--muted-foreground); opacity: 1; }
