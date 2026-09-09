@@ -11,6 +11,7 @@ export function PersistenceStatus() {
   const allowClose = useRef(false);
   const [reloadRequested, setReloadRequested] = useState(false);
   const [closeRequested, setCloseRequested] = useState(false);
+  const [closeChoiceOpen, setCloseChoiceOpen] = useState(false);
   const gitCount = useSyncExternalStore(subscribeGitActivity, getGitActivity);
   useEffect(() => {
     const pending = () => useAppStore.getState().persistence !== "saved";
@@ -27,7 +28,12 @@ export function PersistenceStatus() {
           event.preventDefault();
           window.dispatchEvent(new Event("todo-save-draft"));
           setCloseRequested(true);
+        } else if (!allowClose.current) {
+          // 数据安全通过：拦截关闭，弹出「退出 / 最小化到任务栏」选择
+          event.preventDefault();
+          setCloseChoiceOpen(true);
         }
+        // allowClose.current === true → 放行真正关闭
       });
       if (alive) unlisten = stop; else stop();
     }).catch(error => toast.error(`关闭保护注册失败：${String(error)}`));
@@ -54,9 +60,16 @@ export function PersistenceStatus() {
     <Dialog open={closeRequested} onOpenChange={setCloseRequested}><DialogContent><DialogTitle>还有未保存的编辑</DialogTitle><DialogDescription>请确认草稿已保存；若编辑页提示草稿写入失败，请返回复制内容。</DialogDescription><div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setCloseRequested(false)}>返回编辑</Button><Button onClick={() => {
       if (useAppStore.getState().persistence !== "saved") { setCloseRequested(false); toast.error("请先完成数据保存"); return; }
       window.dispatchEvent(new Event("todo-save-draft"));
-      allowClose.current = true;
-      void import("@tauri-apps/api/window").then(({getCurrentWindow}) => getCurrentWindow().close()).catch(error => { allowClose.current = false; toast.error(String(error)); });
+      setCloseRequested(false);
+      setCloseChoiceOpen(true); // 草稿已保存 → 进入退出/最小化选择
     }}>关闭应用</Button></div></DialogContent></Dialog>
+    <Dialog open={closeChoiceOpen} onOpenChange={setCloseChoiceOpen}><DialogContent><DialogTitle>关闭窗口</DialogTitle><DialogDescription>选择关闭窗口后的行为：退出应用，或最小化到任务栏继续运行。</DialogDescription><div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setCloseChoiceOpen(false)}>取消</Button><Button variant="outline" onClick={() => {
+      setCloseChoiceOpen(false);
+      void import("@tauri-apps/api/window").then(({ getCurrentWindow }) => getCurrentWindow().minimize()).catch(error => toast.error(String(error)));
+    }}>最小化到任务栏</Button><Button onClick={() => {
+      allowClose.current = true;
+      void import("@tauri-apps/api/window").then(({ getCurrentWindow }) => getCurrentWindow().close()).catch(error => { allowClose.current = false; toast.error(String(error)); });
+    }}>退出</Button></div></DialogContent></Dialog>
     {syncError && !problem && <Button size="sm" variant="outline" onClick={() => void flushPersistence().then(reloadRemoteState).catch(error => toast.error(String(error)))}>重试同步</Button>}
   </div>;
 }
