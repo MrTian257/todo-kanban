@@ -151,3 +151,18 @@ mod tests {
         assert_eq!(percent_decode("%zz"), "%zz");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn percent_decode_variants() {
+        assert_eq!(percent_decode("abc"), "abc");
+        assert_eq!(percent_decode("a%2Fb"), "a/b");
+        assert_eq!(percent_decode("t1%2Ft1-0001.png"), "t1/t1-0001.png");
+        assert_eq!(percent_decode("t1/t1-0001.png"), "t1/t1-0001.png");
+        assert_eq!(percent_decode("100%"), "100%");
+        assert_eq!(percent_decode("%zz"), "%zz");
+    }
+}
