@@ -183,10 +183,10 @@ function TodoDetailForm() {
   const [saveError, setSaveError] = React.useState("");
   const submitLock = React.useRef(false);
   const descriptionBusy = React.useRef(false);
-  const [imageProcessing, setImageProcessing] = React.useState(false);
-  const handleImageProcessing = React.useCallback((busy: boolean) => {
+  const [descriptionProcessing, setDescriptionProcessing] = React.useState(false);
+  const handleDescriptionProcessing = React.useCallback((busy: boolean) => {
     descriptionBusy.current = busy;
-    setImageProcessing(busy);
+    setDescriptionProcessing(busy);
   }, []);
   React.useEffect(() => {
     if (!isDirty) return;
@@ -194,6 +194,7 @@ function TodoDetailForm() {
     const guardLink = (e: MouseEvent) => {
       const link = e.target instanceof Element ? e.target.closest<HTMLAnchorElement>("a[href]") : null;
       if (!link || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      if (link.closest(".md-instant")) return;
       if (link.hasAttribute("download") || (link.target && link.target !== "_self")) return;
       const href = link.getAttribute("href") ?? "";
       // Markdown fragment links scroll inside the preview; HashRouter links navigate.
@@ -271,7 +272,7 @@ function TodoDetailForm() {
       return;
     }
     if (descriptionBusy.current) {
-      setSaveError("图片正在处理，请完成后再保存。");
+      setSaveError("描述正在处理，请完成后再保存。");
       return;
     }
     if (!project || submitLock.current) return;
@@ -362,7 +363,7 @@ function TodoDetailForm() {
         </Button>
         <h1 className="text-xl font-semibold">{isNew ? "新建待办" : "编辑待办"}</h1>
         {editing?.tag && <span className="font-mono text-xs text-muted-foreground">{editing.tag}</span>}
-        <span className="ml-auto text-xs text-muted-foreground">{isSubmitting ? "正在保存…" : isDirty ? "有未保存的修改" : isNew ? "填写任务内容" : "所有修改已保存"}</span><Button className="gap-2" disabled={isSubmitting || imageProcessing} onClick={handleSubmit(onSubmit)}><Save className="h-4 w-4"/>{imageProcessing ? "图片处理中…" : isSubmitting ? "保存中…" : "保存任务"}</Button>
+        <span className="ml-auto text-xs text-muted-foreground">{isSubmitting ? "正在保存…" : isDirty ? "有未保存的修改" : isNew ? "填写任务内容" : "所有修改已保存"}</span><Button className="gap-2" disabled={isSubmitting || descriptionProcessing} onClick={handleSubmit(onSubmit)}><Save className="h-4 w-4"/>{descriptionProcessing ? "描述处理中…" : isSubmitting ? "保存中…" : "保存任务"}</Button>
       </div>
 
       <Dialog open={resolution !== null} onOpenChange={open => { if (!open) setResolution(null); }}><DialogContent><DialogTitle>处理编辑冲突</DialogTitle><DialogDescription>{resolution === "remote" ? "使用最新内容将替换当前编辑并清除本地草稿。" : "保留自己的编辑后，下一次保存将用当前表单字段覆盖外部修改。"}</DialogDescription><div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setResolution(null)}>取消</Button><Button onClick={() => {
@@ -387,7 +388,7 @@ function TodoDetailForm() {
             <MarkdownEditor
               value={watch("note")}
               disabled={isSubmitting}
-              onProcessingChange={handleImageProcessing}
+              onProcessingChange={handleDescriptionProcessing}
               onChange={(md) => setValue("note", md, { shouldDirty: true })}
             />
           </div>

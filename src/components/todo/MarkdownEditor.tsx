@@ -1,60 +1,9 @@
-// Store Markdown source verbatim; preview and read-only views share one renderer.
 import * as React from "react";
-import { Bold, Code, FileCode2, Heading2, Image as ImageIcon, Italic, Link, List, ListChecks, ListOrdered, Quote, Strikethrough, Table2, Minus, Sigma, HelpCircle } from "lucide-react";
-import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
-import { MarkdownView } from "./MarkdownView";
+import Vditor from "vditor";
+import { useTheme } from "next-themes";
+import "vditor/dist/index.css";
 import { cn } from "@/lib/utils";
-
-const IMAGE_MAX_SIDE = 1280;
-const IMAGE_JPEG_QUALITY = 0.82;
-const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
-const IMAGE_BATCH_MAX_BYTES = 20 * 1024 * 1024;
-const IMAGE_BATCH_MAX_COUNT = 5;
-const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
-
-/** Preserve GIF/WebP animation; resize PNG/JPEG with transparency retained for PNG. */
-async function compressImage(file: File): Promise<string> {
-  const dataUrl = await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-
-  // Canvas would flatten animations. Preserve these bounded originals verbatim.
-  if (file.type === "image/gif" || file.type === "image/webp") return dataUrl;
-
-  const img = new Image();
-  await new Promise<void>((resolve, reject) => {
-    img.onload = () => resolve();
-    img.onerror = reject;
-    img.src = dataUrl;
-  });
-
-  let { width, height } = img;
-  if (width > IMAGE_MAX_SIDE || height > IMAGE_MAX_SIDE) {
-    const ratio = Math.min(IMAGE_MAX_SIDE / width, IMAGE_MAX_SIDE / height);
-    width = Math.max(1, Math.round(width * ratio));
-    height = Math.max(1, Math.round(height * ratio));
-  }
-
-  const isPng = file.type === "image/png";
-  const smallEnough = file.size < 300 * 1024;
-  if (isPng && smallEnough && width === img.naturalWidth) {
-    return dataUrl; // 原样保留
-  }
-
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return dataUrl;
-  ctx.drawImage(img, 0, 0, width, height);
-  const mime = isPng ? "image/png" : "image/jpeg";
-  return canvas.toDataURL(mime, isPng ? undefined : IMAGE_JPEG_QUALITY);
-}
+import { compressImage, IMAGE_BATCH_MAX_BYTES, IMAGE_BATCH_MAX_COUNT, IMAGE_MAX_BYTES, IMAGE_TYPES } from "./markdownImages";
 
 interface Props {
   value: string;
@@ -64,321 +13,252 @@ interface Props {
   onProcessingChange?: (busy: boolean) => void;
 }
 
-type Mode = "edit" | "split" | "preview";
-
-export function MarkdownEditor({ value, onChange, className, disabled = false, onProcessingChange }: Props) {
-  const ref = React.useRef<HTMLTextAreaElement>(null);
-  const fileRef = React.useRef<HTMLInputElement>(null);
-  const [mode, setMode] = React.useState<Mode>("edit");
-  const [help, setHelp] = React.useState(false);
+/** One editing surface: Markdown markers reveal at the caret and render in place. */
+export function MarkdownEditor(props: Props) {
+  const root = React.useRef<HTMLDivElement>(null);
+  const instance = React.useRef<Vditor | null>(null);
+  const ready = React.useRef(false);
+  const busy = React.useRef(false);
+  const composing = React.useRef(false);
+  const applyingValue = React.useRef(false);
+  const externalVersion = React.useRef(0);
+  const lastSent = React.useRef(props.value);
+  const lastRendered = React.useRef("");
+  const latest = React.useRef(props);
+  latest.current = props;
+  const { resolvedTheme } = useTheme();
+  const theme = React.useRef(resolvedTheme);
+  theme.current = resolvedTheme;
+  const [loading, setLoading] = React.useState(true);
   const [uploading, setUploading] = React.useState(false);
   const [error, setError] = React.useState("");
-  const [linkDraft, setLinkDraft] = React.useState<{ text: string; url: string; start: number; end: number; original: string } | null>(null);
-  const [linkError, setLinkError] = React.useState("");
-  const pendingLink = React.useRef<{ text: string; start: number; end: number; original: string } | null>(null);
-  const processingCallback = React.useRef(onProcessingChange);
-  processingCallback.current = onProcessingChange;
-  const latest = React.useRef(value);
-  const mounted = React.useRef(true);
-  const imageBusy = React.useRef(false);
-  latest.current = value;
-  React.useEffect(() => { mounted.current = true; return () => { mounted.current = false; processingCallback.current?.(false); }; }, []);
-  const preview = React.useDeferredValue(value);
-  const selection = React.useRef({ start: 0, end: 0 });
-  const rememberSelection = () => {
-    if (ref.current) selection.current = { start: ref.current.selectionStart, end: ref.current.selectionEnd };
-  };
+  const [generation, setGeneration] = React.useState(0);
+  const assetRoot = new URL(`${import.meta.env.BASE_URL}vendor/vditor`, window.location.href).href;
 
-  const replace = (text: string, start: number, end: number, selectedStart = text.length, selectedEnd = selectedStart) => {
-    const editor = ref.current;
-    if (!editor || disabled) return;
-    editor.focus();
-    editor.setSelectionRange(start, end);
-    // Native text insertion preserves browser undo/redo. Fall back for WebViews without this command.
-    if (!document.execCommand("insertText", false, text)) {
-      editor.setRangeText(text, start, end, "end");
-    }
-    onChange(editor.value);
-    editor.setSelectionRange(start + selectedStart, start + selectedEnd);
-    rememberSelection();
-  };
-  const wrap = (before: string, after: string, placeholder = "文字") => {
-    const { start, end } = selection.current;
-    const selected = value.slice(start, end);
-    if (start >= before.length && value.slice(start - before.length, start) === before && value.slice(end, end + after.length) === after) {
-      replace(selected, start - before.length, end + after.length, 0, selected.length);
-    } else if (selected.length >= before.length + after.length && selected.startsWith(before) && selected.endsWith(after)) {
-      const inner = selected.slice(before.length, -after.length);
-      replace(inner, start, end, 0, inner.length);
-    } else {
-      const text = selected || placeholder;
-      replace(before + text + after, start, end, before.length, before.length + text.length);
-    }
-  };
-  const inlineCode = () => {
-    const { start, end } = selection.current;
-    const text = value.slice(start, end) || "code";
-    const runs = Array.from(text.matchAll(/`+/g), match => match[0].length);
-    const fence = "`".repeat(runs.reduce((max, length) => Math.max(max, length + 1), 1));
-    // CommonMark strips one surrounding space when the content is not all spaces.
-    const padding = /^`|`$/.test(text) || (/^ .* $/s.test(text) && /[^ ]/.test(text)) ? " " : "";
-    replace(fence + padding + text + padding + fence, start, end, fence.length + padding.length, fence.length + padding.length + text.length);
-  };
-  const openLink = () => {
-    let { start, end } = selection.current;
-    let text = value.slice(start, end);
-    let url = "https://";
-    // Edit a standard inline link when the caret/selection is inside it.
-    for (const match of value.matchAll(/(?<!!)\[((?:\\.|[^\]\\\n])*)\]\((<[^>\n]*>|[^\s()]+)\)/g)) {
-      const from = match.index!;
-      if (start >= from && end <= from + match[0].length) {
-        start = from;
-        end = from + match[0].length;
-        text = match[1].replace(/\\([\[\]\\])/g, "$1");
-        url = match[2].replace(/^<|>$/g, "");
-        break;
-      }
-    }
-    setLinkError("");
-    setLinkDraft({ text, url, start, end, original: value });
-  };
-  const saveLink = () => {
-    if (!linkDraft || disabled) return;
-    const url = linkDraft.url.trim();
-    if (!url || /[\r\n]/.test(url) || /^(?:javascript|data|vbscript):/i.test(url) || (/^[a-z][a-z\d+.-]*:/i.test(url) && !/^(?:https?|mailto|tel):/i.test(url))) {
-      setLinkError("请输入有效的 http、https、mailto、tel 地址或相对地址。");
-      return;
-    }
-    if (/^https?:/i.test(url)) {
-      try { new URL(url); } catch {
-        setLinkError("请输入完整的网址，例如 https://example.com。");
-        return;
-      }
-    }
-    if (latest.current !== linkDraft.original) {
-      setLinkError("描述已更新，请关闭窗口后重新选择链接。");
-      return;
-    }
-    const label = (linkDraft.text.trim() || url).replace(/\\/g, "\\\\").replace(/([\[\]])/g, "\\$1").replace(/[\r\n]/g, " ");
-    const destination = url.replace(/ /g, "%20").replace(/</g, "%3C").replace(/>/g, "%3E").replace(/\\/g, "%5C");
-    // Apply after the dialog releases its focus trap, preserving native textarea history.
-    pendingLink.current = { text: `[${label}](<${destination}>)`, start: linkDraft.start, end: linkDraft.end, original: linkDraft.original };
-    setLinkDraft(null);
-  };
-  const block = (text: string) => {
-    const { start, end } = selection.current;
-    const before = start > 0 ? (value[start - 1] === "\n" ? "\n" : "\n\n") : "";
-    const after = end < value.length ? "\n\n" : "\n";
-    replace(before + text + after, start, end, before.length, before.length + text.length);
-  };
-  const prefixLines = (prefix: string) => {
-    const { start, end } = selection.current;
-    const from = start === 0 ? 0 : value.lastIndexOf("\n", start - 1) + 1;
-    const last = end > start && value[end - 1] === "\n" ? end - 1 : end;
-    const newline = value.indexOf("\n", last);
-    const to = newline < 0 ? value.length : newline;
-    const lines = value.slice(from, to).split("\n");
-    const pattern = prefix === "## " ? /^(#{1,6}) +/ : prefix === "> " ? /^> ?/ : /^(?:[-+*](?: +\[[ xX]\])?|\d+[.)]) +/;
-    const same = (body: string) => prefix === "1. " ? /^\d+[.)] +/.test(body) : prefix === "- " ? /^[-+*] +(?!\[[ xX]\] )/.test(body) : prefix === "- [ ] " ? /^[-+*] +\[[ xX]\] +/.test(body) : body.startsWith(prefix);
-    const remove = lines.every(line => same(line.trimStart()));
-    const text = lines.map((line, index) => {
-      const indent = line.match(/^[ \t]*/)?.[0] ?? "";
-      const body = line.slice(indent.length).replace(pattern, "");
-      return indent + (remove ? "" : prefix === "1. " ? `${index + 1}. ` : prefix) + body;
-    }).join("\n");
-    replace(text, from, to, 0, text.length);
-  };
-  const insertImages = async (files: File[]) => {
-    if (!files.length || imageBusy.current || disabled) return;
+  React.useEffect(() => {
+    if (!root.current) return;
+    const host = document.createElement("div");
+    root.current.appendChild(host);
+    let disposed = false;
+    let selection: Range | null = null;
+    let editor: Vditor;
+    ready.current = false;
+    setLoading(true);
     setError("");
-    if (files.length > IMAGE_BATCH_MAX_COUNT || files.some(file => file.size > IMAGE_MAX_BYTES) || files.reduce((total, file) => total + file.size, 0) > IMAGE_BATCH_MAX_BYTES) {
-      setError("每次最多插入 5 张图片，单张不超过 10 MB，合计不超过 20 MB。");
-      return;
-    }
-    if (files.some(file => !IMAGE_TYPES.has(file.type))) {
-      setError("请选择 PNG、JPEG、GIF 或 WebP 图片。");
-      return;
-    }
-    imageBusy.current = true;
-    processingCallback.current?.(true);
-    const original = latest.current;
-    const { start, end } = selection.current;
-    setUploading(true);
-    setError("");
-    try {
-      const urls: string[] = [];
-      for (const file of files) {
-        if (!mounted.current || latest.current !== original) break;
-        urls.push(await compressImage(file));
-      }
-      if (!mounted.current) return;
-      if (latest.current !== original) {
-        setError("描述已更新，请重新插入图片。");
-        return;
-      }
-      const images = urls.map((url, i) => `![${files[i].name.replace(/[\[\]\\\r\n]/g, "_")}](${url})`).join("\n\n");
-      // Allow native insertion while the async operation has made the input read-only.
-      if (ref.current) ref.current.readOnly = false;
-      replace(`\n\n${images}\n\n`, start, end);
-    } catch {
-      if (mounted.current) setError("图片读取失败，请选择可用的图片重试。");
-    } finally {
-      imageBusy.current = false;
-      processingCallback.current?.(false);
-      if (mounted.current) setUploading(false);
-    }
-  };
-  const keyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.nativeEvent.isComposing || uploading || disabled) return;
-    rememberSelection();
-    const { start, end } = selection.current;
-    const lineStart = start === 0 ? 0 : value.lastIndexOf("\n", start - 1) + 1;
-    const before = value.slice(lineStart, start);
-    // Leave fenced code untouched; Enter retains the native newline behavior there.
-    const inFence = value.slice(0, lineStart).split("\n").reduce<string | null>((fence, line) => {
-      const match = line.match(/^ {0,3}(`{3,}|~{3,})/);
-      if (!match) return fence;
-      if (!fence) return match[1];
-      return match[1][0] === fence[0] && match[1].length >= fence.length && line.slice(match[0].length).trim() === "" ? null : fence;
-    }, null);
-    if (event.key === "Enter" && !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey && !inFence && start === end) {
-      const match = before.match(/^( {0,3}|[ \t]+)((?:[-+*])|(?:\d+[.)])) +(\[[ xX]\] +)?(.*)$/);
-      if (match) {
+    latest.current.onProcessingChange?.(true);
+
+    const loadTimeout = window.setTimeout(() => {
+      if (disposed || ready.current) return;
+      setLoading(false);
+      setError("描述编辑器加载超时，请重新加载。原有描述未被修改。");
+      latest.current.onProcessingChange?.(false);
+    }, 15000);
+
+    const publish = () => {
+      if (disposed || !ready.current || applyingValue.current || composing.current) return;
+      const markdown = editor.getValue();
+      if (markdown === lastRendered.current) return;
+      lastRendered.current = markdown;
+      lastSent.current = markdown;
+      latest.current.onChange(markdown);
+    };
+    const rememberSelection = () => {
+      const current = window.getSelection();
+      if (!current?.rangeCount) return;
+      const range = current.getRangeAt(0);
+      if (host.querySelector(".vditor-ir")?.contains(range.commonAncestorContainer)) selection = range.cloneRange();
+    };
+    const flushBeforeLeaving = (event: Event) => {
+      if (event.target instanceof Node && !host.contains(event.target)) publish();
+    };
+    // Flush synchronously before form save/draft capture, not only Vditor's debounced callback.
+    const afterNativeInput = () => queueMicrotask(publish);
+    const beginComposition = () => { composing.current = true; latest.current.onProcessingChange?.(true); };
+    const endComposition = () => {
+      composing.current = false;
+      queueMicrotask(() => { publish(); if (!disposed) latest.current.onProcessingChange?.(busy.current); });
+    };
+    const guardEditorKeys = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.altKey && /^Digit[7-9]$/.test(event.code)) {
         event.preventDefault();
-        const tail = value.slice(start, value.indexOf("\n", start) < 0 ? value.length : value.indexOf("\n", start));
-        if (!match[4].trim() && !tail.trim()) {
-          replace("", lineStart, start);
-        } else {
-          const marker = /^\d/.test(match[2]) ? `${Number.parseInt(match[2], 10) + 1}${match[2].slice(-1)}` : match[2];
-          replace(`\n${match[1]}${marker} ${match[3] ? "[ ] " : ""}`, start, end);
+        event.stopImmediatePropagation();
+      }
+      // Toolbar inputs belong to the editor, not the surrounding task form.
+      if (event.key === "Enter" && event.target instanceof HTMLInputElement) event.preventDefault();
+    };
+    const guardEditorClick = (event: MouseEvent) => {
+      if (!(event.target instanceof Element)) return;
+      const button = event.target.closest("button");
+      if (button && !button.hasAttribute("type")) button.type = "button";
+      if (event.target.closest("a[href]")) event.preventDefault();
+    };
+    host.addEventListener("keydown", guardEditorKeys, true);
+    host.addEventListener("click", guardEditorClick, true);
+    document.addEventListener("selectionchange", rememberSelection);
+    document.addEventListener("pointerdown", flushBeforeLeaving, true);
+    window.addEventListener("todo-save-draft", publish, true);
+    window.addEventListener("pagehide", publish, true);
+    host.addEventListener("input", afterNativeInput);
+    host.addEventListener("compositionstart", beginComposition);
+    host.addEventListener("compositionend", endComposition);
+
+    const upload = async (files: File[]): Promise<null> => {
+      if (busy.current || latest.current.disabled || disposed || !ready.current) return null;
+      if (files.length > IMAGE_BATCH_MAX_COUNT || files.some(file => file.size > IMAGE_MAX_BYTES) || files.reduce((sum, file) => sum + file.size, 0) > IMAGE_BATCH_MAX_BYTES) {
+        setError("每次最多插入 5 张图片，单张不超过 10 MB，合计不超过 20 MB。");
+        return null;
+      }
+      if (!files.length || files.some(file => !IMAGE_TYPES.has(file.type))) {
+        setError("请选择 PNG、JPEG、GIF 或 WebP 图片。");
+        return null;
+      }
+      publish();
+      rememberSelection();
+      const savedSelection = selection?.cloneRange();
+      const version = externalVersion.current;
+      const original = editor.getValue();
+      busy.current = true;
+      latest.current.onProcessingChange?.(true);
+      setUploading(true);
+      setError("");
+      editor.disabled();
+      try {
+        const images: string[] = [];
+        for (const file of files) {
+          if (disposed) return null;
+          const url = await compressImage(file);
+          images.push(`![${file.name.replace(/[\[\]\\\r\n]/g, "_")}](${url})`);
         }
-        return;
+        if (disposed) return null;
+        if (version !== externalVersion.current || editor.getValue() !== original) throw new Error("描述已更新，请重新插入图片。");
+        editor.enable();
+        editor.focus();
+        if (savedSelection && host.contains(savedSelection.commonAncestorContainer)) {
+          const current = window.getSelection();
+          current?.removeAllRanges(); current?.addRange(savedSelection);
+        }
+        editor.insertValue(`\n\n${images.join("\n\n")}\n\n`);
+        publish();
+      } catch (failure) {
+        if (!disposed) setError(failure instanceof Error ? failure.message : "图片读取失败，请重试。");
+      } finally {
+        if (!disposed) {
+          busy.current = false;
+          setUploading(false);
+          if (latest.current.disabled) editor.disabled(); else editor.enable();
+          latest.current.onProcessingChange?.(composing.current);
+        }
       }
-    }
-    if (event.key === "Tab" && !event.altKey && !event.metaKey && !event.ctrlKey) {
-      // Keep Tab navigation for plain prose. Indent lists, code, or multi-line selections.
-      if (inFence || /^(?:[ \t]*)(?:[-+*]|\d+[.)]) +/.test(before) || value.slice(start, end).includes("\n")) {
-        event.preventDefault();
-        const last = end > start && value[end - 1] === "\n" ? end - 1 : end;
-        const newline = value.indexOf("\n", last);
-        const to = newline < 0 ? value.length : newline;
-        const lines = value.slice(lineStart, to).split("\n");
-        const text = lines.map(line => event.shiftKey ? line.replace(/^(?: {1,4}|\t)/, "") : `    ${line}`).join("\n");
-        if (start === end) {
-          const delta = text.length - value.slice(lineStart, to).length;
-          replace(text, lineStart, to, Math.max(0, start - lineStart + delta));
-        } else replace(text, lineStart, to, 0, text.length);
-        return;
-      }
-    }
-    if ((event.metaKey || event.ctrlKey) && !event.altKey) {
-      const key = event.key.toLowerCase();
-      if (["b", "i", "k"].includes(key)) {
-        event.preventDefault();
-        if (key === "b") wrap("**", "**");
-        if (key === "i") wrap("*", "*");
-        if (key === "k") openLink();
-      }
-    }
-  };
-  const toolDisabled = mode === "preview" || uploading || disabled;
+      return null;
+    };
 
-  return (
-    <div className={cn("flex h-full min-w-0 flex-col overflow-y-auto", className)}>
-      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-y bg-muted/25 px-4 py-2">
-        <div className="flex flex-wrap gap-1" role="group" aria-label="Markdown 编辑模式">
-          {([["edit", "编辑"], ["split", "分栏"], ["preview", "预览"]] as const).map(([id, label]) => (
-            <Button key={id} type="button" size="sm" variant={mode === id ? "secondary" : "ghost"} aria-pressed={mode === id} disabled={uploading} onClick={() => setMode(id)}>{label}</Button>
-          ))}
-        </div>
-        <Button type="button" variant="ghost" size="sm" aria-expanded={help} onClick={() => setHelp(!help)}><HelpCircle className="mr-1 h-3.5 w-3.5" />语法帮助</Button>
-      </div>
-      {mode !== "preview" && <div className="flex shrink-0 flex-wrap items-center gap-1 border-b px-4 py-2" role="group" aria-label="Markdown 格式工具">
-        <ToolButton title="加粗 (⌘/Ctrl+B)" disabled={toolDisabled} onClick={() => wrap("**", "**")}><Bold /></ToolButton>
-        <ToolButton title="斜体 (⌘/Ctrl+I)" disabled={toolDisabled} onClick={() => wrap("*", "*")}><Italic /></ToolButton>
-        <ToolButton title="删除线" disabled={toolDisabled} onClick={() => wrap("~~", "~~")}><Strikethrough /></ToolButton>
-        <ToolButton title="二级标题" disabled={toolDisabled} onClick={() => prefixLines("## ")}><Heading2 /></ToolButton>
-        <ToolButton title="无序列表" disabled={toolDisabled} onClick={() => prefixLines("- ")}><List /></ToolButton>
-        <ToolButton title="有序列表" disabled={toolDisabled} onClick={() => prefixLines("1. ")}><ListOrdered /></ToolButton>
-        <ToolButton title="任务列表" disabled={toolDisabled} onClick={() => prefixLines("- [ ] ")}><ListChecks /></ToolButton>
-        <ToolButton title="引用" disabled={toolDisabled} onClick={() => prefixLines("> ")}><Quote /></ToolButton>
-        <ToolButton title="行内代码" disabled={toolDisabled} onClick={inlineCode}><Code /></ToolButton>
-        <ToolButton title="代码块" disabled={toolDisabled} onClick={() => {
-          const text = value.slice(selection.current.start, selection.current.end) || "代码";
-          const fence = "`".repeat(Math.max(3, ...Array.from(text.matchAll(/`+/g), m => m[0].length + 1)));
-          block(`${fence}text\n${text}\n${fence}`);
-        }}><FileCode2 /></ToolButton>
-        <ToolButton title="链接 (⌘/Ctrl+K)" disabled={toolDisabled} onClick={openLink}><Link /></ToolButton>
-        <ToolButton title="插入图片" disabled={toolDisabled} onClick={() => fileRef.current?.click()}><ImageIcon /></ToolButton>
-        <ToolButton title="表格" disabled={toolDisabled} onClick={() => block("| 标题 | 内容 |\n| --- | --- |\n| 项目 | 说明 |")}><Table2 /></ToolButton>
-        <ToolButton title="分隔线" disabled={toolDisabled} onClick={() => block("---")}><Minus /></ToolButton>
-        <ToolButton title="数学公式" disabled={toolDisabled} onClick={() => block("$$\nE = mc^2\n$$")}><Sigma /></ToolButton>
-      </div>}
-      <Dialog open={linkDraft !== null} onOpenChange={open => { if (!open) setLinkDraft(null); }}>
-        <DialogContent onCloseAutoFocus={event => {
-          event.preventDefault();
-          const pending = pendingLink.current;
-          pendingLink.current = null;
-          if (pending && latest.current === pending.original && !disabled) {
-            replace(pending.text, pending.start, pending.end);
-          } else {
-            if (pending) setError("描述已更新，链接未插入，请重新选择。");
-            ref.current?.focus();
-            ref.current?.setSelectionRange(selection.current.start, selection.current.end);
-          }
-        }} onKeyDown={event => {
-          if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); event.stopPropagation(); saveLink(); }
-        }}>
-          <DialogTitle>插入或编辑链接</DialogTitle>
-          <DialogDescription>填写链接文字和地址。将光标放入已有的内联链接中，可修改该链接。</DialogDescription>
-          <label className="grid gap-2 text-sm">显示文字<Input value={linkDraft?.text ?? ""} onChange={event => setLinkDraft(draft => draft ? { ...draft, text: event.target.value } : draft)} /></label>
-          <label className="grid gap-2 text-sm">链接地址<Input value={linkDraft?.url ?? ""} onChange={event => setLinkDraft(draft => draft ? { ...draft, url: event.target.value } : draft)} placeholder="https://example.com" /></label>
-          {linkError && <p role="alert" className="text-sm text-destructive">{linkError}</p>}
-          <div className="flex justify-end gap-2"><Button type="button" variant="ghost" onClick={() => setLinkDraft(null)}>取消</Button><Button type="button" disabled={disabled} onClick={saveLink}>应用链接</Button></div>
-        </DialogContent>
-      </Dialog>
-      <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden onChange={event => {
-        void insertImages(Array.from(event.target.files ?? []));
-        event.target.value = "";
-      }} />
-      {help && <div className="border-b bg-muted/20 px-5 py-3 text-xs leading-6 text-muted-foreground">
-        <p>支持 CommonMark + GFM：# 至 ###### 标题、**加粗**、*斜体*、~~删除线~~、嵌套列表、- [ ] 任务、引用、表格、链接、图片、分隔线与脚注 [^1]。</p>
-        <p>代码块使用三反引号和语言名；公式使用 $行内公式$ 或独立行的 $$。空行分段，行尾两个空格或反斜杠换行。支持安全 HTML（如 details / summary），不执行脚本。</p>
-        <p>选中文字后使用工具栏或 ⌘/Ctrl+B、I、K；⌘/Ctrl+Z 撤销。列表回车续写、空项回车退出，列表/代码或多行选区支持 Tab 缩进、Shift+Tab 取消缩进。图片可直接粘贴（每次最多 5 张，单张 10 MB、合计 20 MB）；GIF/WebP 保留原图。源文原样保存，分栏模式实时预览。</p>
-      </div>}
-      {uploading && <p role="status" className="px-5 py-2 text-xs text-muted-foreground">正在处理图片…</p>}
-      {error && <p role="alert" className="px-5 py-2 text-xs text-destructive">{error}</p>}
-      <div className={cn("md-workspace flex-1 min-h-64 min-w-0", mode === "split" && "md-workspace-split")}>
-        <textarea
-          hidden={mode === "preview"}
-          style={mode === "preview" ? { display: "none" } : undefined}
-          ref={ref}
-          aria-label="任务描述"
-          value={value}
-          readOnly={uploading || disabled}
-          placeholder="使用 Markdown 描述任务目标、实现要点或验收条件…"
-          spellCheck={false}
-          className="md-source h-full min-h-64 w-full min-w-0 resize-none bg-transparent px-5 py-5 font-mono text-sm leading-7 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-          onChange={event => onChange(event.target.value)}
-          onSelect={rememberSelection}
-          onKeyDown={keyDown}
-          onPaste={event => {
-            const files = Array.from(event.clipboardData.files).filter(file => file.type.startsWith("image/"));
-            if (files.length) {
-              event.preventDefault();
-              rememberSelection();
-              void insertImages(files);
-            }
-          }}
-        />
-        {mode !== "edit" && <section aria-label="Markdown 预览" className="md-preview min-h-64 min-w-0 overflow-auto px-5 py-5">
-          <MarkdownView content={preview} />
-        </section>}
-      </div>
-    </div>
-  );
-}
+    try {
+      editor = new Vditor(host, {
+        mode: "ir",
+        cdn: assetRoot,
+        lang: "zh_CN",
+        theme: theme.current === "dark" ? "dark" : "classic",
+        value: latest.current.value,
+        cache: { enable: false },
+        height: "100%",
+        minHeight: 280,
+        placeholder: "直接输入任务描述，Markdown 格式会在正文中显示…",
+        toolbarConfig: { pin: false },
+        // Deliberately omit edit-mode, both and preview controls: this is one surface.
+        toolbar: ["undo", "redo", "|", "headings", "bold", "italic", "strike", "|", "list", "ordered-list", "check", "outdent", "indent", "quote", "|", "inline-code", "code", "link", "upload", "table", "line"],
+        counter: { enable: false },
+        resize: { enable: false },
+        tab: "    ",
+        link: { isOpen: false },
+        preview: {
+          mode: "editor",
+          delay: 150,
+          actions: [],
+          markdown: { sanitize: true, footnotes: true, autoSpace: false, fixTermTypo: false },
+          math: { engine: "KaTeX" },
+          theme: { current: theme.current === "dark" ? "dark" : "light", path: `${assetRoot}/dist/css/content-theme` },
+        },
+        upload: { accept: "image/png,image/jpeg,image/gif,image/webp", multiple: true, handler: upload },
+        input: publish,
+        blur: publish,
+        after: () => {
+          if (disposed) { editor.destroy(); return; }
+          window.clearTimeout(loadTimeout);
+          setError("");
+          instance.current = editor;
+          applyingValue.current = true;
+          editor.setValue(latest.current.value, true);
+          lastSent.current = latest.current.value;
+          lastRendered.current = editor.getValue();
+          applyingValue.current = false;
+          ready.current = true;
+          if (latest.current.disabled) editor.disabled();
+          const body = host.querySelector(".vditor-ir [contenteditable]");
+          body?.setAttribute("role", "textbox");
+          body?.setAttribute("aria-label", "任务描述");
+          body?.setAttribute("aria-multiline", "true");
+          setLoading(false);
+          latest.current.onProcessingChange?.(false);
+        },
+      });
+    } catch {
+      window.clearTimeout(loadTimeout);
+      setLoading(false);
+      setError("描述编辑器加载失败，请重试。原有描述未被修改。");
+      latest.current.onProcessingChange?.(false);
+    }
+    return () => {
+      publish();
+      disposed = true;
+      window.clearTimeout(loadTimeout);
+      host.removeEventListener("keydown", guardEditorKeys, true);
+      host.removeEventListener("click", guardEditorClick, true);
+      document.removeEventListener("selectionchange", rememberSelection);
+      document.removeEventListener("pointerdown", flushBeforeLeaving, true);
+      window.removeEventListener("todo-save-draft", publish, true);
+      window.removeEventListener("pagehide", publish, true);
+      host.removeEventListener("input", afterNativeInput);
+      host.removeEventListener("compositionstart", beginComposition);
+      host.removeEventListener("compositionend", endComposition);
+      if (ready.current) editor.destroy();
+      instance.current = null;
+      ready.current = false;
+      busy.current = false;
+      composing.current = false;
+      latest.current.onProcessingChange?.(false);
+      host.remove();
+    };
+  }, [assetRoot, generation]);
 
-function ToolButton({ title, onClick, disabled, children }: { title: string; onClick: () => void; disabled?: boolean; children: React.ReactNode }) {
-  return <Button type="button" variant="ghost" size="icon" className="h-8 w-8 [&_svg]:h-3.5 [&_svg]:w-3.5" title={title} aria-label={title} disabled={disabled} onMouseDown={event => event.preventDefault()} onClick={onClick}>{children}</Button>;
+  React.useEffect(() => {
+    const editor = instance.current;
+    if (!ready.current || !editor || props.value === lastSent.current) return;
+    externalVersion.current++;
+    lastSent.current = props.value;
+    applyingValue.current = true;
+    try {
+      editor.setValue(props.value, true);
+      lastRendered.current = editor.getValue();
+    } finally {
+      applyingValue.current = false;
+    }
+  }, [props.value]);
+  React.useEffect(() => {
+    const editor = instance.current;
+    if (ready.current && editor) {
+      if (props.disabled || busy.current) editor.disabled(); else editor.enable();
+    }
+  }, [props.disabled]);
+  React.useEffect(() => {
+    if (!ready.current) return;
+    instance.current?.setTheme(resolvedTheme === "dark" ? "dark" : "classic", resolvedTheme === "dark" ? "dark" : "light", resolvedTheme === "dark" ? "github-dark" : "github", `${assetRoot}/dist/css/content-theme`);
+  }, [resolvedTheme, assetRoot]);
+
+  return <div className={cn("md-instant flex h-full min-h-0 flex-col", props.className)}>
+    <p className="shrink-0 border-y px-5 py-2 text-xs text-muted-foreground">直接输入，格式即时显示 · 输入 # 和空格创建标题，选中文字可设置格式</p>
+    {loading && <p role="status" className="px-5 py-2 text-sm text-muted-foreground">正在加载编辑器…</p>}
+    {uploading && <p role="status" className="px-5 py-2 text-sm text-muted-foreground">图片处理中，完成后可保存…</p>}
+    {error && <div role="alert" className="px-5 py-2 text-sm text-destructive">{error}{!ready.current && <button type="button" className="ml-3 underline" onClick={() => setGeneration(value => value + 1)}>重新加载</button>}</div>}
+    <div ref={root} inert={loading || !ready.current} aria-busy={loading || uploading} className="min-h-0 flex-1 overflow-auto" />
+  </div>;
 }
