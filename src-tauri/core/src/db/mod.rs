@@ -395,6 +395,7 @@ mod tests {
             subject: "fix".into(),
             date: "2026-09-03T10:00:00+08:00".into(),
             branches: vec![],
+            ..Default::default()
         };
         let mut t1 = todo("t1", 1, "todo-1");
         t1.commits = vec![commit.clone()];

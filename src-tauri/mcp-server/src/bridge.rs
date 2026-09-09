@@ -114,7 +114,10 @@ fn call_tool(name: &str, args: &Value) -> AppResult<Value> {
             Ok(json!({ "ok": true }))
         }
         "git_sync_commits" => {
-            let mut commits = git_cmds::git_sync_commits(&s("repo"), &s("tag"))?;
+            let branch = s("branch");
+            let ref_branch = (!branch.trim().is_empty()).then_some(branch);
+            let mut commits =
+                git_cmds::git_sync_commits(&s("repo"), &s("tag"), ref_branch.as_deref())?;
             git_cmds::attach_branches(&s("repo"), &mut commits);
             Ok(serde_json::to_value(commits)?)
         }
@@ -248,8 +251,8 @@ pub fn tool_schemas() -> Value {
         { "name": "git_create_branch", "description": "基于当前 HEAD 新建分支（不切换），创建后推送远端同名分支并建立上游", "inputSchema": { "type": "object", "properties": { "repo": { "type": "string" }, "branch": { "type": "string" } }, "required": ["repo", "branch"] } },
         { "name": "git_create_branch_from", "description": "从切出源新建分支（先 fetch origin 源，失败回退本地），创建后推送远端同名分支并建立上游", "inputSchema": { "type": "object", "properties": { "repo": { "type": "string" }, "branch": { "type": "string" }, "from": { "type": "string" } }, "required": ["repo", "branch", "from"] } },
         { "name": "git_checkout_branch", "description": "检出目标分支", "inputSchema": { "type": "object", "properties": { "repo": { "type": "string" }, "branch": { "type": "string" } }, "required": ["repo", "branch"] } },
-        { "name": "git_sync_commits", "description": "按标记 todo-<n> 全分支检索提交", "inputSchema": { "type": "object", "properties": { "repo": { "type": "string" }, "tag": { "type": "string" } }, "required": ["repo", "tag"] } },
-        { "name": "git_commits_between", "description": "时间窗抓取提交（ISO 8601 起止）", "inputSchema": { "type": "object", "properties": { "repo": { "type": "string" }, "branch": { "type": "string" }, "since": { "type": "string" }, "until": { "type": "string" } }, "required": ["repo", "branch", "since", "until"] } },
+        { "name": "git_sync_commits", "description": "按标记 todo-<n> 全分支检索提交（可选 branch=参考分支，返回 origin 来源标注：native 原生/merge 合并进来/cherry 剪切进来/other 不在分支上）", "inputSchema": { "type": "object", "properties": { "repo": { "type": "string" }, "tag": { "type": "string" }, "branch": { "type": "string" } }, "required": ["repo", "tag"] } },
+        { "name": "git_commits_between", "description": "时间窗抓取提交（ISO 8601 起止；按 branch 返回 origin 来源标注：native 原生/merge 合并进来/cherry 剪切进来/other 不在分支上）", "inputSchema": { "type": "object", "properties": { "repo": { "type": "string" }, "branch": { "type": "string" }, "since": { "type": "string" }, "until": { "type": "string" } }, "required": ["repo", "branch", "since", "until"] } },
         { "name": "git_commit_info", "description": "按短 hash 查询单条提交", "inputSchema": { "type": "object", "properties": { "repo": { "type": "string" }, "hash": { "type": "string" } }, "required": ["repo", "hash"] } },
         { "name": "db_load_state", "description": "全量读取状态 { projects, todos }", "inputSchema": { "type": "object", "properties": { } } },
         { "name": "db_save_state", "description": "保存状态；expected 必须为修改前 db_load_state 的原始返回值，冲突需重新读取，禁止直接覆盖", "inputSchema": { "type": "object", "properties": { "payload": { "type": "object" }, "expected": { "type": "object" } }, "required": ["payload", "expected"] } },

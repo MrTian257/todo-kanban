@@ -8,6 +8,12 @@ export interface CommitInfo {
   subject: string;
   date: string;
   branches?: string[];
+  /** 提交来源（相对参考分支）：native 原生 | merge 合并进来 | cherry 剪切进来 | other 不在参考分支上；空=未分析 */
+  origin?: string;
+  /** origin=merge：引入它的合并提交短 hash */
+  mergeHash?: string;
+  /** origin=cherry：源提交说明（源短 hash 或等价分支） */
+  source?: string;
 }
 
 export interface GitInfo {

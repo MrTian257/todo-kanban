@@ -46,9 +46,10 @@ export async function gitCheckoutBranch(repo: string, branch: string): Promise<v
   await invoke("git_checkout_branch", { repo, branch });
 }
 
-export async function gitSyncCommits(repo: string, tag: string): Promise<CommitInfo[]> {
+/** 同步提交：可选 branch=参考分支（来源三分类标注的基准），缺省由后端回退当前检出分支 */
+export async function gitSyncCommits(repo: string, tag: string, branch?: string): Promise<CommitInfo[]> {
   if (!isTauri()) throw new Error("非桌面环境，git 能力不可用");
-  return invoke<CommitInfo[]>("git_sync_commits", { repo, tag });
+  return invoke<CommitInfo[]>("git_sync_commits", { repo, tag, branch: branch ?? null });
 }
 
 export async function gitCommitsBetween(repo: string, branch: string, since: string, until: string): Promise<CommitInfo[]> {

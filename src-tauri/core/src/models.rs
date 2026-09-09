@@ -32,6 +32,15 @@ pub struct CommitInfo {
     pub date: String,
     #[serde(default)]
     pub branches: Vec<String>,
+    /// 提交来源（相对参考分支）：native=原生 | merge=合并进来 | cherry=剪切进来 | other=不在参考分支上；空串=未分析
+    #[serde(default)]
+    pub origin: String,
+    /// origin=merge 时：引入该提交的合并提交（短 hash）
+    #[serde(default)]
+    pub merge_hash: String,
+    /// origin=cherry 时：源提交说明（源短 hash 或等价分支）
+    #[serde(default)]
+    pub source: String,
 }
 
 impl From<CommitInfo> for DbCommitInfo {
@@ -41,6 +50,9 @@ impl From<CommitInfo> for DbCommitInfo {
             subject: c.subject,
             date: c.date,
             branches: c.branches,
+            origin: c.origin,
+            merge_hash: c.merge_hash,
+            source: c.source,
         }
     }
 }
@@ -54,6 +66,15 @@ pub struct DbCommitInfo {
     pub date: String,
     #[serde(default)]
     pub branches: Vec<String>,
+    /// 提交来源（相对参考分支）：native | merge | cherry | other；空串=未分析
+    #[serde(default)]
+    pub origin: String,
+    /// origin=merge 时：引入该提交的合并提交（短 hash）
+    #[serde(default)]
+    pub merge_hash: String,
+    /// origin=cherry 时：源提交说明
+    #[serde(default)]
+    pub source: String,
 }
 
 /// 泳道（v5）：看板一列，绑定一个状态

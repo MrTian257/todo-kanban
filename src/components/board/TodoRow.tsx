@@ -68,6 +68,30 @@ import { StatusNode } from "./StatusNode";
 import { cn } from "@/lib/utils";
 import { openPath } from "@tauri-apps/plugin-opener";
 
+// 提交来源三分类徽标（后端 annotate_commit_origins 标注；origin 空串=未分析，不显示）
+const ORIGIN_BADGE: Record<string, { label: string; cls: string; tip: string }> = {
+  native: {
+    label: "原生",
+    cls: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+    tip: "首次出现在该分支主线（直接提交）",
+  },
+  merge: {
+    label: "合并",
+    cls: "bg-sky-500/10 text-sky-700 dark:text-sky-300",
+    tip: "由合并提交引入",
+  },
+  cherry: {
+    label: "剪切",
+    cls: "bg-violet-500/10 text-violet-700 dark:text-violet-300",
+    tip: "cherry-pick 剪切进该分支",
+  },
+  other: {
+    label: "他支",
+    cls: "bg-muted text-muted-foreground",
+    tip: "不在参考分支上",
+  },
+};
+
 interface Props {
   todo: Todo;
   variant?: "card" | "list";
@@ -143,7 +167,8 @@ export function TodoRow({ todo, projectName, showProjectName, variant = "list" }
     if (!todo.repoPath || !todo.tag) return toast.error("未绑定代码目录或标记");
     setBusy("sync");
     try {
-      const commits = await gitSyncCommits(todo.repoPath, todo.tag);
+      // 以任务分支为参考分支做来源三分类标注（原生/合并进来/剪切进来/不在分支上）
+      const commits = await gitSyncCommits(todo.repoPath, todo.tag, todo.branch);
       patchTodo(todo.id, {
         commits: [...commits.filter((c) => !todo.commits.some((x) => x.hash === c.hash)), ...todo.commits],
       });
@@ -282,6 +307,20 @@ export function TodoRow({ todo, projectName, showProjectName, variant = "list" }
                 {todo.commits.map((c) => (
                   <div key={c.hash} className="flex items-center gap-2 rounded bg-muted px-2 py-1 text-xs">
                     <code className="font-mono">{shortHash(c.hash)}</code>
+                    {c.origin && ORIGIN_BADGE[c.origin] && (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span className={`rounded px-1 py-px text-[10px] font-medium leading-none ${ORIGIN_BADGE[c.origin].cls}`}>
+                            {ORIGIN_BADGE[c.origin].label}
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          {ORIGIN_BADGE[c.origin].tip}
+                          {c.origin === "merge" && c.mergeHash ? `：${c.mergeHash}` : ""}
+                          {c.origin === "cherry" && c.source ? `：${c.source}` : ""}
+                        </TooltipContent>
+                      </Tooltip>
+                    )}
                     <span className="flex-1 truncate">{c.subject}</span>
                     <span className="text-muted-foreground">{fmtDateTime(new Date(c.date).getTime())}</span>
                     <button
