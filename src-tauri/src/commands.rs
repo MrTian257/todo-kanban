@@ -47,10 +47,18 @@ pub fn git_checkout_branch(repo: String, branch: String) -> Result<(), String> {
     r
 }
 
-/// 7. 按标记 `todo-<n>` 全分支检索提交
+/// 7. 按标记 `todo-<n>` 全分支检索提交；可选 branch=参考分支（来源三分类标注），缺省用当前检出分支
 #[tauri::command]
-pub fn git_sync_commits(repo: String, tag: String) -> Result<Vec<CommitInfo>, String> {
-    let mut commits = git_cmds::git_sync_commits(&repo, &tag).map_err(err_str)?;
+pub fn git_sync_commits(
+    repo: String,
+    tag: String,
+    branch: Option<String>,
+) -> Result<Vec<CommitInfo>, String> {
+    let ref_branch = branch
+        .filter(|b| !b.trim().is_empty())
+        .or_else(|| git_cmds::current_branch(&repo));
+    let mut commits =
+        git_cmds::git_sync_commits(&repo, &tag, ref_branch.as_deref()).map_err(err_str)?;
     git_cmds::attach_branches(&repo, &mut commits);
     Ok(commits)
 }

@@ -91,6 +91,9 @@ pub fn parse_commit_lines(output: &str) -> Vec<CommitInfo> {
                 subject: subject.to_string(),
                 date: date.to_string(),
                 branches: Vec::new(),
+                origin: String::new(),
+                merge_hash: String::new(),
+                source: String::new(),
             })
         })
         .collect()

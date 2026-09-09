@@ -133,10 +133,10 @@ App 启动后 startGitCacheWarm（60s）：收集项目/待办的所有仓库路
 「开始」→ startedAt = now
 提交到绑定分支（可带 [todo-N] 标记）
 「完成」→ doneAt = now；autoRecaptureOnDone（lib/completeTodo.ts）
-  → git_commits_between(repo, branch, todo.createdAt, doneAt)
+  → git_commits_between(repo, branch, todo.createdAt, doneAt) → annotate_commit_origins 三分类（native 原生/merge 合并进来/cherry 剪切进来/other 不在分支上）
   → mergeCommits + dedupeCommitsForTodo 全局去重（一个 hash 只属一个待办）→ patchTodo 落库
 「按时间窗补录」→ 同上，until 恒为最新时刻（完成后新增的提交也能收录）
-「同步提交」→ git_sync_commits(repo, tag=todo-N) → log --all -F --grep → 去重落库
+「同步提交」→ git_sync_commits(repo, tag=todo-N, branch=todo.branch 参考分支) → log --all -F --grep → annotate_commit_origins 三分类 → 去重落库
 ```
 
 ## 5. 关键架构决策（ADR 摘要）
