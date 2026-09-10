@@ -77,7 +77,9 @@ fn save_state(state: DbState, expected: &DbState) -> AppResult<DbState> {
         return Err(AppError::invalid("未配置数据文件，无法保存"));
     };
     let conn = db::open_existing(&path, true)?;
-    let (saved, trash) = todo_kanban_core::svc::history::with_actor("mcp", || db::save_state_checked(&conn, &state, expected))?;
+    let (saved, trash) = todo_kanban_core::svc::history::with_actor("mcp", || {
+        db::save_state_checked(&conn, &state, expected)
+    })?;
     // 附件联动：被删任务的附件文件移入数据文件旁 attachments/trash/（按实际 db 路径定位根目录）
     if !trash.is_empty() {
         todo_kanban_core::svc::attachments::move_to_trash_at(
@@ -154,7 +156,9 @@ fn call_tool(name: &str, args: &Value) -> AppResult<Value> {
             apply_ai_markers(&mut payload, &expected);
             let path = resolve_db_file()?.ok_or_else(|| AppError::invalid("数据库不存在"))?;
             let id = todo_kanban_core::svc::proposals::create_at(&path, payload, expected)?;
-            Ok(json!({"proposalId":id,"status":"pending","message":"变更尚未应用，请用户在应用的工作流页面确认"}))
+            Ok(
+                json!({"proposalId":id,"status":"pending","message":"变更尚未应用，请用户在应用的工作流页面确认"}),
+            )
         }
         "db_save_state" => {
             let mut state: DbState =
@@ -218,15 +222,23 @@ fn apply_ai_markers(state: &mut DbState, existing: &DbState) {
             project.updated_at = now;
         }
     }
-    let resources: HashMap<_, _> = existing.resources.iter().map(|r| (r.id.as_str(), r)).collect();
+    let resources: HashMap<_, _> = existing
+        .resources
+        .iter()
+        .map(|r| (r.id.as_str(), r))
+        .collect();
     for resource in &mut state.resources {
         if let Some(original) = resources.get(resource.id.as_str()) {
             resource.created_at = original.created_at;
             resource.updated_at = original.updated_at;
-            if *resource != **original { resource.updated_at = now.max(original.updated_at.saturating_add(1)); }
-        } else { resource.created_at = now; resource.updated_at = now; }
+            if *resource != **original {
+                resource.updated_at = now.max(original.updated_at.saturating_add(1));
+            }
+        } else {
+            resource.created_at = now;
+            resource.updated_at = now;
+        }
     }
-
 }
 
 /// 启动校验：数据源可用 + MCP 已启用 + Token 匹配（不通过 → Err 中文提示，main 退出）
@@ -386,7 +398,12 @@ fn validate_arguments(name: &str, args: &Value) -> Result<(), String> {
                 {
                     return Err("payload 中待办引用了不存在的项目".into());
                 }
-                if parsed.resources.iter().any(|resource| resource.project_id.as_ref().is_some_and(|id| !projects.contains(id.as_str()))) {
+                if parsed.resources.iter().any(|resource| {
+                    resource
+                        .project_id
+                        .as_ref()
+                        .is_some_and(|id| !projects.contains(id.as_str()))
+                }) {
                     return Err("payload 中资料引用了不存在的项目".into());
                 }
             }
@@ -568,6 +585,29 @@ mod tests {
 
     #[test]
     fn schemas_count_ok() {
-        assert_eq!(all_tool_schemas().as_array().unwrap().len(), 10);
+        // 9 个 git/db 只读与写工具 + db_preview_state（提案预览）+ git_sync_commits_batch
+        let schemas = all_tool_schemas();
+        let names: Vec<&str> = schemas
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|schema| schema["name"].as_str())
+            .collect();
+        assert_eq!(names.len(), 11);
+        for expected in [
+            "git_info",
+            "git_create_branch",
+            "git_create_branch_from",
+            "git_checkout_branch",
+            "git_sync_commits",
+            "git_sync_commits_batch",
+            "git_commits_between",
+            "git_commit_info",
+            "db_load_state",
+            "db_preview_state",
+            "db_save_state",
+        ] {
+            assert!(names.contains(&expected), "缺少工具：{expected}");
+        }
     }
 }

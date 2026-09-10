@@ -13,7 +13,10 @@ struct Page {
     fetched: Instant,
 }
 type Slot = Arc<Mutex<Option<Page>>>;
-struct CacheEntry { slot: Slot, accessed: Instant }
+struct CacheEntry {
+    slot: Slot,
+    accessed: Instant,
+}
 type PageCache = HashMap<(String, String), CacheEntry>;
 const MAX_PAGE_BYTES: usize = 512 * 1024;
 const MAX_CACHE_BYTES: usize = 32 * 1024 * 1024;
@@ -34,14 +37,25 @@ pub fn get(url: &str, credential: &str) -> AppResult<String> {
         } else {
             // 每次只淘汰最久未使用且没有请求持有的项，保留热点和单飞语义。
             while pages.len() >= 128 || reserved_bytes(&pages) + MAX_PAGE_BYTES > MAX_CACHE_BYTES {
-                let oldest = pages.iter().filter(|(_, entry)| Arc::strong_count(&entry.slot) == 1)
-                    .min_by_key(|(_, entry)| entry.accessed).map(|(key, _)| key.clone());
-                let Some(oldest) = oldest else { break; };
+                let oldest = pages
+                    .iter()
+                    .filter(|(_, entry)| Arc::strong_count(&entry.slot) == 1)
+                    .min_by_key(|(_, entry)| entry.accessed)
+                    .map(|(key, _)| key.clone());
+                let Some(oldest) = oldest else {
+                    break;
+                };
                 pages.remove(&oldest);
             }
             let slot = Arc::new(Mutex::new(None));
             if pages.len() < 128 && reserved_bytes(&pages) + MAX_PAGE_BYTES <= MAX_CACHE_BYTES {
-                pages.insert(key, CacheEntry { slot: slot.clone(), accessed: started });
+                pages.insert(
+                    key,
+                    CacheEntry {
+                        slot: slot.clone(),
+                        accessed: started,
+                    },
+                );
             }
             slot
         }

@@ -5,10 +5,10 @@
 
 pub mod commands;
 mod desktop;
-#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
-mod native_workflow;
 #[cfg(target_os = "macos")]
 mod menu;
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
+mod native_workflow;
 
 use tauri::http::{header, StatusCode};
 use tauri_plugin_log::{Target, TargetKind, TimezoneStrategy};
@@ -90,16 +90,25 @@ pub fn run() {
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
         use tauri::Manager;
         if let Some(window) = app.get_webview_window("main") {
-            if let Err(error) = window.show().and_then(|_| window.unminimize()).and_then(|_| window.set_focus()) {
+            if let Err(error) = window
+                .show()
+                .and_then(|_| window.unminimize())
+                .and_then(|_| window.set_focus())
+            {
                 log::warn!("唤醒主窗口失败：{error}");
             }
         }
     }));
     #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
-    let builder = builder.plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_global_shortcut::Builder::new().with_handler(|app, _shortcut, event| {
-            if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed { native_workflow::quick_add(app); }
-        }).build());
+    let builder = builder.plugin(tauri_plugin_notification::init()).plugin(
+        tauri_plugin_global_shortcut::Builder::new()
+            .with_handler(|app, _shortcut, event| {
+                if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                    native_workflow::quick_add(app);
+                }
+            })
+            .build(),
+    );
     builder
         .on_window_event(desktop::on_window_event)
         .plugin(

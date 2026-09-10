@@ -215,15 +215,29 @@ pub async fn workflow_load() -> Result<todo_kanban_core::svc::workflow::Workflow
     blocking(move || todo_kanban_core::svc::workflow::load().map_err(err_str)).await
 }
 #[tauri::command]
-pub async fn workflow_save(payload: todo_kanban_core::svc::workflow::Workflow, expected: i64) -> Result<todo_kanban_core::svc::workflow::Workflow, String> {
-    blocking(move || todo_kanban_core::svc::workflow::save(payload, expected).map_err(err_str)).await
+pub async fn workflow_save(
+    payload: todo_kanban_core::svc::workflow::Workflow,
+    expected: i64,
+) -> Result<todo_kanban_core::svc::workflow::Workflow, String> {
+    blocking(move || todo_kanban_core::svc::workflow::save(payload, expected).map_err(err_str))
+        .await
 }
 #[tauri::command]
-pub async fn history_list(entity: Option<String>, entity_id: Option<String>, offset: usize) -> Result<Vec<todo_kanban_core::svc::history::HistoryEntry>, String> {
-    blocking(move || todo_kanban_core::svc::history::list(entity, entity_id, offset).map_err(err_str)).await
+pub async fn history_list(
+    entity: Option<String>,
+    entity_id: Option<String>,
+    offset: usize,
+) -> Result<Vec<todo_kanban_core::svc::history::HistoryEntry>, String> {
+    blocking(move || {
+        todo_kanban_core::svc::history::list(entity, entity_id, offset).map_err(err_str)
+    })
+    .await
 }
 #[tauri::command]
-pub async fn history_restore(id: String, expected: todo_kanban_core::models::DbState) -> Result<todo_kanban_core::models::DbState, String> {
+pub async fn history_restore(
+    id: String,
+    expected: todo_kanban_core::models::DbState,
+) -> Result<todo_kanban_core::models::DbState, String> {
     blocking(move || todo_kanban_core::svc::history::restore(&id, expected).map_err(err_str)).await
 }
 #[tauri::command]
@@ -236,8 +250,16 @@ pub async fn backup_create() -> Result<todo_kanban_core::svc::backups::BackupInf
 }
 /// 恢复备份：expected 为当前业务快照，workflow_revision 为确认时的配置版本；任一变化即拒绝。
 #[tauri::command]
-pub async fn backup_restore(id: String, expected: todo_kanban_core::models::DbState, workflow_revision: i64) -> Result<todo_kanban_core::models::DbState, String> {
-    blocking(move || todo_kanban_core::svc::backups::restore(&id, expected, Some(workflow_revision)).map_err(err_str)).await
+pub async fn backup_restore(
+    id: String,
+    expected: todo_kanban_core::models::DbState,
+    workflow_revision: i64,
+) -> Result<todo_kanban_core::models::DbState, String> {
+    blocking(move || {
+        todo_kanban_core::svc::backups::restore(&id, expected, Some(workflow_revision))
+            .map_err(err_str)
+    })
+    .await
 }
 #[tauri::command]
 pub async fn proposal_list() -> Result<Vec<todo_kanban_core::svc::proposals::Proposal>, String> {

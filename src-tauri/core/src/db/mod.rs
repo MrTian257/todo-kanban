@@ -137,19 +137,21 @@ pub fn load_state(conn: &Connection) -> AppResult<DbState> {
 
 /// 快照集合顺序不影响并发校验。
 pub fn same_state(actual: &DbState, expected: &DbState) -> bool {
-        let mut actual_projects: Vec<_> = actual.projects.iter().collect();
-        let mut expected_projects: Vec<_> = expected.projects.iter().collect();
-        let mut actual_todos: Vec<_> = actual.todos.iter().collect();
-        let mut expected_todos: Vec<_> = expected.todos.iter().collect();
-        let mut actual_resources: Vec<_> = actual.resources.iter().collect();
-        let mut expected_resources: Vec<_> = expected.resources.iter().collect();
-        actual_projects.sort_by(|a, b| a.id.cmp(&b.id));
-        expected_projects.sort_by(|a, b| a.id.cmp(&b.id));
-        actual_todos.sort_by(|a, b| a.id.cmp(&b.id));
-        expected_todos.sort_by(|a, b| a.id.cmp(&b.id));
-        actual_resources.sort_by(|a, b| a.id.cmp(&b.id));
-        expected_resources.sort_by(|a, b| a.id.cmp(&b.id));
-    actual_projects == expected_projects && actual_todos == expected_todos && actual_resources == expected_resources
+    let mut actual_projects: Vec<_> = actual.projects.iter().collect();
+    let mut expected_projects: Vec<_> = expected.projects.iter().collect();
+    let mut actual_todos: Vec<_> = actual.todos.iter().collect();
+    let mut expected_todos: Vec<_> = expected.todos.iter().collect();
+    let mut actual_resources: Vec<_> = actual.resources.iter().collect();
+    let mut expected_resources: Vec<_> = expected.resources.iter().collect();
+    actual_projects.sort_by(|a, b| a.id.cmp(&b.id));
+    expected_projects.sort_by(|a, b| a.id.cmp(&b.id));
+    actual_todos.sort_by(|a, b| a.id.cmp(&b.id));
+    expected_todos.sort_by(|a, b| a.id.cmp(&b.id));
+    actual_resources.sort_by(|a, b| a.id.cmp(&b.id));
+    expected_resources.sort_by(|a, b| a.id.cmp(&b.id));
+    actual_projects == expected_projects
+        && actual_todos == expected_todos
+        && actual_resources == expected_resources
 }
 
 /// 差异写落库（单事务）：UPSERT 变更行（updated_at 较新者胜）+ 差集删除 + seq/tag 收敛 + 提交全局去重 + 泳道校验
@@ -177,7 +179,15 @@ pub fn save_state_extended(
     proposal: Option<&str>,
     attachments: Option<&crate::svc::backups::AttachmentSnapshot>,
 ) -> AppResult<(DbState, Vec<String>)> {
-    save_state_inner(conn, state, Some(expected), workflow, workflow_revision, proposal, attachments)
+    save_state_inner(
+        conn,
+        state,
+        Some(expected),
+        workflow,
+        workflow_revision,
+        proposal,
+        attachments,
+    )
 }
 
 fn save_state_inner(
@@ -199,13 +209,19 @@ fn save_state_inner(
     let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)?;
 
     // 库中既有（用于 seq 冲突、提交去重、差集删除）
-    let existing = row::load_state_from_conn(&tx)?;
+    let mut existing = row::load_state_from_conn(&tx)?;
+    // 与外部读取语义对齐：存储层原始值（空 created_by / 空 swimlane_id）先归一，再比对快照
+    row::normalize_for_compare(&mut existing);
     if let Some(expected) = expected {
         if !same_state(&existing, expected) {
-            return Err(AppError::invalid("STATE_CONFLICT: 数据已被其他窗口或 MCP 修改，请重新读取后处理冲突"));
+            return Err(AppError::invalid(
+                "STATE_CONFLICT: 数据已被其他窗口或 MCP 修改，请重新读取后处理冲突",
+            ));
         }
     }
-    if let Some(attachments) = attachments { attachments.install(&tx)?; }
+    if let Some(attachments) = attachments {
+        attachments.install(&tx)?;
+    }
 
     let state = &prepared.state;
     ensure_next_seq(&tx)?;
@@ -239,13 +255,25 @@ fn save_state_inner(
 
     // seq/tag 收敛 + 写入
     let mut used_seqs: HashSet<i64> = existing.todos.iter().map(|t| t.seq).collect();
-    let existing_projects: HashMap<_, _> = existing.projects.iter().map(|p| (p.id.as_str(), p)).collect();
-    let existing_resources: HashMap<_, _> = existing.resources.iter().map(|r| (r.id.as_str(), r)).collect();
+    let existing_projects: HashMap<_, _> = existing
+        .projects
+        .iter()
+        .map(|p| (p.id.as_str(), p))
+        .collect();
+    let existing_resources: HashMap<_, _> = existing
+        .resources
+        .iter()
+        .map(|r| (r.id.as_str(), r))
+        .collect();
     for p in &state.projects {
-        if existing_projects.get(p.id.as_str()).copied() != Some(p) { row::upsert_project(&tx, p)?; }
+        if existing_projects.get(p.id.as_str()).copied() != Some(p) {
+            row::upsert_project(&tx, p)?;
+        }
     }
     for t in &state.todos {
         let mut todo = t.clone();
+        // 归一后再与库中行比较，避免存储层原始值造成无意义的重复写
+        row::normalize_todo_for_compare(&mut todo);
         // 自身旧 seq 让位（否则自己与自己冲突）
         if let Some(old) = existing_by_id.get(t.id.as_str()) {
             used_seqs.remove(&old.seq);
@@ -307,7 +335,10 @@ fn save_state_inner(
     let in_ids: HashSet<&str> = state.projects.iter().map(|p| p.id.as_str()).collect();
     for id in exist_ids.difference(&in_ids) {
         // 项目删除时资料保留，成为未归属资料。
-        tx.execute("UPDATE resources SET project_id = NULL WHERE project_id = ?1", [id])?;
+        tx.execute(
+            "UPDATE resources SET project_id = NULL WHERE project_id = ?1",
+            [id],
+        )?;
         tx.execute("DELETE FROM projects WHERE id = ?1", [id])?;
     }
     let exist_ids: HashSet<&str> = existing.todos.iter().map(|t| t.id.as_str()).collect();
@@ -319,8 +350,16 @@ fn save_state_inner(
     for id in &deleted_todo_ids {
         tx.execute("DELETE FROM todos WHERE id = ?1", [id])?;
     }
-    let exist_ids: HashSet<&str> = existing.resources.iter().map(|resource| resource.id.as_str()).collect();
-    let in_ids: HashSet<&str> = state.resources.iter().map(|resource| resource.id.as_str()).collect();
+    let exist_ids: HashSet<&str> = existing
+        .resources
+        .iter()
+        .map(|resource| resource.id.as_str())
+        .collect();
+    let in_ids: HashSet<&str> = state
+        .resources
+        .iter()
+        .map(|resource| resource.id.as_str())
+        .collect();
     for id in exist_ids.difference(&in_ids) {
         tx.execute("DELETE FROM resources WHERE id = ?1", [id])?;
     }
@@ -338,7 +377,9 @@ fn save_state_inner(
         // 并发保护：调用方确认时的配置版本必须仍是当前版本，否则拒绝（不覆盖期间的工作流修改）。
         let current = crate::svc::workflow::read(&tx)?;
         if workflow_revision.is_some_and(|expected| expected != current.revision) {
-            return Err(AppError::invalid("STATE_CONFLICT: 工作流配置已变化，请刷新后重新确认"));
+            return Err(AppError::invalid(
+                "STATE_CONFLICT: 工作流配置已变化，请刷新后重新确认",
+            ));
         }
         let mut restored = workflow.clone();
         restored.revision = current.revision + 1;
@@ -346,7 +387,11 @@ fn save_state_inner(
         crate::svc::workflow::write(&tx, &restored)?;
     }
     if let Some(id) = proposal {
-        if tx.execute("UPDATE change_proposals SET status='applied' WHERE id=?1 AND status='pending'", [id])? != 1 {
+        if tx.execute(
+            "UPDATE change_proposals SET status='applied' WHERE id=?1 AND status='pending'",
+            [id],
+        )? != 1
+        {
             return Err(AppError::invalid("提案已处理，请刷新列表"));
         }
     }
@@ -447,6 +492,8 @@ mod tests {
             tag: tag.into(),
             created_at: 1,
             updated_at: 1,
+            // 读取快照里创建者永远非空（存量空串在读取时归一为 human）
+            created_by: "human".into(),
             ..Default::default()
         }
     }
@@ -457,6 +504,7 @@ mod tests {
             name: "项目".into(),
             created_at: 1,
             updated_at: 1,
+            created_by: "human".into(),
             ..Default::default()
         }
     }
@@ -743,14 +791,24 @@ mod tests {
             },
         )
         .unwrap();
-        // 快照冲突：expected 与库中不一致（标题被其他窗口改过）
-        let mut stale = resource("r1", Some("p1"), "旧标题");
-        stale.updated_at = 2;
+        // 其他窗口已把标题改成「新标题」(updated_at=2)
+        let mut newer = resource("r1", Some("p1"), "新标题");
+        newer.updated_at = 2;
+        save_state(
+            &conn,
+            &DbState {
+                projects: vec![project("p1")],
+                resources: vec![newer],
+                todos: vec![],
+            },
+        )
+        .unwrap();
+        // 调用方仍拿着修改前的旧快照（updated_at=1）→ 必须拒绝
         let err = save_state_checked(
             &conn,
             &DbState {
                 projects: vec![project("p1")],
-                resources: vec![stale],
+                resources: vec![resource("r1", Some("p1"), "新标题")],
                 todos: vec![],
             },
             &DbState {
@@ -828,7 +886,10 @@ mod tests {
             &conn,
             &DbState {
                 projects: vec![project("p1")],
-                resources: vec![resource("r1", Some("p1"), "一"), resource("r2", Some("p1"), "二")],
+                resources: vec![
+                    resource("r1", Some("p1"), "一"),
+                    resource("r2", Some("p1"), "二"),
+                ],
                 todos: vec![],
             },
         )
@@ -889,18 +950,60 @@ mod tests {
         after.todos[0].title = "恢复后的标题".into();
         after.todos[0].updated_at = 2;
 
-        let stale = save_state_extended(&conn, &after, &before, Some(&workflow), Some(1), None, None);
+        let stale =
+            save_state_extended(&conn, &after, &before, Some(&workflow), Some(1), None, None);
         assert!(stale.is_err());
         let message = stale.unwrap_err().to_string();
-        assert!(message.contains("STATE_CONFLICT"), "过期配置版本应被拒绝：{message}");
-        assert_eq!(load_state(&conn).unwrap().todos[0].title, before.todos[0].title, "被拒绝时业务数据不变");
+        assert!(
+            message.contains("STATE_CONFLICT"),
+            "过期配置版本应被拒绝：{message}"
+        );
+        assert_eq!(
+            load_state(&conn).unwrap().todos[0].title,
+            before.todos[0].title,
+            "被拒绝时业务数据不变"
+        );
 
-        let saved = save_state_extended(&conn, &after, &before, Some(&workflow), Some(5), None, None).unwrap();
+        let saved =
+            save_state_extended(&conn, &after, &before, Some(&workflow), Some(5), None, None)
+                .unwrap();
         assert_eq!(saved.0.todos[0].title, "恢复后的标题");
         let restored = crate::svc::workflow::read(&conn).unwrap();
         assert!(restored.backup_enabled);
         assert_eq!(restored.backup_hours, 6);
         assert_eq!(restored.revision, 6, "恢复后配置版本应在当前版本上推进");
+    }
+
+    /// 存储层归一不产生假冲突：库中存量 created_by 为空（v7 之前的行）时，
+    /// 「读取快照原样写回」必须成功，而不是永远 STATE_CONFLICT。
+    #[test]
+    fn snapshot_matches_after_row_normalization() {
+        let conn = test_conn();
+        // 模拟存量行：直接写入空 created_by（绕过 upsert 的 human 兜底）
+        conn.execute(
+            "INSERT INTO projects (id,name,created_at,updated_at,created_by) VALUES ('p1','项目',1,1,'')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO todos (id,project_id,title,status,swimlane_id,seq,tag,created_at,updated_at,created_by,quadrant)
+             VALUES ('t1','p1','任务 t1','todo','',1,'todo-1',1,1,'','schedule')",
+            [],
+        )
+        .unwrap();
+        let loaded = load_state(&conn).unwrap();
+        assert_eq!(loaded.todos[0].created_by, "human", "读取侧创建者归一生效");
+        assert_eq!(loaded.projects[0].created_by, "human");
+        // 存量空泳道的行：读取即按状态补默认泳道，与写入规则一致
+        assert_eq!(
+            loaded.todos[0].swimlane_id, "swim-todo",
+            "读取侧泳道补齐生效"
+        );
+        let saved = save_state_checked(&conn, &loaded, &loaded).unwrap();
+        assert_eq!(saved.0.todos.len(), 1);
+        assert_eq!(saved.0.todos[0].swimlane_id, "swim-todo");
+        // 再次读取原样写回仍幂等（读写对称，不再出现假冲突）
+        save_state_checked(&conn, &saved.0, &saved.0).unwrap();
     }
 
     /// 变更历史保留策略：只裁剪最旧记录，不触碰待批准提案
@@ -922,18 +1025,32 @@ mod tests {
             .unwrap();
         }
         crate::svc::workflow::trim(&conn).unwrap();
-        let remaining: i64 = conn.query_row("SELECT COUNT(*) FROM change_history", [], |r| r.get(0)).unwrap();
+        let remaining: i64 = conn
+            .query_row("SELECT COUNT(*) FROM change_history", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(remaining, 20_000);
         // 保留的是最新记录
-        let newest: i64 = conn.query_row("SELECT MAX(happened_at) FROM change_history", [], |r| r.get(0)).unwrap();
+        let newest: i64 = conn
+            .query_row("SELECT MAX(happened_at) FROM change_history", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
         assert_eq!(newest, 25_004);
         let pending: i64 = conn
-            .query_row("SELECT COUNT(*) FROM change_proposals WHERE status='pending'", [], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM change_proposals WHERE status='pending'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(pending, 1, "待批准提案不得被清理");
         let rejected: i64 = conn
-            .query_row("SELECT COUNT(*) FROM change_proposals WHERE status='rejected'", [], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM change_proposals WHERE status='rejected'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
-        assert_eq!(rejected, 1);
+        assert_eq!(rejected, 2, "未超过上限的已处理提案保留");
     }
 }

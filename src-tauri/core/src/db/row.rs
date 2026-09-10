@@ -4,7 +4,9 @@
 use rusqlite::Row;
 
 use crate::error::AppResult;
-use crate::models::{DbBranchRule, DbCommitInfo, DbLibraryResource, DbProject, DbState, DbSwimlane, DbTodo};
+use crate::models::{
+    DbBranchRule, DbCommitInfo, DbLibraryResource, DbProject, DbState, DbSwimlane, DbTodo,
+};
 
 fn parse_json_or<T: serde::de::DeserializeOwned>(raw: Option<String>, default: T) -> T {
     match raw {
@@ -17,6 +19,10 @@ fn parse_json_or<T: serde::de::DeserializeOwned>(raw: Option<String>, default: T
 pub const TODO_SELECT: &str = "SELECT id, project_id, title, note, repo_path, branch, status, swimlane_id, quadrant, seq, tag, start_date, end_date, blocker, archived, started_at, done_at, commits, sort_order, created_at, updated_at, created_by, ai_coordinated FROM todos";
 
 pub fn row_to_todo(row: &Row) -> AppResult<DbTodo> {
+    let status = row
+        .get::<_, Option<String>>(6)?
+        .unwrap_or_else(|| "todo".into());
+    let lane = row.get::<_, Option<String>>(7)?.unwrap_or_default();
     Ok(DbTodo {
         id: row.get(0)?,
         project_id: row.get(1)?,
@@ -24,10 +30,14 @@ pub fn row_to_todo(row: &Row) -> AppResult<DbTodo> {
         note: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
         repo_path: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
         branch: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
-        status: row
-            .get::<_, Option<String>>(6)?
-            .unwrap_or_else(|| "todo".into()),
-        swimlane_id: row.get::<_, Option<String>>(7)?.unwrap_or_default(),
+        status: status.clone(),
+        // 与 todo_params 的落库规则一致：存量空泳道按状态补默认泳道
+        //（读取与写入不对称会造成「读出来的快照原样写回」被判成并发修改）
+        swimlane_id: if lane.is_empty() {
+            DbTodo::default_swimlane_for_status(&status)
+        } else {
+            lane
+        },
         quadrant: row
             .get::<_, Option<String>>(8)?
             .unwrap_or_else(|| "schedule".into()),
@@ -43,11 +53,18 @@ pub fn row_to_todo(row: &Row) -> AppResult<DbTodo> {
         sort_order: row.get(18)?,
         created_at: row.get(19)?,
         updated_at: row.get(20)?,
-        created_by: row
-            .get::<_, Option<String>>(21)?
-            .unwrap_or_else(|| "human".into()),
+        // 与 todo_params 的落库规则一致：存量空串与 NULL 都归一为 human（v7 之前的行）
+        created_by: creator_or_default(row.get::<_, Option<String>>(21)?),
         ai_coordinated: row.get::<_, Option<bool>>(22)?.unwrap_or(false),
     })
+}
+
+/// 创建者归一：NULL 或空串 → human（与 `*_params` 写入规则一致，避免读写不对称）
+fn creator_or_default(value: Option<String>) -> String {
+    match value {
+        Some(text) if !text.is_empty() => text,
+        _ => "human".into(),
+    }
 }
 
 pub fn todo_params(t: &DbTodo) -> Vec<Box<dyn rusqlite::ToSql>> {
@@ -117,9 +134,8 @@ pub fn row_to_project(row: &Row) -> AppResult<DbProject> {
         frontend_repo_token: row.get::<_, Option<String>>(12)?.unwrap_or_default(),
         backend_repo_token: row.get::<_, Option<String>>(13)?.unwrap_or_default(),
         swimlanes: parse_json_or::<Option<Vec<DbSwimlane>>>(row.get(14)?, None),
-        created_by: row
-            .get::<_, Option<String>>(15)?
-            .unwrap_or_else(|| "human".into()),
+        // 与 project_params 的落库规则一致：存量空串与 NULL 都归一为 human（v7 之前的行）
+        created_by: creator_or_default(row.get::<_, Option<String>>(15)?),
     })
 }
 
@@ -168,7 +184,8 @@ pub const PROJECT_UPSERT: &str = "INSERT INTO projects (id, name, project_dir, f
   WHERE excluded.updated_at >= projects.updated_at";
 
 // pub fn load_projects_from_conn(conn: &rusqlite::Connection) -> AppResult<Vec<DbProject>> {
-pub const RESOURCE_SELECT: &str = "SELECT id, project_id, title, url, note, tags, created_at, updated_at FROM resources";
+pub const RESOURCE_SELECT: &str =
+    "SELECT id, project_id, title, url, note, tags, created_at, updated_at FROM resources";
 
 pub fn row_to_resource(row: &Row) -> AppResult<DbLibraryResource> {
     Ok(DbLibraryResource {
@@ -196,7 +213,8 @@ fn resource_params(resource: &DbLibraryResource) -> Vec<Box<dyn rusqlite::ToSql>
     ]
 }
 
-const RESOURCE_UPSERT: &str = "INSERT INTO resources (id, project_id, title, url, note, tags, created_at, updated_at)
+const RESOURCE_UPSERT: &str =
+    "INSERT INTO resources (id, project_id, title, url, note, tags, created_at, updated_at)
   VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
   ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id, title=excluded.title,
     url=excluded.url, note=excluded.note, tags=excluded.tags, updated_at=excluded.updated_at
@@ -238,19 +256,46 @@ pub fn load_state_from_conn(conn: &rusqlite::Connection) -> AppResult<DbState> {
     })
 }
 
+/// 行读取后的语义归一：与 `*_params` 的落库规则保持一致，使「读出来的状态原样写回」是幂等的。
+/// 用于 save_state 的快照比较——否则存储层原始值（空 created_by / 空 swimlane_id）会被
+/// 误判成并发修改，产生永远无法通过的 STATE_CONFLICT。
+pub fn normalize_for_compare(state: &mut DbState) {
+    for project in &mut state.projects {
+        if project.created_by.is_empty() {
+            project.created_by = "human".into();
+        }
+    }
+    for todo in &mut state.todos {
+        normalize_todo_for_compare(todo);
+    }
+}
+
+/// 单条待办归一（空 created_by → human；空 swimlane_id → 按状态默认泳道）
+pub fn normalize_todo_for_compare(todo: &mut DbTodo) {
+    if todo.created_by.is_empty() {
+        todo.created_by = "human".into();
+    }
+    if todo.swimlane_id.is_empty() {
+        todo.swimlane_id = crate::models::DbTodo::default_swimlane_for_status(&todo.status);
+    }
+}
+
 /// UPSERT 待办（updated_at 较新者胜）
 pub fn upsert_todo(conn: &rusqlite::Connection, t: &DbTodo) -> AppResult<()> {
-    conn.prepare_cached(TODO_UPSERT)?.execute(rusqlite::params_from_iter(todo_params(t)))?;
+    conn.prepare_cached(TODO_UPSERT)?
+        .execute(rusqlite::params_from_iter(todo_params(t)))?;
     Ok(())
 }
 
 /// UPSERT 项目（updated_at 较新者胜）
 pub fn upsert_project(conn: &rusqlite::Connection, p: &DbProject) -> AppResult<()> {
-    conn.prepare_cached(PROJECT_UPSERT)?.execute(rusqlite::params_from_iter(project_params(p)))?;
+    conn.prepare_cached(PROJECT_UPSERT)?
+        .execute(rusqlite::params_from_iter(project_params(p)))?;
     Ok(())
 }
 
 pub fn upsert_resource(conn: &rusqlite::Connection, resource: &DbLibraryResource) -> AppResult<()> {
-    conn.prepare_cached(RESOURCE_UPSERT)?.execute(rusqlite::params_from_iter(resource_params(resource)))?;
+    conn.prepare_cached(RESOURCE_UPSERT)?
+        .execute(rusqlite::params_from_iter(resource_params(resource)))?;
     Ok(())
 }

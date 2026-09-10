@@ -82,12 +82,26 @@ pub struct PreparedState<'a> {
 }
 impl<'a> PreparedState<'a> {
     pub fn new(state: &'a crate::models::DbState) -> AppResult<Self> {
-        let mut prepared = Self { state: std::borrow::Cow::Borrowed(state), created: Vec::new(), committed: false };
-        if !state.projects.iter().any(|project| [&project.frontend_repo_token, &project.backend_repo_token]
-            .iter().any(|value| !value.is_empty() && !is_reference(value))) { return Ok(prepared); }
+        let mut prepared = Self {
+            state: std::borrow::Cow::Borrowed(state),
+            created: Vec::new(),
+            committed: false,
+        };
+        if !state.projects.iter().any(|project| {
+            [&project.frontend_repo_token, &project.backend_repo_token]
+                .iter()
+                .any(|value| !value.is_empty() && !is_reference(value))
+        }) {
+            return Ok(prepared);
+        }
         for project in &mut prepared.state.to_mut().projects {
-            for value in [&mut project.frontend_repo_token, &mut project.backend_repo_token] {
-                if value.is_empty() || is_reference(value) { continue; }
+            for value in [
+                &mut project.frontend_repo_token,
+                &mut project.backend_repo_token,
+            ] {
+                if value.is_empty() || is_reference(value) {
+                    continue;
+                }
                 let reference = protect(value)?;
                 prepared.created.push(reference.clone());
                 *value = reference;
@@ -95,18 +109,27 @@ impl<'a> PreparedState<'a> {
         }
         Ok(prepared)
     }
-    pub fn commit(&mut self) { self.committed = true; }
+    pub fn commit(&mut self) {
+        self.committed = true;
+    }
 }
 impl Drop for PreparedState<'_> {
     fn drop(&mut self) {
-        if self.committed { return; }
+        if self.committed {
+            return;
+        }
         for reference in &self.created {
             if let Some(id) = reference.strip_prefix(SESSION) {
-                if let Ok(mut secrets) = SECRETS.lock() { secrets.remove(id); }
+                if let Ok(mut secrets) = SECRETS.lock() {
+                    secrets.remove(id);
+                }
             }
             #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
             if let Some(id) = reference.strip_prefix(KEYRING) {
-                if keyring::Entry::new(SERVICE, id).and_then(|entry| entry.delete_credential()).is_err() {
+                if keyring::Entry::new(SERVICE, id)
+                    .and_then(|entry| entry.delete_credential())
+                    .is_err()
+                {
                     log::warn!("未提交的新凭据清理失败，原有凭据不受影响");
                 }
             }

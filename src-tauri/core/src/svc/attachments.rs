@@ -118,8 +118,9 @@ fn ensure_dir(path: &Path) -> AppResult<PathBuf> {
         }
         Ok(_) => fs::canonicalize(path).map_err(AppError::from),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            fs::create_dir_all(path)
-                .map_err(|e| AppError::invalid(format!("无法创建附件目录 {}：{e}", path.display())))?;
+            fs::create_dir_all(path).map_err(|e| {
+                AppError::invalid(format!("无法创建附件目录 {}：{e}", path.display()))
+            })?;
             fs::canonicalize(path).map_err(AppError::from)
         }
         Err(e) => Err(e.into()),
@@ -148,7 +149,9 @@ fn write_atomic(target: &Path, bytes: &[u8]) -> AppResult<()> {
 
 fn open_db(db_path: &Path) -> AppResult<Connection> {
     if !db_path.exists() {
-        return Err(AppError::invalid("数据文件尚未初始化，请先启动应用完成初始化"));
+        return Err(AppError::invalid(
+            "数据文件尚未初始化，请先启动应用完成初始化",
+        ));
     }
     let backup_dir = db_path
         .parent()
@@ -167,7 +170,11 @@ pub fn import(todo_id: &str, bytes: Vec<u8>, original_name: &str) -> AppResult<A
 }
 
 /// 前端 base64 图片解码 + 导入（Tauri 命令薄壳直接调用）
-pub fn import_b64(todo_id: &str, bytes_base64: &str, original_name: &str) -> AppResult<AttachmentInfo> {
+pub fn import_b64(
+    todo_id: &str,
+    bytes_base64: &str,
+    original_name: &str,
+) -> AppResult<AttachmentInfo> {
     import_b64_at(&db_cmds::db_path()?, todo_id, bytes_base64, original_name)
 }
 
@@ -184,7 +191,12 @@ pub fn import_b64_at(
     import_at(db_path, todo_id, bytes, original_name)
 }
 
-fn import_at(db_path: &Path, todo_id: &str, bytes: Vec<u8>, original_name: &str) -> AppResult<AttachmentInfo> {
+fn import_at(
+    db_path: &Path,
+    todo_id: &str,
+    bytes: Vec<u8>,
+    original_name: &str,
+) -> AppResult<AttachmentInfo> {
     if !valid_todo_id(todo_id) {
         return Err(AppError::invalid("任务 ID 含不支持的字符，无法保存附件"));
     }
@@ -281,7 +293,9 @@ pub fn serve_at(root: &Path, relative_path: &str) -> AppResult<(&'static str, Ve
         return Err(AppError::invalid("附件不存在"));
     }
     let canonical = fs::canonicalize(&path).map_err(|_| AppError::invalid("附件不存在"))?;
-    let canonical_dir = canonical.parent().ok_or_else(|| AppError::invalid("附件路径无效"))?;
+    let canonical_dir = canonical
+        .parent()
+        .ok_or_else(|| AppError::invalid("附件路径无效"))?;
     if canonical_dir.parent() != Some(root.as_path()) {
         return Err(AppError::invalid("附件路径越界"));
     }
@@ -292,7 +306,8 @@ pub fn serve_at(root: &Path, relative_path: &str) -> AppResult<(&'static str, Ve
         return Err(AppError::invalid("附件超过大小上限"));
     }
     let mut bytes = Vec::new();
-    file.take(SERVE_MAX_BYTES as u64 + 1).read_to_end(&mut bytes)?;
+    file.take(SERVE_MAX_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)?;
     if bytes.len() > SERVE_MAX_BYTES {
         return Err(AppError::invalid("附件超过大小上限"));
     }
@@ -444,9 +459,10 @@ pub fn migrate_inline_at(db_path: &Path) -> AppResult<MigrateSummary> {
         summary.scanned_todos += 1;
         match migrate_one(&mut conn, db_path, &todo) {
             Ok(n) => summary.migrated_images += n,
-            Err(e) => summary
-                .failed_todos
-                .push(MigrateFailure { id: todo.id.clone(), reason: e.to_string() }),
+            Err(e) => summary.failed_todos.push(MigrateFailure {
+                id: todo.id.clone(),
+                reason: e.to_string(),
+            }),
         }
     }
     Ok(summary)
@@ -474,7 +490,10 @@ fn migrate_one(conn: &mut Connection, db_path: &Path, todo: &DbTodo) -> AppResul
         let original = format!("历史图片.{ext}");
         let info = import_in_tx(&tx, &root, &todo.id, &bytes, mime, ext, &original)?;
         // 同一 data URL 多处出现一并替换
-        note = note.split(url.as_str()).collect::<Vec<&str>>().join(&info.r#ref);
+        note = note
+            .split(url.as_str())
+            .collect::<Vec<&str>>()
+            .join(&info.r#ref);
         count += 1;
     }
     if note != todo.note {
@@ -497,7 +516,9 @@ fn extract_data_urls(note: &str) -> AppResult<Vec<String>> {
         // mime + 标记长度有界，避免跨引用误匹配
         let head = &after[..after.len().min(64)];
         let Some(pos) = head.find(MARK) else {
-            return Err(AppError::invalid("存在不支持的内嵌图片格式（缺少 base64 数据）"));
+            return Err(AppError::invalid(
+                "存在不支持的内嵌图片格式（缺少 base64 数据）",
+            ));
         };
         let start = pos + MARK.len();
         let payload = &after[start..];
@@ -672,7 +693,10 @@ mod tests {
         let (mime, bytes) = serve_at(&root, &info.relative_path).unwrap();
         assert_eq!(mime, "image/png");
         assert_eq!(bytes, png_bytes());
-        assert!(serve_at(&root, "t1/t1-0001.jpg").is_err(), "扩展名不在白名单/文件不存在");
+        assert!(
+            serve_at(&root, "t1/t1-0001.jpg").is_err(),
+            "扩展名不在白名单/文件不存在"
+        );
         assert!(serve_at(&root, "t1-0001.png").is_err(), "必须两段式路径");
         assert!(serve_at(&root, "../t1/t1-0001.png").is_err(), "拒绝遍历");
         assert!(serve_at(&root, "t1/..png").is_err());
@@ -705,9 +729,27 @@ mod tests {
                 ],
             );
             // save_state 内部已补链：t1（导入时已建）、t2（引用补链）
-            assert_eq!(count(&conn, "SELECT COUNT(*) FROM todo_attachments WHERE todo_id='t1'"), 1);
-            assert_eq!(count(&conn, "SELECT COUNT(*) FROM todo_attachments WHERE todo_id='t2'"), 1);
-            assert_eq!(count(&conn, "SELECT COUNT(*) FROM todo_attachments WHERE todo_id='t3'"), 0);
+            assert_eq!(
+                count(
+                    &conn,
+                    "SELECT COUNT(*) FROM todo_attachments WHERE todo_id='t1'"
+                ),
+                1
+            );
+            assert_eq!(
+                count(
+                    &conn,
+                    "SELECT COUNT(*) FROM todo_attachments WHERE todo_id='t2'"
+                ),
+                1
+            );
+            assert_eq!(
+                count(
+                    &conn,
+                    "SELECT COUNT(*) FROM todo_attachments WHERE todo_id='t3'"
+                ),
+                0
+            );
         }
         let _ = fs::remove_dir_all(&dir);
     }
@@ -749,12 +791,20 @@ mod tests {
         };
         assert_eq!(trash, vec!["t1/t1-0001.png".to_string()]);
         assert_eq!(count(&conn, "SELECT COUNT(*) FROM attachments"), 0);
-        assert!(root.join("t1/t1-0001.png").is_file(), "提交后、移动前文件仍在原位");
+        assert!(
+            root.join("t1/t1-0001.png").is_file(),
+            "提交后、移动前文件仍在原位"
+        );
         assert_eq!(move_to_trash_at(&root, &trash), 1);
         assert!(!root.join("t1/t1-0001.png").exists(), "原文件应已移走");
         // trash 目录下可找回
         let trash_dir = root.join("trash");
-        let stamp_dir = fs::read_dir(&trash_dir).unwrap().flatten().next().unwrap().path();
+        let stamp_dir = fs::read_dir(&trash_dir)
+            .unwrap()
+            .flatten()
+            .next()
+            .unwrap()
+            .path();
         assert!(stamp_dir.join("t1/t1-0001.png").is_file());
         let _ = fs::remove_dir_all(&dir);
     }
@@ -781,7 +831,9 @@ mod tests {
             assert!(new_note.starts_with("说明 ![图](attachment://t1/t1-0001.png) 结尾"));
             assert!(!new_note.contains("data:image/"));
         }
-        assert!(attachments_root_at(&db_path).join("t1/t1-0001.png").is_file());
+        assert!(attachments_root_at(&db_path)
+            .join("t1/t1-0001.png")
+            .is_file());
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -815,7 +867,10 @@ mod tests {
         let info = import_at(&db_path, "t1", png_bytes(), "x.png").unwrap();
         {
             let (conn, _) = db::open_and_init(&db_path, &dir.join("backup")).unwrap();
-            seed(&conn, vec![todo_row("t1", &format!("![x]({})", info.r#ref))]);
+            seed(
+                &conn,
+                vec![todo_row("t1", &format!("![x]({})", info.r#ref))],
+            );
             // t9 关系指向不存在的任务（模拟"新建任务粘贴后放弃"）
             conn.execute(
                 "INSERT INTO todo_attachments(todo_id, attachment_id, seq, created_at) VALUES ('t9', ?1, 0, 1)",
@@ -828,18 +883,23 @@ mod tests {
         assert_eq!(summary.removed_relations, 1);
         assert_eq!(summary.removed_attachments, 0);
         assert_eq!(summary.moved_files, 0);
-        assert!(attachments_root_at(&db_path).join("t1/t1-0001.png").is_file());
+        assert!(attachments_root_at(&db_path)
+            .join("t1/t1-0001.png")
+            .is_file());
         // 阶段二：t1 也删除 → 附件成孤儿，行删除 + 文件入 trash
         {
             let conn = db::open(&db_path).unwrap();
-            conn.execute("DELETE FROM todos WHERE id = 't1'", []).unwrap();
+            conn.execute("DELETE FROM todos WHERE id = 't1'", [])
+                .unwrap();
         }
         let summary = gc_orphans_at(&db_path).unwrap();
         // 阶段二：t1 的关系已成悬空（任务被绕过 save_state 直接删除），本次一并清掉
         assert_eq!(summary.removed_relations, 1);
         assert_eq!(summary.removed_attachments, 1);
         assert_eq!(summary.moved_files, 1);
-        assert!(!attachments_root_at(&db_path).join("t1/t1-0001.png").exists());
+        assert!(!attachments_root_at(&db_path)
+            .join("t1/t1-0001.png")
+            .exists());
         let _ = fs::remove_dir_all(&dir);
     }
 }

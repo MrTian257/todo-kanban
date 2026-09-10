@@ -260,7 +260,10 @@ mod tests {
             .unwrap()
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
-        assert!(tables.contains(&"resources".to_string()), "v8→v9 应补建 resources 表");
+        assert!(
+            tables.contains(&"resources".to_string()),
+            "v8→v9 应补建 resources 表"
+        );
         let v: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();

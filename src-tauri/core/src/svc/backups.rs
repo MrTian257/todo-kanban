@@ -50,7 +50,8 @@ fn directory(id: &str) -> AppResult<PathBuf> {
 }
 
 fn is_symlink(path: &Path) -> bool {
-    path.symlink_metadata().is_ok_and(|meta| meta.file_type().is_symlink())
+    path.symlink_metadata()
+        .is_ok_and(|meta| meta.file_type().is_symlink())
 }
 
 /// 内容比较：长度不同直接判定不同，长度相同再按块流式比较（不整体读入内存）
@@ -113,7 +114,11 @@ fn collect_files(root: &Path, prefix: &str, out: &mut Vec<String>) -> AppResult<
         if prefix.is_empty() && name == TRASH {
             continue;
         }
-        let relative = if prefix.is_empty() { name.clone() } else { format!("{prefix}/{name}") };
+        let relative = if prefix.is_empty() {
+            name.clone()
+        } else {
+            format!("{prefix}/{name}")
+        };
         if kind.is_dir() {
             collect_files(&entry.path(), &relative, out)?;
         } else if kind.is_file() {
@@ -158,11 +163,16 @@ fn copy_tree(from: &Path, to: &Path, created: &mut Vec<PathBuf>) -> AppResult<(u
         } else if kind.is_file() {
             if target.exists() {
                 if !same_file(&entry.path(), &target)? {
-                    return Err(AppError::invalid("附件同名但内容不同，已停止恢复，请先确认文件归属"));
+                    return Err(AppError::invalid(
+                        "附件同名但内容不同，已停止恢复，请先确认文件归属",
+                    ));
                 }
             } else {
                 let mut input = std::fs::File::open(entry.path())?;
-                let mut output = std::fs::OpenOptions::new().write(true).create_new(true).open(&target)?;
+                let mut output = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&target)?;
                 created.push(target);
                 std::io::copy(&mut input, &mut output)?;
                 output.sync_all()?;
@@ -193,7 +203,9 @@ fn verify(directory: &Path, manifest: &BackupInfo) -> AppResult<()> {
         bytes += path.metadata()?.len();
     }
     if files.len() != manifest.attachment_files || bytes != manifest.attachment_bytes {
-        return Err(AppError::invalid("备份附件数量或大小与清单不符，备份可能不完整"));
+        return Err(AppError::invalid(
+            "备份附件数量或大小与清单不符，备份可能不完整",
+        ));
     }
     Ok(())
 }
@@ -226,7 +238,8 @@ fn create_inner() -> AppResult<BackupInfo> {
     let path = super::db_cmds::db_path()?;
     let writer = db::open_existing(&path, true)?;
     // 与 MCP 跨进程写互斥；附件复制结束前不允许删除任务与附件关系。
-    let guard = rusqlite::Transaction::new_unchecked(&writer, rusqlite::TransactionBehavior::Immediate)?;
+    let guard =
+        rusqlite::Transaction::new_unchecked(&writer, rusqlite::TransactionBehavior::Immediate)?;
     let source = db::open_existing(&path, false)?;
     let id = uuid::Uuid::new_v4().to_string();
     let directory = root()?.join(&id);
@@ -236,8 +249,11 @@ fn create_inner() -> AppResult<BackupInfo> {
         source.backup(rusqlite::DatabaseName::Main, directory.join(SNAPSHOT), None)?;
         let state = db::load_state(&source)?;
         let mut created = Vec::new();
-        let (attachment_files, attachment_bytes) =
-            copy_tree(&super::attachments::attachments_root_at(&path), &directory.join(ATTACHMENTS), &mut created)?;
+        let (attachment_files, attachment_bytes) = copy_tree(
+            &super::attachments::attachments_root_at(&path),
+            &directory.join(ATTACHMENTS),
+            &mut created,
+        )?;
         let info = BackupInfo {
             id,
             created_at: super::workflow::now(),
@@ -248,7 +264,10 @@ fn create_inner() -> AppResult<BackupInfo> {
             attachment_bytes,
         };
         let data = serde_json::to_vec_pretty(&info)?;
-        let mut file = std::fs::OpenOptions::new().create_new(true).write(true).open(directory.join(MANIFEST))?;
+        let mut file = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(directory.join(MANIFEST))?;
         std::io::Write::write_all(&mut file, &data)?;
         file.sync_all()?;
         Ok(info)
@@ -261,7 +280,9 @@ fn create_inner() -> AppResult<BackupInfo> {
 }
 
 pub fn create() -> AppResult<BackupInfo> {
-    let _guard = BACKUP_LOCK.lock().map_err(|_| AppError::invalid("备份服务繁忙"))?;
+    let _guard = BACKUP_LOCK
+        .lock()
+        .map_err(|_| AppError::invalid("备份服务繁忙"))?;
     create_inner()
 }
 
@@ -276,10 +297,9 @@ pub fn automatic() -> AppResult<()> {
         Err(_) => return Ok(()),
     };
     let saved = list()?;
-    if saved
-        .first()
-        .is_some_and(|backup| super::workflow::now() - backup.created_at < i64::from(config.backup_hours) * 3_600_000)
-    {
+    if saved.first().is_some_and(|backup| {
+        super::workflow::now() - backup.created_at < i64::from(config.backup_hours) * 3_600_000
+    }) {
         return Ok(());
     }
     create_inner()?;
@@ -292,7 +312,9 @@ pub fn automatic() -> AppResult<()> {
 /// 恢复备份：expected 为当前业务快照，workflow_revision 为调用方确认时的配置版本。
 /// 两者都必须未变化，否则拒绝（避免覆盖并发产生的修改）。
 pub fn restore(id: &str, expected: DbState, workflow_revision: Option<i64>) -> AppResult<DbState> {
-    let _guard = BACKUP_LOCK.lock().map_err(|_| AppError::invalid("备份服务繁忙"))?;
+    let _guard = BACKUP_LOCK
+        .lock()
+        .map_err(|_| AppError::invalid("备份服务繁忙"))?;
     let directory = directory(id)?;
     let manifest: BackupInfo = serde_json::from_slice(&std::fs::read(directory.join(MANIFEST))?)?;
     if manifest.id != id {
@@ -304,9 +326,12 @@ pub fn restore(id: &str, expected: DbState, workflow_revision: Option<i64>) -> A
     // 备份时的配置；恢复时统一取恢复前 revision + 1（并发修改由 expected_revision 拦截）。
     let workflow = super::workflow::read(&source)?;
     let attachments = AttachmentSnapshot::read(&source, &directory.join(ATTACHMENTS), &state)?;
-    let current = super::db_cmds::load_state()?.ok_or_else(|| AppError::invalid("当前数据库不存在"))?;
+    let current =
+        super::db_cmds::load_state()?.ok_or_else(|| AppError::invalid("当前数据库不存在"))?;
     if !db::same_state(&current, &expected) {
-        return Err(AppError::invalid("STATE_CONFLICT: 数据已变化，请重新确认备份恢复"));
+        return Err(AppError::invalid(
+            "STATE_CONFLICT: 数据已变化，请重新确认备份恢复",
+        ));
     }
     // 未指定时以「当前配置版本」为准：调用方在确认时读取该值即可获得并发保护。
     let expected_revision = match workflow_revision {
@@ -316,13 +341,31 @@ pub fn restore(id: &str, expected: DbState, workflow_revision: Option<i64>) -> A
     create_inner()?; // 恢复前始终保留当前数据库与附件。
     let now = super::workflow::now();
     for task in &mut state.todos {
-        task.updated_at = now.max(current.todos.iter().find(|t| t.id == task.id).map_or(0, |t| t.updated_at + 1));
+        task.updated_at = now.max(
+            current
+                .todos
+                .iter()
+                .find(|t| t.id == task.id)
+                .map_or(0, |t| t.updated_at + 1),
+        );
     }
     for project in &mut state.projects {
-        project.updated_at = now.max(current.projects.iter().find(|p| p.id == project.id).map_or(0, |p| p.updated_at + 1));
+        project.updated_at = now.max(
+            current
+                .projects
+                .iter()
+                .find(|p| p.id == project.id)
+                .map_or(0, |p| p.updated_at + 1),
+        );
     }
     for resource in &mut state.resources {
-        resource.updated_at = now.max(current.resources.iter().find(|r| r.id == resource.id).map_or(0, |r| r.updated_at + 1));
+        resource.updated_at = now.max(
+            current
+                .resources
+                .iter()
+                .find(|r| r.id == resource.id)
+                .map_or(0, |r| r.updated_at + 1),
+        );
     }
     let root = super::attachments::attachments_root_at(&super::db_cmds::db_path()?);
     // 附件文件先补齐（缺失立即失败；同名异内容停止，不覆盖任何当前文件）。
@@ -332,7 +375,13 @@ pub fn restore(id: &str, expected: DbState, workflow_revision: Option<i64>) -> A
     }
     // 写库失败时保留受控目录内的新文件，避免错误清理与并发写入共用的附件。
     let restored = super::history::with_actor("backup-restore", || {
-        super::db_cmds::restore_snapshot(state, expected, &workflow, expected_revision, &attachments)
+        super::db_cmds::restore_snapshot(
+            state,
+            expected,
+            &workflow,
+            expected_revision,
+            &attachments,
+        )
     })?;
     // 事务成功后：备份中不存在的附件文件移入 attachments/trash/（可人工找回，避免残留孤儿文件）。
     reconcile_attachments(&directory.join(ATTACHMENTS), &root);
@@ -352,7 +401,10 @@ fn reconcile_attachments(backup_root: &Path, current_root: &Path) {
         log::warn!("附件回收跳过：无法读取当前附件清单");
         return;
     }
-    let extra: Vec<String> = current_files.into_iter().filter(|path| !keep.contains(path)).collect();
+    let extra: Vec<String> = current_files
+        .into_iter()
+        .filter(|path| !keep.contains(path))
+        .collect();
     if extra.is_empty() {
         return;
     }
@@ -362,10 +414,16 @@ fn reconcile_attachments(backup_root: &Path, current_root: &Path) {
     }
 }
 
+/// 附件行（attachments 表全列，按 DDL 顺序）
+type AttachmentRow = (String, String, String, String, String, i64, i64, i64);
+/// 任务—附件关系行（todo_id, attachment_id, seq, created_at）
+type AttachmentLinkRow = (String, String, i64, i64);
+
 /// 附件文件与索引一起恢复；索引写入与任务快照共用事务。
+#[derive(Debug)]
 pub struct AttachmentSnapshot {
-    files: Vec<(String, String, String, String, String, i64, i64, i64)>,
-    links: Vec<(String, String, i64, i64)>,
+    files: Vec<AttachmentRow>,
+    links: Vec<AttachmentLinkRow>,
 }
 
 impl AttachmentSnapshot {
@@ -376,10 +434,20 @@ impl AttachmentSnapshot {
         )?;
         let files = stmt
             .query_map([], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?))
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                    r.get(6)?,
+                    r.get(7)?,
+                ))
             })?
-            .collect::<Result<Vec<(String, String, String, String, String, i64, i64, i64)>, _>>()?;
-        let todos: std::collections::HashSet<&str> = state.todos.iter().map(|todo| todo.id.as_str()).collect();
+            .collect::<Result<Vec<AttachmentRow>, _>>()?;
+        let todos: std::collections::HashSet<&str> =
+            state.todos.iter().map(|todo| todo.id.as_str()).collect();
         for file in &files {
             if !super::attachments::valid_relative(&file.3) || file.5 < 0 {
                 return Err(AppError::invalid("备份附件路径或大小无效"));
@@ -409,7 +477,8 @@ impl AttachmentSnapshot {
                 return Err(AppError::invalid("备份附件目录与任务快照不一致"));
             }
         }
-        let mut stmt = conn.prepare("SELECT todo_id,attachment_id,seq,created_at FROM todo_attachments")?;
+        let mut stmt =
+            conn.prepare("SELECT todo_id,attachment_id,seq,created_at FROM todo_attachments")?;
         let links = stmt
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
             .collect::<Result<Vec<(String, String, i64, i64)>, _>>()?;
@@ -471,7 +540,13 @@ mod tests {
 
     fn state(todos: Vec<DbTodo>) -> DbState {
         DbState {
-            projects: vec![DbProject { id: "p1".into(), name: "项目".into(), created_at: 1, updated_at: 1, ..Default::default() }],
+            projects: vec![DbProject {
+                id: "p1".into(),
+                name: "项目".into(),
+                created_at: 1,
+                updated_at: 1,
+                ..Default::default()
+            }],
             resources: vec![],
             todos,
         }
@@ -487,13 +562,28 @@ mod tests {
         let (conn, _) = db::open_and_init(&db_path, &dir.join("backup")).unwrap();
         let snapshot_root = dir.join("snapshot-attachments");
 
-        let info = crate::svc::attachments::import_b64_at(&db_path, "t1", &base64_encode(&png_bytes()), "x.png").unwrap();
+        let info = crate::svc::attachments::import_b64_at(
+            &db_path,
+            "t1",
+            &base64_encode(&png_bytes()),
+            "x.png",
+        )
+        .unwrap();
         let task = todo("t1", &format!("![x]({})", info.r#ref));
         db::save_state(&conn, &state(vec![task.clone()])).unwrap();
-        copy_tree(&crate::svc::attachments::attachments_root_at(&db_path), &snapshot_root, &mut Vec::new()).unwrap();
+        copy_tree(
+            &crate::svc::attachments::attachments_root_at(&db_path),
+            &snapshot_root,
+            &mut Vec::new(),
+        )
+        .unwrap();
 
         let good = AttachmentSnapshot::read(&conn, &snapshot_root, &state(vec![task.clone()]));
-        assert!(good.is_ok(), "完整备份附件应通过自检：{:?}", good.err().map(|e| e.to_string()));
+        assert!(
+            good.is_ok(),
+            "完整备份附件应通过自检：{:?}",
+            good.err().map(|e| e.to_string())
+        );
 
         // 缺文件
         std::fs::remove_file(snapshot_root.join(&info.relative_path)).unwrap();
@@ -502,7 +592,12 @@ mod tests {
         assert!(missing.unwrap_err().to_string().contains("缺失"));
 
         // 目录指向已不在快照中的任务
-        copy_tree(&crate::svc::attachments::attachments_root_at(&db_path), &snapshot_root, &mut Vec::new()).unwrap();
+        copy_tree(
+            &crate::svc::attachments::attachments_root_at(&db_path),
+            &snapshot_root,
+            &mut Vec::new(),
+        )
+        .unwrap();
         let orphan = AttachmentSnapshot::read(&conn, &snapshot_root, &state(vec![]));
         assert!(orphan.is_err());
         assert!(orphan.unwrap_err().to_string().contains("不一致"));
@@ -524,7 +619,11 @@ mod tests {
         let error = copy_tree(&dir.join("from"), &dir.join("to"), &mut Vec::new());
         assert!(error.is_err());
         assert!(error.unwrap_err().to_string().contains("同名但内容不同"));
-        assert_eq!(std::fs::read(to.join("t1-0001.png")).unwrap(), b"old", "冲突时不得覆盖当前文件");
+        assert_eq!(
+            std::fs::read(to.join("t1-0001.png")).unwrap(),
+            b"old",
+            "冲突时不得覆盖当前文件"
+        );
 
         // 内容相同 → 幂等通过，不重复计数以外的副作用
         std::fs::write(from.join("t1-0001.png"), b"old").unwrap();

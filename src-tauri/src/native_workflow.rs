@@ -110,7 +110,8 @@ pub fn desktop_update_tasks(app: tauri::AppHandle, tasks: Vec<TrayTask>) -> Resu
         .separator();
     for task in tasks.into_iter().take(12) {
         let title: String = task.title.chars().take(36).collect();
-        let mut submenu = SubmenuBuilder::new(&app, title).text(format!("open:{}", task.id), "打开详情");
+        let mut submenu =
+            SubmenuBuilder::new(&app, title).text(format!("open:{}", task.id), "打开详情");
         if task.status == "todo" {
             submenu = submenu.text(format!("start:{}", task.id), "开始任务");
         }
@@ -156,14 +157,19 @@ pub fn install(app: &tauri::App) {
         if let Some(icon) = app.default_window_icon() {
             tray = tray.icon(icon.clone());
         }
-        tray.build(app).map(|_| ()).map_err(|error| error.to_string())
+        tray.build(app)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
     }))
     .unwrap_or_else(|_| Err("菜单栏图标初始化异常".into()));
     if let Err(error) = tray {
         record(&TRAY_ERROR, format!("菜单栏今日清单不可用：{error}"));
     }
     use tauri_plugin_global_shortcut::GlobalShortcutExt;
-    if let Err(error) = app.global_shortcut().register("CommandOrControl+Shift+Space") {
+    if let Err(error) = app
+        .global_shortcut()
+        .register("CommandOrControl+Shift+Space")
+    {
         record(
             &SHORTCUT_ERROR,
             format!("全局快捷键注册失败：{error}。仍可通过菜单栏快速添加。"),

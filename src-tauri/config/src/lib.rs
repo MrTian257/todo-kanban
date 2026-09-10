@@ -32,7 +32,10 @@ pub const MIGRATION_STEPS: [(&str, &str); 9] = [
         "建附件表 attachments + todo_attachments（图片文件化存储）",
     ),
     ("v8→v9", "建 resources 项目资料库表"),
-    ("v9→v10", "任务关系、模板与提醒配置、变更历史和 MCP 修改预览"),
+    (
+        "v9→v10",
+        "任务关系、模板与提醒配置、变更历史和 MCP 修改预览",
+    ),
 ];
 
 /// 更新日志（文本形式，逐版本摘要）
