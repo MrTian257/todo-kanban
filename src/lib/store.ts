@@ -4,13 +4,13 @@
 
 import { moveTask } from "./boardOrder";
 import { create } from "zustand";
-import { AppState, Project, Swimlane, Todo } from "./types";
+import { AppState, LibraryResource, Project, Swimlane, Todo } from "./types";
 import { isTauri, loadState, saveState, pollState } from "./storage";
 import { normalizeProject, normalizeState } from "./normalize";
 import { gitInfoCached } from "./git";
 
 // Persistence tracks only user mutations; reads and status updates never write back.
-let persisted: AppState = { projects: [], todos: [] };
+let persisted: AppState = { projects: [], todos: [], resources: [] };
 let version = 0;
 let savedVersion = 0;
 let applyingRemote = false;
@@ -31,7 +31,7 @@ export async function flushPersistence(): Promise<void> {
     while (savedVersion < version) {
       const writingVersion = version;
       const current = useAppStore.getState();
-      const snapshot = { projects: current.projects, todos: current.todos };
+      const snapshot = { projects: current.projects, todos: current.todos, resources: current.resources };
       useAppStore.setState({ persistence: "saving", persistenceError: "" });
       try {
         const saved = await saveState(snapshot, persisted);
@@ -44,7 +44,11 @@ export async function flushPersistence(): Promise<void> {
           const returnedById = new Map(returned.map(item => [item.id, item]));
           return items.map(item => JSON.stringify(item) === JSON.stringify(sentById.get(item.id)) ? returnedById.get(item.id) ?? item : item);
         };
-        applyWithoutSave({ projects: rebase(latest.projects, snapshot.projects, saved.projects), todos: rebase(latest.todos, snapshot.todos, saved.todos) });
+        applyWithoutSave({
+          projects: rebase(latest.projects, snapshot.projects, saved.projects),
+          todos: rebase(latest.todos, snapshot.todos, saved.todos),
+          resources: rebase(latest.resources, snapshot.resources, saved.resources),
+        });
       } catch (error) {
         const message = String(error);
         useAppStore.setState({ persistence: message.includes("STATE_CONFLICT") ? "conflict" : "error", persistenceError: message });
@@ -67,7 +71,7 @@ export async function retryPersistence() {
 export async function reloadRemoteState() {
   if (activeSave) await activeSave;
   const before = version;
-  const disk = await loadState() ?? { projects: [], todos: [] };
+  const disk = await loadState() ?? { projects: [], todos: [], resources: [] };
   if (version !== before) throw new Error("读取期间仍有本地修改，请重试");
   persisted = disk;
   savedVersion = version;
@@ -159,6 +163,7 @@ function demoState(): AppState {
       {...mk("demo-8", "新增项目归档入口", "收纳已结束的项目。", "done", "swim-done", 8, 0), branch:"feature/archive-entry", sortOrder:0},
       {...mk("demo-9", "统一主题配色", "适配浅色与深色主题。", "done", "swim-done", 9, 0), branch:"chore/theme-color", sortOrder:1},
     ],
+    resources: [],
   };
 }
 
@@ -171,6 +176,9 @@ interface AppStore extends AppState {
   persistenceError: string;
   syncError: string;
   lastSavedAt: number | null;
+  /** 本机界面偏好，不进入 SQLite/MCP 快照。 */
+  activeProjectId: string | null;
+  setActiveProjectId: (id: string | null) => void;
   initAppStore: () => Promise<void>;
   /** 应用外部数据，不触发写回。 */
   replaceState: (state: AppState) => void;
@@ -186,13 +194,29 @@ interface AppStore extends AppState {
   saveSwimlanes: (projectId: string, lanes: Swimlane[]) => void;
   /** 删除泳道：其下待办迁移至同状态剩余第一个泳道 */
   deleteSwimlane: (projectId: string, laneId: string) => void;
+  upsertResource: (resource: LibraryResource) => void;
+  removeResource: (id: string) => void;
 }
 
+const ACTIVE_PROJECT_KEY = "todo-kanban.active-project-id.v1";
+function validActiveProjectId(id: string | null, projects: Project[]) {
+  return id && projects.some(project => project.id === id && !project.archived) ? id : null;
+}
+function readActiveProjectId(projects: Project[]) {
+  try { return validActiveProjectId(window.localStorage.getItem(ACTIVE_PROJECT_KEY), projects); } catch { return null; }
+}
+function writeActiveProjectId(id: string | null) {
+  try {
+    if (id) window.localStorage.setItem(ACTIVE_PROJECT_KEY, id);
+    else window.localStorage.removeItem(ACTIVE_PROJECT_KEY);
+  } catch { /* Optional local preference. */ }
+}
 
 
 export const useAppStore = create<AppStore>((set, get) => ({
   projects: [],
   todos: [],
+  resources: [],
   loaded: false,
   loadError: "",
   editingDirty: false,
@@ -200,6 +224,13 @@ export const useAppStore = create<AppStore>((set, get) => ({
   persistenceError: "",
   syncError: "",
   lastSavedAt: null,
+  activeProjectId: null,
+
+  setActiveProjectId: (id) => {
+    const next = validActiveProjectId(id, get().projects);
+    writeActiveProjectId(next);
+    set({ activeProjectId: next });
+  },
 
   initAppStore: async () => {
     if (get().loaded) return;
@@ -208,9 +239,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
       set({ loadError: "" });
       try {
         const disk = await loadState();
-        persisted = disk ?? { projects: [], todos: [] };
+        persisted = disk ?? { projects: [], todos: [], resources: [] };
         const state = normalizeState(disk ?? (isTauri() ? persisted : demoState()));
-        applyWithoutSave({ ...state, loaded: true, loadError: "", persistence: "saved" });
+        applyWithoutSave({ ...state, activeProjectId: readActiveProjectId(state.projects), loaded: true, loadError: "", persistence: "saved" });
       } catch (error) {
         set({ loaded: false, loadError: String(error) });
       }
@@ -219,20 +250,27 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
 
   replaceState: (state) => {
-    applyWithoutSave(normalizeState(state));
+    const next = normalizeState(state);
+    applyWithoutSave({ ...next, activeProjectId: validActiveProjectId(get().activeProjectId, next.projects) });
   },
 
   upsertProject: (p) => {
     // normalize 兜底：新建项目 swimlanes=null → 默认三泳道，避免看板/待办页空列
     const norm = normalizeProject(p);
     const projects = [...get().projects.filter((x) => x.id !== p.id), norm];
-    set({ projects });
+    const activeProjectId = norm.archived && get().activeProjectId === norm.id ? null : get().activeProjectId;
+    if (activeProjectId !== get().activeProjectId) writeActiveProjectId(null);
+    set({ projects, activeProjectId });
   },
 
   removeProject: (id) => {
+    const activeProjectId = get().activeProjectId === id ? null : get().activeProjectId;
+    if (activeProjectId !== get().activeProjectId) writeActiveProjectId(null);
     set({
       projects: get().projects.filter((p) => p.id !== id),
       todos: get().todos.filter((t) => t.projectId !== id),
+      resources: get().resources.map(resource => resource.projectId === id ? { ...resource, projectId: null, updatedAt: Date.now() } : resource),
+      activeProjectId,
     });
   },
 
@@ -334,11 +372,19 @@ export const useAppStore = create<AppStore>((set, get) => ({
       todos: todos.map((t) => migrated.find((m) => m.id === t.id) ?? t),
     });
   },
+
+  upsertResource: (resource) => {
+    set({ resources: [...get().resources.filter(item => item.id !== resource.id), resource] });
+  },
+
+  removeResource: (id) => {
+    set({ resources: get().resources.filter(resource => resource.id !== id) });
+  },
 }));
 
 // Only domain-array changes are persisted; status updates, initialization and sync are excluded.
 useAppStore.subscribe((state, previous) => {
-  if (applyingRemote || !state.loaded || (state.projects === previous.projects && state.todos === previous.todos)) return;
+  if (applyingRemote || !state.loaded || (state.projects === previous.projects && state.todos === previous.todos && state.resources === previous.resources)) return;
   version++;
   if (state.persistence === "error" || state.persistence === "conflict") return;
   // Mark pending synchronously so window-close guards see writes before the microtask runs.
@@ -366,7 +412,9 @@ export function startExternalSync() {
         persisted = disk;
         const normalized = normalizeState(disk);
         const current = useAppStore.getState();
-        if (JSON.stringify(normalized) !== JSON.stringify({ projects: current.projects, todos: current.todos })) applyWithoutSave(normalized);
+        if (JSON.stringify(normalized) !== JSON.stringify({ projects: current.projects, todos: current.todos, resources: current.resources })) {
+          applyWithoutSave({ ...normalized, activeProjectId: validActiveProjectId(current.activeProjectId, normalized.projects) });
+        }
       }
       useAppStore.setState({ syncError: "" });
     } catch (error) { if (!stopped) useAppStore.setState({ syncError: String(error) }); }

@@ -20,7 +20,7 @@ import { STATUS_LABEL, STATUS_ORDER } from "@/lib/types";
 
 export function TodoListPage() {
   const navigate = useNavigate();
-  const { projects, todos } = useAppStore();
+  const { projects, todos, activeProjectId } = useAppStore();
   const [params] = useSearchParams();
   const [saved] = useState(() => {
     try { return JSON.parse(localStorage.getItem("todo-list-filters-v1") ?? "{}"); } catch { return {}; }
@@ -86,7 +86,8 @@ export function TodoListPage() {
             size="sm"
             className="h-8 gap-1"
             onClick={() => {
-              const p = projects.find((x) => !x.archived) ?? projects[0];
+              // 快捷新建优先使用当前项目（计划：快捷新建待办使用当前项目）
+              const p = projects.find((x) => x.id === activeProjectId && !x.archived) ?? projects.find((x) => !x.archived) ?? projects[0];
               if (p) navigate(`/project/${p.id}/todo/new`);
             }}
             disabled={projects.length === 0}

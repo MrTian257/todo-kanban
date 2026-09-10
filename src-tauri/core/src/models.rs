@@ -216,6 +216,24 @@ pub struct DbTodo {
     pub ai_coordinated: bool,
 }
 
+/// 项目资料：可绑定项目，也可在项目删除后保留为未归属资料。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DbLibraryResource {
+    pub id: String,
+    #[serde(default)]
+    pub project_id: Option<String>,
+    pub title: String,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub note: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
 /// 前端 store 顶层状态 ↔ 数据库全量快照
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
@@ -224,6 +242,8 @@ pub struct DbState {
     pub projects: Vec<DbProject>,
     #[serde(default)]
     pub todos: Vec<DbTodo>,
+    #[serde(default)]
+    pub resources: Vec<DbLibraryResource>,
 }
 
 /// 附件导入结果（camelCase，与前端 src/lib/attachments.ts 对齐）

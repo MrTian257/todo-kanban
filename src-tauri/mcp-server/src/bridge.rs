@@ -16,10 +16,11 @@ use todo_kanban_core::svc::{db_cmds, git_cmds};
 
 use crate::config;
 
-pub const RESOURCES: [(&str, &str); 3] = [
+pub const RESOURCES: [(&str, &str); 4] = [
     ("todo-kanban://state", "全部状态（项目 + 待办）JSON"),
     ("todo-kanban://projects", "项目列表 JSON"),
     ("todo-kanban://todos", "待办列表 JSON"),
+    ("todo-kanban://resources", "资料库列表 JSON"),
 ];
 
 /// 真正会改动仓库/数据的工具。git_sync_commits / git_commits_between / git_commit_info
@@ -495,6 +496,7 @@ mod tests {
                 created_by: "human".into(),
                 ..Default::default()
             }],
+            resources: vec![],
             todos: vec![DbTodo {
                 id: "t1".into(),
                 created_by: "human".into(),
@@ -516,6 +518,7 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            resources: vec![],
             todos: vec![
                 // 修改 → ai_coordinated=true，created_by 保持
                 DbTodo {

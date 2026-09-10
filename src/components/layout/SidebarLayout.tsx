@@ -11,7 +11,6 @@ import {
   Search,
   CalendarDays,
   Copy,
-  KanbanSquare,
   ListTodo,
   Minus,
   Moon,
@@ -21,6 +20,7 @@ import {
   Square,
   Sun,
   FolderKanban,
+  BookOpen,
   X,
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -29,11 +29,13 @@ import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { ProjectContextSwitcher } from "@/components/layout/ProjectContextSwitcher";
 
 const NAV_ITEMS = [
   { to: "/focus", label: "今日焦点", icon: CalendarDays },
   { to: "/todos", label: "全部待办", icon: ListTodo },
   { to: "/projects", label: "项目资料", icon: FolderKanban },
+  { to: "/library", label: "资料库", icon: BookOpen },
 ];
 
 /** 侧栏宽度持久化（localStorage，浏览器/Tauri 通用） */
@@ -263,15 +265,8 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
           )}
           style={{ width: collapsed ? 56 : sidebarW }}
         >
-          {/* 品牌 */}
-          <button
-            aria-label="回到首页"
-            className="flex h-12 shrink-0 items-center gap-2.5 pl-3.5 text-primary"
-            onClick={() => navigate("/")}
-          >
-            <span className="rounded-lg bg-primary p-1.5 text-primary-foreground"><KanbanSquare className="h-4 w-4" /></span>
-            {!collapsed && <span className="truncate text-base font-semibold tracking-tight">todo-kanban</span>}
-          </button>
+          {/* 项目上下文区（替换品牌区）：展开显示当前项目名 + 生产分支；收起保留图标入口 */}
+          <ProjectContextSwitcher collapsed={collapsed} />
 
           {isMacOS && !collapsed && <p className="px-5 pb-2 pt-3 text-[11px] font-medium text-muted-foreground">工作空间</p>}
           <nav aria-label="主导航" className="flex-1 space-y-2 overflow-y-auto p-2">

@@ -17,7 +17,7 @@ export async function loadState(): Promise<AppState | null> {
 
 export async function saveState(state: AppState, expected: AppState): Promise<AppState> {
   if (isTauri()) return invoke<AppState>("db_save_state", { payload: state, expected });
-  const current = await loadState() ?? { projects: [], todos: [] };
+  const current = await loadState() ?? { projects: [], todos: [], resources: [] };
   if (JSON.stringify(current) !== JSON.stringify(expected)) throw new Error("STATE_CONFLICT: 预览数据已更新，请重新读取");
   const saved = { ...state, projects: state.projects.map(p => ({ ...p, frontendRepoToken: "", backendRepoToken: "" })) };
   sessionStorage.setItem("todo-kanban-preview-v1", JSON.stringify(saved));

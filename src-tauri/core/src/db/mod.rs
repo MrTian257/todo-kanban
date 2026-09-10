@@ -172,6 +172,8 @@ fn save_state_inner(
         expected.projects.sort_by(|a, b| a.id.cmp(&b.id));
         actual.todos.sort_by(|a, b| a.id.cmp(&b.id));
         expected.todos.sort_by(|a, b| a.id.cmp(&b.id));
+        actual.resources.sort_by(|a, b| a.id.cmp(&b.id));
+        expected.resources.sort_by(|a, b| a.id.cmp(&b.id));
         if actual != expected {
             return Err(AppError::invalid(
                 "STATE_CONFLICT: 数据已被其他窗口或 MCP 修改，请重新读取后处理冲突",
@@ -267,6 +269,9 @@ fn save_state_inner(
         todo.commits.retain(|c| claimed.insert(c.hash.clone()));
         row::upsert_todo(&tx, &todo)?;
     }
+    for resource in &state.resources {
+        row::upsert_resource(&tx, resource)?;
+    }
 
     // note 引用补链：为备注中出现的附件引用补建任务关系（不删除既有关系）
     attachments::link_note_refs(&tx, &state.todos)?;
@@ -275,6 +280,8 @@ fn save_state_inner(
     let exist_ids: HashSet<&str> = existing.projects.iter().map(|p| p.id.as_str()).collect();
     let in_ids: HashSet<&str> = state.projects.iter().map(|p| p.id.as_str()).collect();
     for id in exist_ids.difference(&in_ids) {
+        // 项目删除时资料保留，成为未归属资料。
+        tx.execute("UPDATE resources SET project_id = NULL WHERE project_id = ?1", [id])?;
         tx.execute("DELETE FROM projects WHERE id = ?1", [id])?;
     }
     let exist_ids: HashSet<&str> = existing.todos.iter().map(|t| t.id.as_str()).collect();
@@ -285,6 +292,11 @@ fn save_state_inner(
         .collect();
     for id in &deleted_todo_ids {
         tx.execute("DELETE FROM todos WHERE id = ?1", [id])?;
+    }
+    let exist_ids: HashSet<&str> = existing.resources.iter().map(|resource| resource.id.as_str()).collect();
+    let in_ids: HashSet<&str> = state.resources.iter().map(|resource| resource.id.as_str()).collect();
+    for id in exist_ids.difference(&in_ids) {
+        tx.execute("DELETE FROM resources WHERE id = ?1", [id])?;
     }
 
     // 附件联动（事务内）：删除被删任务的关系 + 无关系残留的附件行；文件由调用方提交后移入 trash
@@ -368,6 +380,7 @@ pub fn repair_duplicate_tags(conn: &Connection) -> AppResult<()> {
 mod tests {
     use super::*;
     use crate::models::DbCommitInfo;
+    use crate::models::DbLibraryResource;
     use crate::models::DbProject;
 
     fn test_conn() -> Connection {
@@ -406,6 +419,7 @@ mod tests {
         let conn = test_conn();
         let state = DbState {
             projects: vec![project("p1")],
+            resources: vec![],
             todos: vec![todo("t1", 1, "todo-1")],
         };
         save_state(&conn, &state).unwrap();
@@ -424,6 +438,7 @@ mod tests {
             &conn,
             &DbState {
                 projects: vec![project("p1")],
+                resources: vec![],
                 todos: vec![todo("t1", 7, "todo-7")],
             },
         )
@@ -431,6 +446,7 @@ mod tests {
         // 新批两个冲突 seq=7（t1 保留在快照中）
         let state = DbState {
             projects: vec![project("p1")],
+            resources: vec![],
             todos: vec![
                 todo("t1", 7, "todo-7"),
                 todo("t2", 7, "todo-7"),
@@ -466,6 +482,7 @@ mod tests {
             &conn,
             &DbState {
                 projects: vec![project("p1")],
+                resources: vec![],
                 todos: vec![t1.clone()],
             },
         )
@@ -476,6 +493,7 @@ mod tests {
             &conn,
             &DbState {
                 projects: vec![project("p1")],
+                resources: vec![],
                 todos: vec![t1.clone(), t2],
             },
         )
@@ -496,6 +514,7 @@ mod tests {
             &conn,
             &DbState {
                 projects: vec![project("p1")],
+                resources: vec![],
                 todos: vec![t],
             },
         )
@@ -515,6 +534,7 @@ mod tests {
             &conn,
             &DbState {
                 projects: vec![project("p1")],
+                resources: vec![],
                 todos: vec![todo("t1", 7, "feature-login")],
             },
         )
@@ -527,6 +547,7 @@ mod tests {
             &conn,
             &DbState {
                 projects: vec![project("p1")],
+                resources: vec![],
                 todos: vec![todo("t1", 7, "feature-login"), t2],
             },
         );
@@ -542,6 +563,7 @@ mod tests {
             &conn,
             &DbState {
                 projects: vec![project("p1")],
+                resources: vec![],
                 todos: vec![todo("t1", 5, "todo-5")],
             },
         )
@@ -553,6 +575,7 @@ mod tests {
             &conn,
             &DbState {
                 projects: vec![project("p1")],
+                resources: vec![],
                 todos: vec![t1],
             },
         )
@@ -570,6 +593,7 @@ mod tests {
             &conn,
             &DbState {
                 projects: vec![project("p1")],
+                resources: vec![],
                 todos: vec![t],
             },
         )
@@ -585,6 +609,7 @@ mod tests {
             &conn,
             &DbState {
                 projects: vec![project("p1")],
+                resources: vec![],
                 todos: vec![todo("t1", 1, "todo-1"), todo("t2", 2, "todo-2")],
             },
         )
@@ -593,6 +618,7 @@ mod tests {
             &conn,
             &DbState {
                 projects: vec![project("p1")],
+                resources: vec![],
                 todos: vec![todo("t1", 1, "todo-1")],
             },
         )
@@ -610,11 +636,168 @@ mod tests {
             &conn,
             &DbState {
                 projects: vec![project("p1")],
+                resources: vec![],
                 todos: vec![todo("t1", 1, "todo-1")],
             },
         )
         .unwrap();
         let f1 = storage_fingerprint(&conn).unwrap();
         assert_ne!(f0, f1);
+    }
+
+    fn resource(id: &str, project_id: Option<&str>, title: &str) -> DbLibraryResource {
+        DbLibraryResource {
+            id: id.into(),
+            project_id: project_id.map(|s| s.into()),
+            title: title.into(),
+            url: format!("https://example.com/{id}"),
+            note: format!("笔记 {id}"),
+            tags: vec!["设计".into(), "参考".into()],
+            created_at: 1,
+            updated_at: 1,
+        }
+    }
+
+    #[test]
+    fn resource_roundtrip() {
+        let conn = test_conn();
+        let r = resource("r1", Some("p1"), "接口文档");
+        save_state(
+            &conn,
+            &DbState {
+                projects: vec![project("p1")],
+                resources: vec![r.clone()],
+                todos: vec![],
+            },
+        )
+        .unwrap();
+        let loaded = load_state(&conn).unwrap();
+        assert_eq!(loaded.resources.len(), 1);
+        let got = &loaded.resources[0];
+        assert_eq!(got.id, "r1");
+        assert_eq!(got.project_id.as_deref(), Some("p1"));
+        assert_eq!(got.title, "接口文档");
+        assert_eq!(got.url, "https://example.com/r1");
+        assert_eq!(got.note, "笔记 r1");
+        assert_eq!(got.tags, vec!["设计", "参考"]);
+        assert_eq!(got.created_at, 1);
+        assert_eq!(got.updated_at, 1);
+    }
+
+    #[test]
+    fn resource_conflict_detected() {
+        let conn = test_conn();
+        save_state(
+            &conn,
+            &DbState {
+                projects: vec![project("p1")],
+                resources: vec![resource("r1", Some("p1"), "旧标题")],
+                todos: vec![],
+            },
+        )
+        .unwrap();
+        // 快照冲突：expected 与库中不一致（标题被其他窗口改过）
+        let mut stale = resource("r1", Some("p1"), "旧标题");
+        stale.updated_at = 2;
+        let err = save_state_checked(
+            &conn,
+            &DbState {
+                projects: vec![project("p1")],
+                resources: vec![stale],
+                todos: vec![],
+            },
+            &DbState {
+                projects: vec![project("p1")],
+                resources: vec![resource("r1", Some("p1"), "旧标题")],
+                todos: vec![],
+            },
+        );
+        assert!(err.is_err());
+        let msg = err.unwrap_err().to_string();
+        assert!(msg.contains("STATE_CONFLICT"), "冲突应被检测：{msg}");
+    }
+
+    #[test]
+    fn resource_updated_at_wins() {
+        let conn = test_conn();
+        save_state(
+            &conn,
+            &DbState {
+                projects: vec![project("p1")],
+                resources: vec![resource("r1", Some("p1"), "旧标题")],
+                todos: vec![],
+            },
+        )
+        .unwrap();
+        // 较新 updated_at 覆盖旧值
+        let mut newer = resource("r1", Some("p1"), "新标题");
+        newer.updated_at = 2;
+        save_state(
+            &conn,
+            &DbState {
+                projects: vec![project("p1")],
+                resources: vec![newer],
+                todos: vec![],
+            },
+        )
+        .unwrap();
+        let loaded = load_state(&conn).unwrap();
+        assert_eq!(loaded.resources[0].title, "新标题");
+        assert_eq!(loaded.resources[0].updated_at, 2);
+    }
+
+    #[test]
+    fn project_delete_unassigns_resources() {
+        let conn = test_conn();
+        save_state(
+            &conn,
+            &DbState {
+                projects: vec![project("p1")],
+                resources: vec![resource("r1", Some("p1"), "接口文档")],
+                todos: vec![],
+            },
+        )
+        .unwrap();
+        // 删除项目 p1（快照中不再包含）→ 资料保留但 project_id 置空
+        save_state(
+            &conn,
+            &DbState {
+                projects: vec![],
+                resources: vec![resource("r1", Some("p1"), "接口文档")],
+                todos: vec![],
+            },
+        )
+        .unwrap();
+        let loaded = load_state(&conn).unwrap();
+        assert!(loaded.projects.is_empty());
+        assert_eq!(loaded.resources.len(), 1, "资料应保留为未归属");
+        assert_eq!(loaded.resources[0].project_id, None, "project_id 应被置空");
+    }
+
+    #[test]
+    fn resource_delete_diff() {
+        let conn = test_conn();
+        save_state(
+            &conn,
+            &DbState {
+                projects: vec![project("p1")],
+                resources: vec![resource("r1", Some("p1"), "一"), resource("r2", Some("p1"), "二")],
+                todos: vec![],
+            },
+        )
+        .unwrap();
+        // 快照中移除 r2 → 差集删除
+        save_state(
+            &conn,
+            &DbState {
+                projects: vec![project("p1")],
+                resources: vec![resource("r1", Some("p1"), "一")],
+                todos: vec![],
+            },
+        )
+        .unwrap();
+        let loaded = load_state(&conn).unwrap();
+        assert_eq!(loaded.resources.len(), 1);
+        assert_eq!(loaded.resources[0].id, "r1");
     }
 }

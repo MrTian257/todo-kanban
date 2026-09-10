@@ -4,6 +4,7 @@ import {
   AppState,
   DEFAULT_SWIMLANES,
   Project,
+  LibraryResource,
   Todo,
   TodoStatus,
 } from "./types";
@@ -82,15 +83,41 @@ export function normalizeProject(raw: Partial<Project>): Project {
   };
 }
 
+/** 标签保持输入顺序，去除空白与重复项，避免筛选项出现同义重复。 */
+export function normalizeResourceTags(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  return raw.filter((tag): tag is string => typeof tag === "string").map(tag => tag.trim()).filter(tag => {
+    const key = tag.toLocaleLowerCase();
+    if (!tag || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+export function normalizeResource(raw: Partial<LibraryResource>): LibraryResource {
+  return {
+    id: raw.id ?? "",
+    projectId: typeof raw.projectId === "string" && raw.projectId.trim() ? raw.projectId : null,
+    title: raw.title ?? "",
+    url: raw.url ?? "",
+    note: raw.note ?? "",
+    tags: normalizeResourceTags(raw.tags),
+    createdAt: raw.createdAt ?? Date.now(),
+    updatedAt: raw.updatedAt ?? Date.now(),
+  };
+}
+
 /** 全量归一化（含提交全局去重兜底） */
 export function normalizeState(state: AppState | null | undefined): AppState {
-  if (!state) return { projects: [], todos: [] };
+  if (!state) return { projects: [], todos: [], resources: [] };
   const projects = state.projects.map(normalizeProject);
   const projectById = new Map(projects.map((p) => [p.id, p]));
   const todos = state.todos.map((t) => normalizeTodo(t, projectById.get(t.projectId)));
   return {
     projects,
     todos: dedupeTodosCommits(todos),
+    resources: (state.resources ?? []).map(normalizeResource),
   };
 }
 

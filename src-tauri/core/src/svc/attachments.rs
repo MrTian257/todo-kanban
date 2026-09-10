@@ -585,6 +585,7 @@ mod tests {
                     updated_at: 1,
                     ..Default::default()
                 }],
+                resources: vec![],
                 todos,
             },
         )
@@ -625,9 +626,7 @@ mod tests {
             assert_eq!(count(&conn, "SELECT COUNT(*) FROM todo_attachments"), 2);
             let (orig, seq): (String, i64) = conn
                 .query_row(
-                    "SELECT a.original_name, t.seq FROM todo_attachments t
-                     JOIN attachments a ON a.id = t.attachment_id
-                     WHERE t.attachment_id = ?1",
+                    "SELECT a.original_name, ta.seq FROM attachments a JOIN todo_attachments ta ON ta.attachment_id = a.id WHERE ta.attachment_id = ?1",
                     [&first.id],
                     |r| Ok((r.get(0)?, r.get(1)?)),
                 )

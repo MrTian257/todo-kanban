@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { GitBranch, Pencil, Plus, Search, Settings2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -12,8 +12,11 @@ import { useAppStore } from "@/lib/store";
 export function BoardPage() {
   const { projectId = "" } = useParams(), navigate = useNavigate();
   const projects = useAppStore(s => s.projects), todos = useAppStore(s => s.todos);
+  const setActiveProjectId = useAppStore(s => s.setActiveProjectId);
   const [manage, setManage] = useState(false), [edit, setEdit] = useState(false), [query, setQuery] = useState(""), [branch, setBranch] = useState("");
   const project = projects.find(p => p.id === projectId);
+  // 进入看板即同步当前项目（计划：看板使用当前项目）
+  useEffect(() => { if (project) setActiveProjectId(project.id); }, [project?.id, setActiveProjectId]);
   const branches = useMemo(() => [...new Set(todos.filter(t => t.projectId === projectId && !t.archived).map(t => t.branch).filter(Boolean))].sort(), [todos, projectId]);
   if (!project) return <div className="tk-page">项目不存在。<Link to="/projects" className="text-primary">返回项目资料</Link></div>;
   return <div className="tk-page flex h-full min-h-0 flex-col">
