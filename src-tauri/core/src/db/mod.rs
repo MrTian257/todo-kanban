@@ -135,10 +135,27 @@ pub fn load_state(conn: &Connection) -> AppResult<DbState> {
     row::load_state_from_conn(conn)
 }
 
+/// 快照集合顺序不影响并发校验。
+pub fn same_state(actual: &DbState, expected: &DbState) -> bool {
+        let mut actual_projects: Vec<_> = actual.projects.iter().collect();
+        let mut expected_projects: Vec<_> = expected.projects.iter().collect();
+        let mut actual_todos: Vec<_> = actual.todos.iter().collect();
+        let mut expected_todos: Vec<_> = expected.todos.iter().collect();
+        let mut actual_resources: Vec<_> = actual.resources.iter().collect();
+        let mut expected_resources: Vec<_> = expected.resources.iter().collect();
+        actual_projects.sort_by(|a, b| a.id.cmp(&b.id));
+        expected_projects.sort_by(|a, b| a.id.cmp(&b.id));
+        actual_todos.sort_by(|a, b| a.id.cmp(&b.id));
+        expected_todos.sort_by(|a, b| a.id.cmp(&b.id));
+        actual_resources.sort_by(|a, b| a.id.cmp(&b.id));
+        expected_resources.sort_by(|a, b| a.id.cmp(&b.id));
+    actual_projects == expected_projects && actual_todos == expected_todos && actual_resources == expected_resources
+}
+
 /// 差异写落库（单事务）：UPSERT 变更行（updated_at 较新者胜）+ 差集删除 + seq/tag 收敛 + 提交全局去重 + 泳道校验
 /// 返回待移入 trash 的附件路径清单（调用方负责移动文件；种子场景直接忽略）
 pub fn save_state(conn: &Connection, state: &DbState) -> AppResult<Vec<String>> {
-    save_state_inner(conn, state, None).map(|(_, trash)| trash)
+    save_state_inner(conn, state, None, None, None, None, None).map(|(_, trash)| trash)
 }
 
 /// Compare the caller's read snapshot under a cross-process SQLite write lock.
@@ -148,46 +165,49 @@ pub fn save_state_checked(
     state: &DbState,
     expected: &DbState,
 ) -> AppResult<(DbState, Vec<String>)> {
-    save_state_inner(conn, state, Some(expected))
+    save_state_inner(conn, state, Some(expected), None, None, None, None)
+}
+
+pub fn save_state_extended(
+    conn: &Connection,
+    state: &DbState,
+    expected: &DbState,
+    workflow: Option<&crate::svc::workflow::Workflow>,
+    workflow_revision: Option<i64>,
+    proposal: Option<&str>,
+    attachments: Option<&crate::svc::backups::AttachmentSnapshot>,
+) -> AppResult<(DbState, Vec<String>)> {
+    save_state_inner(conn, state, Some(expected), workflow, workflow_revision, proposal, attachments)
 }
 
 fn save_state_inner(
     conn: &Connection,
     state: &DbState,
     expected: Option<&DbState>,
+    workflow: Option<&crate::svc::workflow::Workflow>,
+    workflow_revision: Option<i64>,
+    proposal: Option<&str>,
+    attachments: Option<&crate::svc::backups::AttachmentSnapshot>,
 ) -> AppResult<(DbState, Vec<String>)> {
     // 分支规则校验（保存前兜底，与前端 zod 同规则）
     for p in &state.projects {
         branch_rule::validate(&p.branch_rule)?;
     }
 
+    // 系统凭据调用不占用 SQLite 写事务；下方仍在事务内重新校验 expected。
+    let mut prepared = crate::svc::credentials::PreparedState::new(state)?;
     let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)?;
 
     // 库中既有（用于 seq 冲突、提交去重、差集删除）
     let existing = row::load_state_from_conn(&tx)?;
     if let Some(expected) = expected {
-        let mut actual = existing.clone();
-        let mut expected = expected.clone();
-        actual.projects.sort_by(|a, b| a.id.cmp(&b.id));
-        expected.projects.sort_by(|a, b| a.id.cmp(&b.id));
-        actual.todos.sort_by(|a, b| a.id.cmp(&b.id));
-        expected.todos.sort_by(|a, b| a.id.cmp(&b.id));
-        actual.resources.sort_by(|a, b| a.id.cmp(&b.id));
-        expected.resources.sort_by(|a, b| a.id.cmp(&b.id));
-        if actual != expected {
-            return Err(AppError::invalid(
-                "STATE_CONFLICT: 数据已被其他窗口或 MCP 修改，请重新读取后处理冲突",
-            ));
+        if !same_state(&existing, expected) {
+            return Err(AppError::invalid("STATE_CONFLICT: 数据已被其他窗口或 MCP 修改，请重新读取后处理冲突"));
         }
     }
-    // 冲突检查成功后才迁移凭据。新引用不可变，事务失败也不会覆盖原有凭据。
-    let mut protected = state.clone();
-    for project in &mut protected.projects {
-        project.frontend_repo_token =
-            crate::svc::credentials::protect(&project.frontend_repo_token)?;
-        project.backend_repo_token = crate::svc::credentials::protect(&project.backend_repo_token)?;
-    }
-    let state = &protected;
+    if let Some(attachments) = attachments { attachments.install(&tx)?; }
+
+    let state = &prepared.state;
     ensure_next_seq(&tx)?;
 
     // 项目泳道索引
@@ -219,8 +239,10 @@ fn save_state_inner(
 
     // seq/tag 收敛 + 写入
     let mut used_seqs: HashSet<i64> = existing.todos.iter().map(|t| t.seq).collect();
+    let existing_projects: HashMap<_, _> = existing.projects.iter().map(|p| (p.id.as_str(), p)).collect();
+    let existing_resources: HashMap<_, _> = existing.resources.iter().map(|r| (r.id.as_str(), r)).collect();
     for p in &state.projects {
-        row::upsert_project(&tx, p)?;
+        if existing_projects.get(p.id.as_str()).copied() != Some(p) { row::upsert_project(&tx, p)?; }
     }
     for t in &state.todos {
         let mut todo = t.clone();
@@ -267,10 +289,14 @@ fn save_state_inner(
         }
         // 提交去重（本批先到先得）
         todo.commits.retain(|c| claimed.insert(c.hash.clone()));
-        row::upsert_todo(&tx, &todo)?;
+        if existing_by_id.get(todo.id.as_str()).copied() != Some(&todo) {
+            row::upsert_todo(&tx, &todo)?;
+        }
     }
     for resource in &state.resources {
-        row::upsert_resource(&tx, resource)?;
+        if existing_resources.get(resource.id.as_str()).copied() != Some(resource) {
+            row::upsert_resource(&tx, resource)?;
+        }
     }
 
     // note 引用补链：为备注中出现的附件引用补建任务关系（不删除既有关系）
@@ -307,7 +333,28 @@ fn save_state_inner(
     };
 
     let saved = row::load_state_from_conn(&tx)?;
+    crate::svc::workflow::prune(&tx, &saved)?;
+    if let Some(workflow) = workflow {
+        // 并发保护：调用方确认时的配置版本必须仍是当前版本，否则拒绝（不覆盖期间的工作流修改）。
+        let current = crate::svc::workflow::read(&tx)?;
+        if workflow_revision.is_some_and(|expected| expected != current.revision) {
+            return Err(AppError::invalid("STATE_CONFLICT: 工作流配置已变化，请刷新后重新确认"));
+        }
+        let mut restored = workflow.clone();
+        restored.revision = current.revision + 1;
+        crate::svc::workflow::validate(&restored, &saved)?;
+        crate::svc::workflow::write(&tx, &restored)?;
+    }
+    if let Some(id) = proposal {
+        if tx.execute("UPDATE change_proposals SET status='applied' WHERE id=?1 AND status='pending'", [id])? != 1 {
+            return Err(AppError::invalid("提案已处理，请刷新列表"));
+        }
+    }
+    crate::svc::history::record(&tx, &existing, &saved)?;
+    // 保留策略：只裁剪最旧的已处理数据，待批准提案与最近历史保留。
+    crate::svc::workflow::trim(&tx)?;
     tx.commit()?;
+    prepared.commit();
     Ok((saved, trash_paths))
 }
 
@@ -799,5 +846,94 @@ mod tests {
         let loaded = load_state(&conn).unwrap();
         assert_eq!(loaded.resources.len(), 1);
         assert_eq!(loaded.resources[0].id, "r1");
+    }
+
+    /// same_state：集合顺序不同不算冲突（MCP 与 UI 的行序可能不一致）
+    #[test]
+    fn same_state_ignores_collection_order() {
+        let base = DbState {
+            projects: vec![project("p1"), project("p2")],
+            resources: vec![resource("r1", None, "一"), resource("r2", None, "二")],
+            todos: vec![todo("t1", 1, "todo-1"), todo("t2", 2, "todo-2")],
+        };
+        let reordered = DbState {
+            projects: vec![project("p2"), project("p1")],
+            resources: vec![resource("r2", None, "二"), resource("r1", None, "一")],
+            todos: vec![todo("t2", 2, "todo-2"), todo("t1", 1, "todo-1")],
+        };
+        assert!(same_state(&base, &reordered));
+        let mut changed = reordered.clone();
+        changed.todos[0].title = "改过的标题".into();
+        assert!(!same_state(&base, &changed));
+    }
+
+    /// 备份恢复的工作流 revision 保护：确认后被并发修改则拒绝，未变化才写入
+    #[test]
+    fn restore_snapshot_guards_workflow_revision() {
+        let conn = test_conn();
+        let before = DbState {
+            projects: vec![project("p1")],
+            resources: vec![],
+            todos: vec![todo("t1", 1, "todo-1")],
+        };
+        save_state(&conn, &before).unwrap();
+        // 并发修改：确认后配置版本已推进到 5
+        let workflow = crate::svc::workflow::Workflow {
+            revision: 5,
+            backup_enabled: true,
+            backup_hours: 6,
+            ..Default::default()
+        };
+        crate::svc::workflow::write(&conn, &workflow).unwrap();
+        let mut after = before.clone();
+        after.todos[0].title = "恢复后的标题".into();
+        after.todos[0].updated_at = 2;
+
+        let stale = save_state_extended(&conn, &after, &before, Some(&workflow), Some(1), None, None);
+        assert!(stale.is_err());
+        let message = stale.unwrap_err().to_string();
+        assert!(message.contains("STATE_CONFLICT"), "过期配置版本应被拒绝：{message}");
+        assert_eq!(load_state(&conn).unwrap().todos[0].title, before.todos[0].title, "被拒绝时业务数据不变");
+
+        let saved = save_state_extended(&conn, &after, &before, Some(&workflow), Some(5), None, None).unwrap();
+        assert_eq!(saved.0.todos[0].title, "恢复后的标题");
+        let restored = crate::svc::workflow::read(&conn).unwrap();
+        assert!(restored.backup_enabled);
+        assert_eq!(restored.backup_hours, 6);
+        assert_eq!(restored.revision, 6, "恢复后配置版本应在当前版本上推进");
+    }
+
+    /// 变更历史保留策略：只裁剪最旧记录，不触碰待批准提案
+    #[test]
+    fn history_trim_keeps_recent_and_pending_proposals() {
+        let conn = test_conn();
+        for index in 0..25_005 {
+            conn.execute(
+                "INSERT INTO change_history(id,entity,entity_id,actor,happened_at,before_json,after_json) VALUES(?1,'todo','t1','human',?2,NULL,NULL)",
+                rusqlite::params![format!("h{index}"), index],
+            )
+            .unwrap();
+        }
+        for index in 0..3 {
+            conn.execute(
+                "INSERT INTO change_proposals(id,created_at,expected_json,payload_json,status) VALUES(?1,?2,'{}','{}',?3)",
+                rusqlite::params![format!("p{index}"), index, if index == 0 { "pending" } else { "rejected" }],
+            )
+            .unwrap();
+        }
+        crate::svc::workflow::trim(&conn).unwrap();
+        let remaining: i64 = conn.query_row("SELECT COUNT(*) FROM change_history", [], |r| r.get(0)).unwrap();
+        assert_eq!(remaining, 20_000);
+        // 保留的是最新记录
+        let newest: i64 = conn.query_row("SELECT MAX(happened_at) FROM change_history", [], |r| r.get(0)).unwrap();
+        assert_eq!(newest, 25_004);
+        let pending: i64 = conn
+            .query_row("SELECT COUNT(*) FROM change_proposals WHERE status='pending'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(pending, 1, "待批准提案不得被清理");
+        let rejected: i64 = conn
+            .query_row("SELECT COUNT(*) FROM change_proposals WHERE status='rejected'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rejected, 1);
     }
 }

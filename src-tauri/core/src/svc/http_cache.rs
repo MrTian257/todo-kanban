@@ -13,21 +13,38 @@ struct Page {
     fetched: Instant,
 }
 type Slot = Arc<Mutex<Option<Page>>>;
-type PageCache = HashMap<(String, String), Slot>;
+struct CacheEntry { slot: Slot, accessed: Instant }
+type PageCache = HashMap<(String, String), CacheEntry>;
+const MAX_PAGE_BYTES: usize = 512 * 1024;
+const MAX_CACHE_BYTES: usize = 32 * 1024 * 1024;
+fn reserved_bytes(pages: &PageCache) -> usize {
+    // 为每页预留最大容量，防止条件请求返回更大正文时突破缓存预算。
+    pages.len() * MAX_PAGE_BYTES
+}
 static PAGES: LazyLock<Mutex<PageCache>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 pub fn get(url: &str, credential: &str) -> AppResult<String> {
     let started = Instant::now();
     let slot = {
         let mut pages = PAGES.lock().map_err(|_| AppError::git("HTTP 缓存不可用"))?;
-        // 只淘汰未被请求持有的项，避免破坏正在执行的单飞请求。
-        if pages.len() >= 128 {
-            pages.retain(|_, value| Arc::strong_count(value) > 1);
+        let key = (url.to_string(), credential.to_string());
+        if let Some(entry) = pages.get_mut(&key) {
+            entry.accessed = started;
+            entry.slot.clone()
+        } else {
+            // 每次只淘汰最久未使用且没有请求持有的项，保留热点和单飞语义。
+            while pages.len() >= 128 || reserved_bytes(&pages) + MAX_PAGE_BYTES > MAX_CACHE_BYTES {
+                let oldest = pages.iter().filter(|(_, entry)| Arc::strong_count(&entry.slot) == 1)
+                    .min_by_key(|(_, entry)| entry.accessed).map(|(key, _)| key.clone());
+                let Some(oldest) = oldest else { break; };
+                pages.remove(&oldest);
+            }
+            let slot = Arc::new(Mutex::new(None));
+            if pages.len() < 128 && reserved_bytes(&pages) + MAX_PAGE_BYTES <= MAX_CACHE_BYTES {
+                pages.insert(key, CacheEntry { slot: slot.clone(), accessed: started });
+            }
+            slot
         }
-        pages
-            .entry((url.to_string(), credential.to_string()))
-            .or_insert_with(|| Arc::new(Mutex::new(None)))
-            .clone()
     };
     let mut page = slot
         .lock()
@@ -120,7 +137,7 @@ pub fn get(url: &str, credential: &str) -> AppResult<String> {
     }
     let body = remaining.to_string();
     // 大响应不驻留缓存，避免长期占用内存。
-    if body.len() <= 512 * 1024 {
+    if body.len() <= MAX_PAGE_BYTES {
         *page = Some(Page {
             body: body.clone(),
             etag,

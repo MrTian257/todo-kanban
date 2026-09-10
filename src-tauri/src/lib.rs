@@ -1,9 +1,12 @@
-// 应用入口：注册 20 个 handler（17 业务命令 + 3 生命周期命令：finish_quit / cancel_quit / arm_quit_protection）
+// 应用入口：注册 39 个 handler（commands 30 + native_workflow 5 + desktop 4）
 // + attachment:// 自定义协议（附件供图）+ opener/log/clipboard-manager/dialog/window-state 插件 + 启动自举。
 // 日志：数据目录 kanban.log（追加写，超限轮转只保留一份）。
+// 可选能力（菜单栏/全局快捷键）安装失败只降级为可见错误，不影响启动。
 
 pub mod commands;
 mod desktop;
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
+mod native_workflow;
 #[cfg(target_os = "macos")]
 mod menu;
 
@@ -92,6 +95,11 @@ pub fn run() {
             }
         }
     }));
+    #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
+    let builder = builder.plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().with_handler(|app, _shortcut, event| {
+            if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed { native_workflow::quick_add(app); }
+        }).build());
     builder
         .on_window_event(desktop::on_window_event)
         .plugin(
@@ -128,12 +136,33 @@ pub fn run() {
                 },
                 None => log::error!("数据文件初始化失败：无法定位程序目录"),
             }
+            #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
+            {
+                // 菜单栏/快捷键失败只降级（错误经 desktop_status 展示），不阻止应用启动。
+                native_workflow::install(_app);
+                native_workflow::start(_app.handle().clone());
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            native_workflow::desktop_ready,
+            native_workflow::desktop_quick_done,
+            native_workflow::desktop_enable_notifications,
+            native_workflow::desktop_status,
+            native_workflow::desktop_update_tasks,
             desktop::finish_quit,
             desktop::cancel_quit,
             desktop::arm_quit_protection,
+            commands::workflow_load,
+            commands::workflow_save,
+            commands::history_list,
+            commands::history_restore,
+            commands::backup_list,
+            commands::backup_create,
+            commands::backup_restore,
+            commands::proposal_list,
+            commands::proposal_apply,
+            commands::proposal_reject,
             commands::tool_paths,
             commands::git_info,
             commands::git_info_refresh,

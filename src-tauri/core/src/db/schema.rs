@@ -1,7 +1,8 @@
-//! DDL + 迁移。USER_VERSION = 9。
+//! DDL + 迁移。USER_VERSION = 10。
 //! 注意：SQLite 列序是硬契约——schema ↔ row ↔ mod 的 SELECT/INSERT 三处同步。
+//! 版本号必须与 config::CURRENT_DATA_VERSION 一致：open_existing 用它做跨进程版本门禁。
 
-pub const USER_VERSION: i64 = 9;
+pub const USER_VERSION: i64 = 10;
 
 /// 建表（新库直接完整 v6 形态；旧库缺列由 migrate 补）
 pub fn create_tables(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
@@ -84,7 +85,20 @@ CREATE TABLE IF NOT EXISTS todo_attachments (
   PRIMARY KEY (todo_id, attachment_id)
 );
 CREATE INDEX IF NOT EXISTS idx_todo_attachments_attachment ON todo_attachments(attachment_id);
--- v9：项目资料库。project_id 可为空，项目删除后保留为未归属资料。
+-- v9/v10：项目资料库。project_id 可为空，项目删除后保留为未归属资料；
+-- workflow_state（任务关系/模板/提醒/备份设置）、change_history、change_proposals 随建表就位。
+CREATE TABLE IF NOT EXISTS workflow_state (
+  id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL, data TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS change_history (
+  id TEXT PRIMARY KEY, entity TEXT NOT NULL, entity_id TEXT NOT NULL,
+  actor TEXT NOT NULL, happened_at INTEGER NOT NULL, before_json TEXT, after_json TEXT
+);
+CREATE INDEX IF NOT EXISTS history_entity_time ON change_history(entity, entity_id, happened_at DESC);
+CREATE TABLE IF NOT EXISTS change_proposals (
+  id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, expected_json TEXT NOT NULL,
+  payload_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending'
+);
 CREATE TABLE IF NOT EXISTS resources (
   id TEXT PRIMARY KEY,
   project_id TEXT,

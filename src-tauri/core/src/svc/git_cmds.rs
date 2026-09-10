@@ -213,29 +213,74 @@ pub fn git_sync_commits_batch(
     } else {
         Some("未找到唯一的仓库 API 配置，已读取本地记录".into())
     };
-    Ok(requests
-        .into_iter()
-        .map(|request| {
-            let branch = request.branch.trim();
-            match git_sync_commits_local(repo, &request.tag, (!branch.is_empty()).then_some(branch))
-            {
-                Ok(commits) => CommitResult {
-                    id: request.id,
-                    commits,
-                    source: "local".into(),
-                    warning: warning.clone(),
-                    error: None,
-                },
-                Err(error) => CommitResult {
-                    id: request.id,
-                    commits: Vec::new(),
-                    source: "local".into(),
-                    warning: warning.clone(),
-                    error: Some(error.to_string()),
-                },
+    let found = local_batch_commits(repo, &requests);
+    let mut results = Vec::with_capacity(requests.len());
+    match found {
+        Err(error) => {
+            let error = error.to_string();
+            for request in requests {
+                results.push(CommitResult { id: request.id, commits: Vec::new(), source: "local".into(), warning: warning.clone(), error: Some(error.clone()) });
             }
-        })
-        .collect())
+        }
+        Ok(records) => {
+            // 分支归属只为每个唯一提交查询一次，来源分析按参考分支合并。
+            let mut commits: Vec<_> = records.iter().map(|(commit, _)| commit.clone()).collect();
+            attach_branches(repo, &mut commits);
+            let mut by_branch: HashMap<String, Vec<usize>> = HashMap::new();
+            for (index, request) in requests.iter().enumerate() {
+                by_branch.entry(request.branch.trim().to_string()).or_default().push(index);
+            }
+            let mut assigned: HashMap<usize, Vec<CommitInfo>> = HashMap::new();
+            for (branch, indices) in by_branch {
+                let mut branch_commits = commits.clone();
+                if !branch.is_empty() { annotate_commit_origins(repo, &branch, &mut branch_commits); }
+                for index in indices {
+                    assigned.insert(index, branch_commits.iter().zip(&records)
+                        .filter(|(_, (_, message))| super::gitlab::matches_tag(message, &requests[index].tag))
+                        .map(|(commit, _)| commit.clone()).collect());
+                }
+            }
+            for (index, request) in requests.into_iter().enumerate() {
+                results.push(CommitResult { id: request.id, commits: assigned.remove(&index).unwrap_or_default(), source: "local".into(), warning: warning.clone(), error: None });
+            }
+        }
+    }
+    Ok(results)
+}
+
+fn local_batch_commits(repo: &str, requests: &[CommitRequest]) -> AppResult<Vec<(CommitInfo, String)>> {
+    let mut patterns = Vec::new();
+    let mut seen_tags = HashSet::new();
+    for request in requests {
+        if seen_tags.insert(request.tag.as_str()) {
+            patterns.push(format!("(^|[^0-9A-Za-z_-]){}([^0-9A-Za-z_-]|$)", regex_escape(&request.tag)));
+        }
+    }
+    let mut records = Vec::new();
+    let mut seen_hashes = HashSet::new();
+    let mut offset = 0;
+    while offset < patterns.len() {
+        // 控制参数长度，兼容 Windows 命令行限制；各模式默认为 OR。
+        let mut end = offset;
+        let mut bytes = 0;
+        while end < patterns.len() && (end == offset || bytes + patterns[end].len() < 6000) {
+            bytes += patterns[end].len(); end += 1;
+        }
+        let format = format!("--format={COMMIT_FORMAT}%n%B%x00");
+        let mut args = vec!["log", "--all", "--extended-regexp", format.as_str()];
+        for pattern in &patterns[offset..end] { args.push("--grep"); args.push(pattern); }
+        let output = run_git(repo, &args)?;
+        for record in output.split('\0') {
+            let Some((header, message)) = record.trim_start_matches(['\r', '\n']).split_once('\n') else { continue; };
+            if let Some(commit) = git_cli::parse_commit_lines(header).pop() {
+                if seen_hashes.insert(commit.hash.clone()) { records.push((commit, message.to_string())); }
+            }
+        }
+        offset = end;
+    }
+    // 多个查询分块合并后仍按提交时间倒序返回。
+    records.sort_by(|(a, _), (b, _)| b.date.cmp(&a.date));
+    Ok(records)
 }
 
 /// 转义 POSIX ERE 元字符（`--grep` 用扩展正则匹配，标记由用户/MCP 提供）

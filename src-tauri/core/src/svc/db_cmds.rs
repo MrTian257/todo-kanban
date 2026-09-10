@@ -609,3 +609,15 @@ mod tests {
         }
     }
 }
+
+fn save_extended(payload: DbState, expected: DbState, workflow: Option<&super::workflow::Workflow>, workflow_revision: Option<i64>, proposal: Option<&str>, attachments: Option<&super::backups::AttachmentSnapshot>) -> AppResult<DbState> {
+    let _guard = DB_RW_LOCK.lock().map_err(|_| AppError::invalid("写锁获取失败"))?;
+    let path = db_path()?;
+    let conn = db::open_existing(&path, true)?;
+    let (saved, trash) = db::save_state_extended(&conn, &payload, &expected, workflow, workflow_revision, proposal, attachments)?;
+    if !trash.is_empty() { attachments::move_to_trash_at(&attachments::attachments_root_at(&path), &trash); }
+    if let Ok(mut cache) = FP_CACHE.lock() { *cache = None; }
+    Ok(saved)
+}
+pub fn apply_proposal(id: &str, payload: DbState, expected: DbState) -> AppResult<DbState> { save_extended(payload, expected, None, None, Some(id), None) }
+pub fn restore_snapshot(payload: DbState, expected: DbState, workflow: &super::workflow::Workflow, workflow_revision: i64, attachments: &super::backups::AttachmentSnapshot) -> AppResult<DbState> { save_extended(payload, expected, Some(workflow), Some(workflow_revision), None, Some(attachments)) }

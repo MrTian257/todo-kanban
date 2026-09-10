@@ -76,7 +76,7 @@ fn valid_file_name(name: &str) -> bool {
 }
 
 /// 相对路径形态：<todoId>/<file>
-fn valid_relative(path: &str) -> bool {
+pub(crate) fn valid_relative(path: &str) -> bool {
     match path.split_once('/') {
         Some((todo_id, file)) => valid_todo_id(todo_id) && valid_file_name(file),
         None => false,
@@ -168,10 +168,20 @@ pub fn import(todo_id: &str, bytes: Vec<u8>, original_name: &str) -> AppResult<A
 
 /// 前端 base64 图片解码 + 导入（Tauri 命令薄壳直接调用）
 pub fn import_b64(todo_id: &str, bytes_base64: &str, original_name: &str) -> AppResult<AttachmentInfo> {
+    import_b64_at(&db_cmds::db_path()?, todo_id, bytes_base64, original_name)
+}
+
+/// 指定数据文件的 base64 导入（MCP --db-config 与单测复用同一入口）
+pub fn import_b64_at(
+    db_path: &Path,
+    todo_id: &str,
+    bytes_base64: &str,
+    original_name: &str,
+) -> AppResult<AttachmentInfo> {
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(bytes_base64.trim())
         .map_err(|_| AppError::invalid("图片数据编码无效"))?;
-    import(todo_id, bytes, original_name)
+    import_at(db_path, todo_id, bytes, original_name)
 }
 
 fn import_at(db_path: &Path, todo_id: &str, bytes: Vec<u8>, original_name: &str) -> AppResult<AttachmentInfo> {

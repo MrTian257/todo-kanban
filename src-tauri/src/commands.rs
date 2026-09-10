@@ -1,5 +1,5 @@
-//! 17 个 Tauri 命令薄壳：一行转调 core::svc，错误 map_err 转中文 String（命令内不 panic）。
-//! 契约见 docs/02-development（backend-contract）。
+//! 30 个 Tauri 命令薄壳：一行转调 core::svc，错误 map_err 转中文 String（命令内不 panic）。
+//! 契约见 docs/02-development（backend-contract）与 CLAUDE.md「新增 Tauri 命令」。
 
 use todo_kanban_core::db::VersionReport;
 use todo_kanban_core::models::{
@@ -208,4 +208,46 @@ pub async fn git_sync_commits_batch(
 #[tauri::command]
 pub async fn tool_paths() -> Result<Vec<todo_kanban_core::tool::proc::ToolPath>, String> {
     blocking(move || Ok(git_cmds::tool_paths())).await
+}
+
+#[tauri::command]
+pub async fn workflow_load() -> Result<todo_kanban_core::svc::workflow::Workflow, String> {
+    blocking(move || todo_kanban_core::svc::workflow::load().map_err(err_str)).await
+}
+#[tauri::command]
+pub async fn workflow_save(payload: todo_kanban_core::svc::workflow::Workflow, expected: i64) -> Result<todo_kanban_core::svc::workflow::Workflow, String> {
+    blocking(move || todo_kanban_core::svc::workflow::save(payload, expected).map_err(err_str)).await
+}
+#[tauri::command]
+pub async fn history_list(entity: Option<String>, entity_id: Option<String>, offset: usize) -> Result<Vec<todo_kanban_core::svc::history::HistoryEntry>, String> {
+    blocking(move || todo_kanban_core::svc::history::list(entity, entity_id, offset).map_err(err_str)).await
+}
+#[tauri::command]
+pub async fn history_restore(id: String, expected: todo_kanban_core::models::DbState) -> Result<todo_kanban_core::models::DbState, String> {
+    blocking(move || todo_kanban_core::svc::history::restore(&id, expected).map_err(err_str)).await
+}
+#[tauri::command]
+pub async fn backup_list() -> Result<Vec<todo_kanban_core::svc::backups::BackupInfo>, String> {
+    blocking(move || todo_kanban_core::svc::backups::list().map_err(err_str)).await
+}
+#[tauri::command]
+pub async fn backup_create() -> Result<todo_kanban_core::svc::backups::BackupInfo, String> {
+    blocking(move || todo_kanban_core::svc::backups::create().map_err(err_str)).await
+}
+/// 恢复备份：expected 为当前业务快照，workflow_revision 为确认时的配置版本；任一变化即拒绝。
+#[tauri::command]
+pub async fn backup_restore(id: String, expected: todo_kanban_core::models::DbState, workflow_revision: i64) -> Result<todo_kanban_core::models::DbState, String> {
+    blocking(move || todo_kanban_core::svc::backups::restore(&id, expected, Some(workflow_revision)).map_err(err_str)).await
+}
+#[tauri::command]
+pub async fn proposal_list() -> Result<Vec<todo_kanban_core::svc::proposals::Proposal>, String> {
+    blocking(move || todo_kanban_core::svc::proposals::list().map_err(err_str)).await
+}
+#[tauri::command]
+pub async fn proposal_apply(id: String) -> Result<todo_kanban_core::models::DbState, String> {
+    blocking(move || todo_kanban_core::svc::proposals::apply(&id).map_err(err_str)).await
+}
+#[tauri::command]
+pub async fn proposal_reject(id: String) -> Result<(), String> {
+    blocking(move || todo_kanban_core::svc::proposals::reject(&id).map_err(err_str)).await
 }

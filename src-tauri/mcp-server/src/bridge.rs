@@ -1,4 +1,4 @@
-//! MCP bridge：10 tools + 3 resources ↔ core::svc。
+//! MCP bridge：11 tools + 4 resources ↔ core::svc。
 //! 参数错误返回 JSON-RPC 错误；执行失败返回 MCP isError；只读模式隐藏并拒绝写工具。
 //! 数据源固定为程序运行目录 todo-kanban.db；--db-config 仍支持覆盖到指定目录。
 //! MCP 的 git_info 保持直读语义（不经 app 侧缓存）；git_info_refresh / git_info_remote 为 app 专属不暴露。
@@ -25,11 +25,12 @@ pub const RESOURCES: [(&str, &str); 4] = [
 
 /// 真正会改动仓库/数据的工具。git_sync_commits / git_commits_between / git_commit_info
 /// 只跑 git log/show/branch --contains，属只读查询，不能算写工具。
-const WRITE_TOOLS: [&str; 4] = [
+const WRITE_TOOLS: [&str; 5] = [
     "git_create_branch",
     "git_create_branch_from",
     "git_checkout_branch",
     "db_save_state",
+    "db_preview_state",
 ];
 
 fn is_readonly() -> bool {
@@ -76,7 +77,7 @@ fn save_state(state: DbState, expected: &DbState) -> AppResult<DbState> {
         return Err(AppError::invalid("未配置数据文件，无法保存"));
     };
     let conn = db::open_existing(&path, true)?;
-    let (saved, trash) = db::save_state_checked(&conn, &state, expected)?;
+    let (saved, trash) = todo_kanban_core::svc::history::with_actor("mcp", || db::save_state_checked(&conn, &state, expected))?;
     // 附件联动：被删任务的附件文件移入数据文件旁 attachments/trash/（按实际 db 路径定位根目录）
     if !trash.is_empty() {
         todo_kanban_core::svc::attachments::move_to_trash_at(
@@ -147,6 +148,14 @@ fn call_tool(name: &str, args: &Value) -> AppResult<Value> {
             let state = load_state()?.ok_or_else(|| AppError::invalid("数据文件不存在"))?;
             Ok(serde_json::to_value(state)?)
         }
+        "db_preview_state" => {
+            let mut payload: DbState = serde_json::from_value(args["payload"].clone())?;
+            let expected: DbState = serde_json::from_value(args["expected"].clone())?;
+            apply_ai_markers(&mut payload, &expected);
+            let path = resolve_db_file()?.ok_or_else(|| AppError::invalid("数据库不存在"))?;
+            let id = todo_kanban_core::svc::proposals::create_at(&path, payload, expected)?;
+            Ok(json!({"proposalId":id,"status":"pending","message":"变更尚未应用，请用户在应用的工作流页面确认"}))
+        }
         "db_save_state" => {
             let mut state: DbState =
                 serde_json::from_value(args.get("payload").cloned().unwrap_or(Value::Null))?;
@@ -209,6 +218,15 @@ fn apply_ai_markers(state: &mut DbState, existing: &DbState) {
             project.updated_at = now;
         }
     }
+    let resources: HashMap<_, _> = existing.resources.iter().map(|r| (r.id.as_str(), r)).collect();
+    for resource in &mut state.resources {
+        if let Some(original) = resources.get(resource.id.as_str()) {
+            resource.created_at = original.created_at;
+            resource.updated_at = original.updated_at;
+            if *resource != **original { resource.updated_at = now.max(original.updated_at.saturating_add(1)); }
+        } else { resource.created_at = now; resource.updated_at = now; }
+    }
+
 }
 
 /// 启动校验：数据源可用 + MCP 已启用 + Token 匹配（不通过 → Err 中文提示，main 退出）
@@ -243,6 +261,7 @@ fn read_resource(uri: &str) -> AppResult<Value> {
     let value = match uri {
         "todo-kanban://projects" => serde_json::to_value(db::row::load_projects_from_conn(&tx)?)?,
         "todo-kanban://todos" => serde_json::to_value(db::row::load_todos_from_conn(&tx)?)?,
+        "todo-kanban://resources" => serde_json::to_value(db::load_state(&tx)?.resources)?,
         _ => serde_json::to_value(db::load_state(&tx)?)?,
     };
     tx.commit()?;
@@ -313,16 +332,16 @@ fn validate_arguments(name: &str, args: &Value) -> Result<(), String> {
             return Err(format!("参数 {key} 不能为空"));
         }
     }
-    if name == "db_save_state" {
+    if matches!(name, "db_save_state" | "db_preview_state") {
         for field in ["payload", "expected"] {
             if args[field].as_object().is_some_and(|object| {
                 object
                     .keys()
-                    .any(|key| !["projects", "todos"].contains(&key.as_str()))
+                    .any(|key| !["projects", "todos", "resources"].contains(&key.as_str()))
             }) {
-                return Err(format!("{field} 仅允许 projects 和 todos"));
+                return Err(format!("{field} 仅允许 projects、todos 和 resources"));
             }
-            for collection in ["projects", "todos"] {
+            for collection in ["projects", "todos", "resources"] {
                 let items = args[field][collection]
                     .as_array()
                     .ok_or_else(|| format!("{field}.{collection} 必须是数组"))?;
@@ -341,7 +360,7 @@ fn validate_arguments(name: &str, args: &Value) -> Result<(), String> {
                 .map_err(|_| format!("{field} 的状态字段格式不正确"))?;
             let canonical =
                 serde_json::to_value(&parsed).map_err(|_| "状态解析失败".to_string())?;
-            for collection in ["projects", "todos"] {
+            for collection in ["projects", "todos", "resources"] {
                 if let Some(items) = args[field][collection].as_array() {
                     for (index, item) in items.iter().enumerate() {
                         if let Some(object) = item.as_object() {
@@ -367,12 +386,15 @@ fn validate_arguments(name: &str, args: &Value) -> Result<(), String> {
                 {
                     return Err("payload 中待办引用了不存在的项目".into());
                 }
+                if parsed.resources.iter().any(|resource| resource.project_id.as_ref().is_some_and(|id| !projects.contains(id.as_str()))) {
+                    return Err("payload 中资料引用了不存在的项目".into());
+                }
             }
         }
     }
-    if name == "db_save_state" {
+    if matches!(name, "db_save_state" | "db_preview_state") {
         // 全量快照契约：允许删除整条记录，不允许漏字段后由 serde 默认值悄悄清空。
-        for collection in ["projects", "todos"] {
+        for collection in ["projects", "todos", "resources"] {
             let expected = args["expected"][collection]
                 .as_array()
                 .ok_or_else(|| "expected 格式无效".to_string())?;
@@ -460,7 +482,8 @@ fn all_tool_schemas() -> Value {
         { "name": "git_sync_commits_batch", "description": "按仓库批量查询多个待办标记的提交；API 历史只拉取一次，返回每条结果及 API/本地来源、回退原因", "inputSchema": { "type": "object", "properties": { "repo": { "type": "string" }, "requests": { "type": "array", "minItems": 1, "maxItems": 1000, "items": { "type": "object", "properties": { "id": { "type": "string" }, "tag": { "type": "string" }, "branch": { "type": "string" } }, "required": ["id", "tag"], "additionalProperties": false } } }, "required": ["repo", "requests"] } },
         { "name": "git_commits_between", "description": "API 优先时间窗抓取提交（ISO 8601 起止；branch 可选，省略查询全部分支；本地回退可按 branch 标注来源）", "inputSchema": { "type": "object", "properties": { "repo": { "type": "string" }, "branch": { "type": "string" }, "since": { "type": "string" }, "until": { "type": "string" } }, "required": ["repo", "since", "until"] } },
         { "name": "git_commit_info", "description": "按短 hash 查询单条提交", "inputSchema": { "type": "object", "properties": { "repo": { "type": "string" }, "hash": { "type": "string" } }, "required": ["repo", "hash"] } },
-        { "name": "db_load_state", "description": "全量读取状态 { projects, todos }", "inputSchema": { "type": "object", "properties": { } } },
+        { "name": "db_load_state", "description": "全量读取状态 { projects, todos, resources }", "inputSchema": { "type": "object", "properties": { } } },
+        { "name": "db_preview_state", "description": "生成待确认的批量修改提案，不修改任务。用户在应用中查看差异后批准或拒绝；不能修改 Token。", "inputSchema": { "type": "object", "properties": { "payload": { "type": "object" }, "expected": { "type": "object" } }, "required": ["payload", "expected"] } },
         { "name": "db_save_state", "description": "保存状态；expected 使用 db_load_state 或上次保存结果的 state。返回 {ok,state} 权威快照；冲突需重新读取，禁止直接覆盖", "inputSchema": { "type": "object", "properties": { "payload": { "type": "object" }, "expected": { "type": "object" } }, "required": ["payload", "expected"] } },
     ])
 }

@@ -240,20 +240,17 @@ pub fn load_state_from_conn(conn: &rusqlite::Connection) -> AppResult<DbState> {
 
 /// UPSERT 待办（updated_at 较新者胜）
 pub fn upsert_todo(conn: &rusqlite::Connection, t: &DbTodo) -> AppResult<()> {
-    conn.execute(TODO_UPSERT, rusqlite::params_from_iter(todo_params(t)))?;
+    conn.prepare_cached(TODO_UPSERT)?.execute(rusqlite::params_from_iter(todo_params(t)))?;
     Ok(())
 }
 
 /// UPSERT 项目（updated_at 较新者胜）
 pub fn upsert_project(conn: &rusqlite::Connection, p: &DbProject) -> AppResult<()> {
-    conn.execute(
-        PROJECT_UPSERT,
-        rusqlite::params_from_iter(project_params(p)),
-    )?;
+    conn.prepare_cached(PROJECT_UPSERT)?.execute(rusqlite::params_from_iter(project_params(p)))?;
     Ok(())
 }
 
 pub fn upsert_resource(conn: &rusqlite::Connection, resource: &DbLibraryResource) -> AppResult<()> {
-    conn.execute(RESOURCE_UPSERT, rusqlite::params_from_iter(resource_params(resource)))?;
+    conn.prepare_cached(RESOURCE_UPSERT)?.execute(rusqlite::params_from_iter(resource_params(resource)))?;
     Ok(())
 }
