@@ -185,7 +185,7 @@ build_macos_remote() {
 # ── 入口 ─────────────────────────────────────────────────
 MODE="all"
 case "${1:-}" in
-  "") ;;
+  "") MODE="windows" ;;
   --windows-only|-w) MODE="windows" ;;
   --mac-only|-m)     MODE="mac" ;;
   -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
