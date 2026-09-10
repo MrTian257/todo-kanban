@@ -202,7 +202,7 @@ const RESOURCE_UPSERT: &str = "INSERT INTO resources (id, project_id, title, url
     url=excluded.url, note=excluded.note, tags=excluded.tags, updated_at=excluded.updated_at
   WHERE excluded.updated_at >= resources.updated_at";
 
-pub fn load_state_from_conn(conn: &rusqlite::Connection) -> AppResult<DbState> {
+pub fn load_projects_from_conn(conn: &rusqlite::Connection) -> AppResult<Vec<DbProject>> {
     let mut projects = Vec::new();
     let mut stmt = conn.prepare(PROJECT_SELECT)?;
     let mut rows = stmt.query([])?;
@@ -220,6 +220,22 @@ pub fn load_todos_from_conn(conn: &rusqlite::Connection) -> AppResult<Vec<DbTodo
         todos.push(row_to_todo(row)?);
     }
     Ok(todos)
+}
+
+pub fn load_state_from_conn(conn: &rusqlite::Connection) -> AppResult<DbState> {
+    Ok(DbState {
+        projects: load_projects_from_conn(conn)?,
+        todos: load_todos_from_conn(conn)?,
+        resources: {
+            let mut resources = Vec::new();
+            let mut stmt = conn.prepare(RESOURCE_SELECT)?;
+            let mut rows = stmt.query([])?;
+            while let Some(row) = rows.next()? {
+                resources.push(row_to_resource(row)?);
+            }
+            resources
+        },
+    })
 }
 
 /// UPSERT 待办（updated_at 较新者胜）
