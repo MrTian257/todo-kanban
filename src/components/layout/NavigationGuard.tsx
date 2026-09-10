@@ -1,3 +1,4 @@
+import { toast } from "sonner";
 import { useBlocker } from "react-router-dom";
 import { useAppStore } from "@/lib/store";
 import { Button } from "@/components/ui/button";
@@ -11,11 +12,11 @@ export function NavigationGuard() {
   );
   return <Dialog open={blocker.state === "blocked"} onOpenChange={open => { if (!open && blocker.state === "blocked") blocker.reset(); }}>
     <DialogContent><DialogTitle>还有未保存的编辑</DialogTitle>
-      <DialogDescription>离开不会提交当前编辑。待办会尝试保留草稿，项目表单的未保存修改将被放弃。</DialogDescription>
+      <DialogDescription>离开不会提交当前编辑。待办和项目会尝试保留草稿；新输入的 Token 不会写入草稿，需重新输入。</DialogDescription>
       <div className="flex justify-end gap-2">
         <Button variant="outline" onClick={() => { if (blocker.state === "blocked") blocker.reset(); }}>继续编辑</Button>
         <Button onClick={() => {
-          window.dispatchEvent(new Event("todo-save-draft"));
+          if (!window.dispatchEvent(new Event("todo-save-draft", { cancelable: true }))) { toast.error("草稿保存失败，请先保存编辑内容。"); return; }
           if (blocker.state === "blocked") blocker.proceed();
         }}>确认离开</Button>
       </div>

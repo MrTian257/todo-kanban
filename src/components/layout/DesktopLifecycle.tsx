@@ -24,14 +24,15 @@ export function DesktopLifecycle() {
     return true;
   };
   const finish = async (next: Intent) => {
-    if (busy.current || !canLeave()) return;
+    if (busy.current) return;
+    if (!canLeave()) { if (next === "quit") cancelQuit(); return; }
     busy.current = true;
     try {
       if (next === "quit") await invoke("finish_quit");
       else if (isMacOS) await getCurrentWindow().hide();
       else { setChoice(true); }
       setIntent(null);
-    } catch (error) { toast.error(`窗口操作失败：${String(error)}`); }
+    } catch (error) { if (next === "quit") cancelQuit(); toast.error(`窗口操作失败：${String(error)}`); }
     finally { busy.current = false; }
   };
   // macOS Dock/系统退出会让 NSApplication 等待答复；取消时必须回话，否则退出流程挂起
@@ -39,7 +40,7 @@ export function DesktopLifecycle() {
   const dismissIntent = () => { setIntent(null); cancelQuit(); };
   const requestRef = useRef<(next: Intent) => void>(() => {});
   requestRef.current = next => {
-    if (!canLeave()) return;
+    if (!canLeave()) { if (next === "quit") cancelQuit(); return; }
     if (useAppStore.getState().editingDirty) setIntent(next);
     else void finish(next);
   };
@@ -70,9 +71,9 @@ export function DesktopLifecycle() {
   return <>
     <Dialog open={intent !== null} onOpenChange={open => { if (!open) dismissIntent(); }}>
       <DialogContent><DialogTitle>还有未保存的编辑</DialogTitle>
-        <DialogDescription>{intent === "quit" ? "退出不会提交当前编辑。待办会尝试保留草稿，项目表单的未保存修改将丢失。" : "关闭窗口不会提交当前编辑。macOS 会保留窗口内容，点击 Dock 图标可继续编辑。"}</DialogDescription>
+        <DialogDescription>{intent === "quit" ? "退出不会提交当前编辑。待办和项目会尝试保留草稿；新输入的 Token 不会写入草稿，需重新输入。" : "关闭窗口不会提交当前编辑。macOS 会保留窗口内容，点击 Dock 图标可继续编辑。"}</DialogDescription>
         <div className="flex justify-end gap-2"><Button variant="outline" onClick={dismissIntent}>继续编辑</Button>
-          <Button onClick={() => { window.dispatchEvent(new Event("todo-save-draft")); if (intent) void finish(intent); }}>{intent === "quit" ? "确认退出" : "关闭窗口"}</Button></div>
+          <Button onClick={() => { if (!window.dispatchEvent(new Event("todo-save-draft", { cancelable: true }))) { cancelQuit(); toast.error("草稿保存失败，请先保存编辑内容。"); return; } if (intent) void finish(intent); }}>{intent === "quit" ? "确认退出" : "关闭窗口"}</Button></div>
       </DialogContent>
     </Dialog>
     <Dialog open={choice} onOpenChange={setChoice}><DialogContent><DialogTitle>关闭窗口</DialogTitle><DialogDescription>退出应用，或最小化并继续运行。</DialogDescription>

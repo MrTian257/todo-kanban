@@ -35,7 +35,17 @@ export function SwimlaneBoard({projectId, query = "", branch = ""}: {projectId:s
   const moveTodo = useAppStore(s => s.moveTodo), saveSwimlanes = useAppStore(s => s.saveSwimlanes);
   const lanes = React.useMemo(() => [...(projects.find(p => p.id === projectId)?.swimlanes ?? [])].sort((a,b)=>a.sortOrder-b.sortOrder),[projects,projectId]);
   const filtered = !!query.trim() || !!branch;
-  const items = React.useMemo(() => new Map(lanes.map(l => [l.id,todos.filter(t => t.projectId===projectId && !t.archived && t.swimlaneId===l.id && (!branch || t.branch===branch) && (!query.trim() || `${t.title} ${t.tag}`.toLowerCase().includes(query.trim().toLowerCase()))).sort((a,b)=>a.sortOrder-b.sortOrder || a.createdAt-b.createdAt)])),[lanes,todos,projectId,query,branch]);
+  const items = React.useMemo(() => {
+    const grouped = new Map<string, Todo[]>(lanes.map(lane => [lane.id, []]));
+    const search = query.trim().toLowerCase();
+    for (const todo of todos) {
+      if (todo.projectId !== projectId || todo.archived || (branch && todo.branch !== branch)) continue;
+      if (search && !`${todo.title} ${todo.tag}`.toLowerCase().includes(search)) continue;
+      grouped.get(todo.swimlaneId)?.push(todo);
+    }
+    for (const list of grouped.values()) list.sort((a, b) => a.sortOrder - b.sortOrder || a.createdAt - b.createdAt);
+    return grouped;
+  }, [lanes, todos, projectId, query, branch]);
   const [active,setActive] = React.useState<{kind:string; id:string}|null>(null);
   const [target,setTarget] = React.useState<Target|null>(null);
   const [laneOver,setLaneOver] = React.useState<string|null>(null);

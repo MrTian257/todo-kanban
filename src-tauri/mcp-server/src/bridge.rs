@@ -1,9 +1,9 @@
-//! MCP bridge：9 tools + 3 resources ↔ core::svc。
-//! AppError → JSON-RPC 错误码：Invalid→-32602、其余→-32603；MCP_TODO_READONLY=1 拒绝全部写工具。
+//! MCP bridge：10 tools + 3 resources ↔ core::svc。
+//! 参数错误返回 JSON-RPC 错误；执行失败返回 MCP isError；只读模式隐藏并拒绝写工具。
 //! 数据源固定为程序运行目录 todo-kanban.db；--db-config 仍支持覆盖到指定目录。
 //! MCP 的 git_info 保持直读语义（不经 app 侧缓存）；git_info_refresh / git_info_remote 为 app 专属不暴露。
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use serde_json::{json, Value};
@@ -32,7 +32,7 @@ const WRITE_TOOLS: [&str; 4] = [
 ];
 
 fn is_readonly() -> bool {
-    config::get().map(|c| c.readonly).unwrap_or(false)
+    config::get().map(|c| c.readonly).unwrap_or(true)
 }
 
 /// 数据源路径：--db-config 指定目录 → 该目录下 todo-kanban.db；否则回退 app 运行目录。
@@ -58,11 +58,14 @@ fn load_state() -> AppResult<Option<DbState>> {
     let Some(path) = resolve_db_file()? else {
         return Ok(None);
     };
-    let (conn, _report) = db::open_and_init(&path, &mcp_backup_dir())?;
-    Ok(Some(db::load_state(&conn)?))
+    let conn = db::open_existing(&path, false)?;
+    let tx = conn.unchecked_transaction()?;
+    let state = db::load_state(&tx)?;
+    tx.commit()?;
+    Ok(Some(state))
 }
 
-fn save_state(state: DbState, expected: &DbState) -> AppResult<()> {
+fn save_state(state: DbState, expected: &DbState) -> AppResult<DbState> {
     if is_readonly() {
         return Err(AppError::invalid(
             "只读模式（MCP_TODO_READONLY=1），写操作被拒绝",
@@ -71,8 +74,8 @@ fn save_state(state: DbState, expected: &DbState) -> AppResult<()> {
     let Some(path) = resolve_db_file()? else {
         return Err(AppError::invalid("未配置数据文件，无法保存"));
     };
-    let (conn, _report) = db::open_and_init(&path, &mcp_backup_dir())?;
-    let (_saved, trash) = db::save_state_checked(&conn, &state, expected)?;
+    let conn = db::open_existing(&path, true)?;
+    let (saved, trash) = db::save_state_checked(&conn, &state, expected)?;
     // 附件联动：被删任务的附件文件移入数据文件旁 attachments/trash/（按实际 db 路径定位根目录）
     if !trash.is_empty() {
         todo_kanban_core::svc::attachments::move_to_trash_at(
@@ -80,19 +83,13 @@ fn save_state(state: DbState, expected: &DbState) -> AppResult<()> {
             &trash,
         );
     }
-    Ok(())
-}
-
-/// 备份始终跟随实际数据源，包括 --db-config 覆盖目录。
-fn mcp_backup_dir() -> PathBuf {
-    config::get()
-        .and_then(|cfg| cfg.db_config_dir)
-        .or_else(|| db_cmds::data_dir().ok())
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("backup")
+    Ok(saved)
 }
 
 fn call_tool(name: &str, args: &Value) -> AppResult<Value> {
+    let path = resolve_db_file()?
+        .ok_or_else(|| AppError::invalid("数据文件不存在，请恢复数据源后重试"))?;
+    let _database = todo_kanban_core::svc::gitlab::database_scope(Some(path));
     // 写工具在只读模式下拒绝
     if is_readonly() && WRITE_TOOLS.contains(&name) {
         return Err(AppError::invalid(
@@ -125,24 +122,28 @@ fn call_tool(name: &str, args: &Value) -> AppResult<Value> {
         "git_sync_commits" => {
             let branch = s("branch");
             let ref_branch = (!branch.trim().is_empty()).then_some(branch);
-            let mut commits =
-                git_cmds::git_sync_commits(&s("repo"), &s("tag"), ref_branch.as_deref())?;
-            git_cmds::attach_branches(&s("repo"), &mut commits);
+            let commits = git_cmds::git_sync_commits(&s("repo"), &s("tag"), ref_branch.as_deref())?;
             Ok(serde_json::to_value(commits)?)
         }
+        "git_sync_commits_batch" => {
+            let requests = serde_json::from_value(args["requests"].clone())
+                .map_err(|_| AppError::invalid("requests 格式无效"))?;
+            Ok(serde_json::to_value(git_cmds::git_sync_commits_batch(
+                &s("repo"),
+                requests,
+            )?)?)
+        }
         "git_commits_between" => {
-            let mut commits =
+            let commits =
                 git_cmds::git_commits_between(&s("repo"), &s("branch"), &s("since"), &s("until"))?;
-            git_cmds::attach_branches(&s("repo"), &mut commits);
             Ok(serde_json::to_value(commits)?)
         }
         "git_commit_info" => {
-            let mut c = git_cmds::git_commit_info(&s("repo"), &s("hash"))?;
-            git_cmds::attach_branches(&s("repo"), std::slice::from_mut(&mut c));
+            let c = git_cmds::git_commit_info(&s("repo"), &s("hash"))?;
             Ok(serde_json::to_value(c)?)
         }
         "db_load_state" => {
-            let state = load_state()?.unwrap_or_default();
+            let state = load_state()?.ok_or_else(|| AppError::invalid("数据文件不存在"))?;
             Ok(serde_json::to_value(state)?)
         }
         "db_save_state" => {
@@ -154,30 +155,57 @@ fn call_tool(name: &str, args: &Value) -> AppResult<Value> {
                     AppError::invalid("保存必须携带 db_load_state 返回的 expected 原始快照")
                 })?)?;
             apply_ai_markers(&mut state, &expected);
-            save_state(state, &expected)?;
-            Ok(json!({ "ok": true }))
+            let saved = save_state(state, &expected)?;
+            // 返回权威快照，下一次写入可直接把该 state 用作 expected。
+            Ok(json!({ "ok": true, "state": saved }))
         }
         _ => Err(AppError::invalid(format!("未知工具：{name}"))),
     }
 }
 
-/// MCP 写打标：payload 与库中现状对比——新建 id → created_by=ai（+ai_coordinated）；已存在 id → ai_coordinated=true
+/// MCP 写打标：新建记录标记 AI 创建，仅对业务字段实际变动的待办设置 AI 协调。
 fn apply_ai_markers(state: &mut DbState, existing: &DbState) {
-    let todo_ids: HashSet<&str> = existing.todos.iter().map(|t| t.id.as_str()).collect();
-    let proj_ids: HashSet<&str> = existing.projects.iter().map(|p| p.id.as_str()).collect();
-    for t in &mut state.todos {
-        if todo_ids.contains(t.id.as_str()) {
-            // 修改：AI 协助标记（created_by 保持原值）
-            t.ai_coordinated = true;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_millis() as i64)
+        .unwrap_or(0);
+    let todos: HashMap<_, _> = existing
+        .todos
+        .iter()
+        .map(|todo| (todo.id.as_str(), todo))
+        .collect();
+    let projects: HashMap<_, _> = existing
+        .projects
+        .iter()
+        .map(|project| (project.id.as_str(), project))
+        .collect();
+    for todo in &mut state.todos {
+        if let Some(original) = todos.get(todo.id.as_str()) {
+            todo.created_by = original.created_by.clone();
+            todo.created_at = original.created_at;
+            todo.ai_coordinated = original.ai_coordinated;
+            todo.updated_at = original.updated_at;
+            if *todo != **original {
+                todo.ai_coordinated = true;
+                todo.updated_at = now.max(original.updated_at.saturating_add(1));
+            }
         } else {
-            // 新建：AI 创建 + AI 协助
-            t.created_by = "ai".to_string();
-            t.ai_coordinated = true;
+            todo.created_by = "ai".into();
+            todo.ai_coordinated = true;
+            todo.updated_at = now;
         }
     }
-    for p in &mut state.projects {
-        if !proj_ids.contains(p.id.as_str()) {
-            p.created_by = "ai".to_string();
+    for project in &mut state.projects {
+        if let Some(original) = projects.get(project.id.as_str()) {
+            project.created_by = original.created_by.clone();
+            project.created_at = original.created_at;
+            project.updated_at = original.updated_at;
+            if *project != **original {
+                project.updated_at = now.max(original.updated_at.saturating_add(1));
+            }
+        } else {
+            project.created_by = "ai".into();
+            project.updated_at = now;
         }
     }
 }
@@ -186,29 +214,10 @@ fn apply_ai_markers(state: &mut DbState, existing: &DbState) {
 pub fn verify_startup() -> Result<(), String> {
     let Some(path) = resolve_db_file().map_err(|e| e.to_string())? else {
         return Err(
-            "未找到数据文件：请先运行 todo-kanban 应用完成初始化（运行目录需含 todo-kanban.db）"
+            "未找到数据文件：请先运行桌面应用完成初始化，或检查 --db-config 指定的数据目录"
                 .to_string(),
         );
     };
-    // 数据版本兼容检查（TooNew/TooOld → 拒绝启动）
-    let report = db::check_version(&path, &mcp_backup_dir()).map_err(|e| e.to_string())?;
-    use todo_kanban_core::db::VersionStatus as Vs;
-    match report.status {
-        Vs::TooNew => {
-            return Err(format!(
-                "数据版本不兼容：数据由更高版本（v{}）软件创建，当前软件最高支持 v{}，请升级软件后再启动 MCP",
-                report.data_version, report.app_max
-            ));
-        }
-        Vs::TooOld => {
-            return Err(format!(
-                "数据版本不兼容：数据版本（v{}）过旧，当前软件最低支持 v{}，请先安装中间版本升级后再启动 MCP",
-                report.data_version, report.app_min
-            ));
-        }
-        _ => {}
-    }
-
     let settings = db_cmds::mcp_read_from_db(&path).map_err(|e| e.to_string())?;
     if !settings.enabled {
         return Err("MCP 已在 todo-kanban 设置页中被禁用，请先在应用中启用".to_string());
@@ -216,57 +225,242 @@ pub fn verify_startup() -> Result<(), String> {
     let provided = config::get()
         .and_then(|c| c.token.clone())
         .filter(|t| !t.trim().is_empty());
-    let default_key = todo_kanban_core::models::DEFAULT_MCP_TOKEN;
     match provided {
         Some(t) if t == settings.token => Ok(()),
-        Some(_) => Err(format!(
-            "授权 Token 不匹配：请使用 todo-kanban 设置页中的授权 Token（默认 {default_key}）"
-        )),
-        None => Err(format!(
-            "缺少授权 Token：请通过 --token 参数或 MCP_TODO_TOKEN 环境变量传入（默认 {default_key}）"
-        )),
+        Some(_) => Err("授权 Token 不匹配，请更新 MCP 配置后重新连接".into()),
+        None => Err("缺少授权 Token，请通过 MCP_TODO_TOKEN 环境变量或 --token 参数传入".into()),
     }
 }
 
 fn read_resource(uri: &str) -> AppResult<Value> {
-    let state = load_state()?.unwrap_or_default();
-    match uri {
-        "todo-kanban://state" => Ok(serde_json::to_value(state)?),
-        "todo-kanban://projects" => Ok(serde_json::to_value(state.projects)?),
-        "todo-kanban://todos" => Ok(serde_json::to_value(state.todos)?),
-        _ => Err(AppError::invalid(format!("未知资源：{uri}"))),
+    if !RESOURCES.iter().any(|(known, _)| *known == uri) {
+        return Err(AppError::invalid(format!("未知资源：{uri}")));
     }
+    let path = resolve_db_file()?.ok_or_else(|| AppError::invalid("数据文件不存在"))?;
+    let conn = db::open_existing(&path, false)?;
+    let tx = conn.unchecked_transaction()?;
+    let value = match uri {
+        "todo-kanban://projects" => serde_json::to_value(db::row::load_projects_from_conn(&tx)?)?,
+        "todo-kanban://todos" => serde_json::to_value(db::row::load_todos_from_conn(&tx)?)?,
+        _ => serde_json::to_value(db::load_state(&tx)?)?,
+    };
+    tx.commit()?;
+    Ok(value)
 }
 
 /// tools/call 分发 → JSON-RPC result（错误码映射由 protocol 层做）
 pub fn handle_call(name: &str, args: &Value) -> Result<Value, (i64, String)> {
-    call_tool(name, args).map_err(|e| {
-        let code = match e {
-            AppError::Invalid(_) => -32602,
-            _ => -32603,
-        };
-        (code, e.to_string())
-    })
+    validate_arguments(name, args).map_err(|message| (-32602, message))?;
+    // 参数/工具名错误属于协议错误；执行失败通过 isError 告知客户端。
+    match call_tool(name, args) {
+        Ok(value) => Ok(
+            json!({ "content": [{ "type": "text", "text": value.to_string() }], "isError": false }),
+        ),
+        Err(error) => Ok(
+            json!({ "content": [{ "type": "text", "text": error.to_string() }], "isError": true }),
+        ),
+    }
 }
 
-/// resources/read 分发 → 文本内容
 pub fn handle_resource_read(uri: &str) -> Result<String, (i64, String)> {
     read_resource(uri)
-        .map(|v| serde_json::to_string(&v).unwrap_or_else(|_| "{}".into()))
-        .map_err(|e| (-32602, e.to_string()))
+        .map(|value| value.to_string())
+        .map_err(|error| {
+            let code = if matches!(error, AppError::Invalid(_)) {
+                -32602
+            } else {
+                -32603
+            };
+            (code, error.to_string())
+        })
+}
+
+fn validate_arguments(name: &str, args: &Value) -> Result<(), String> {
+    let schemas = all_tool_schemas();
+    let schema = schemas
+        .as_array()
+        .and_then(|items| items.iter().find(|item| item["name"] == name))
+        .ok_or_else(|| format!("未知工具：{name}"))?;
+    let object = args
+        .as_object()
+        .ok_or_else(|| "arguments 必须是对象".to_string())?;
+    if let Some(required) = schema["inputSchema"]["required"].as_array() {
+        for key in required.iter().filter_map(Value::as_str) {
+            if !object.contains_key(key) {
+                return Err(format!("缺少必填参数：{key}"));
+            }
+        }
+    }
+    let properties = &schema["inputSchema"]["properties"];
+    for (key, value) in object {
+        let Some(property) = properties.get(key) else {
+            return Err(format!("未知参数：{key}"));
+        };
+        let valid = match property["type"].as_str() {
+            Some("string") => value.is_string(),
+            Some("object") => value.is_object(),
+            Some("array") => value.is_array(),
+            _ => false,
+        };
+        if !valid {
+            return Err(format!("参数 {key} 的类型不正确"));
+        }
+        if value
+            .as_str()
+            .is_some_and(|text| key != "branch" && text.trim().is_empty())
+        {
+            return Err(format!("参数 {key} 不能为空"));
+        }
+    }
+    if name == "db_save_state" {
+        for field in ["payload", "expected"] {
+            if args[field].as_object().is_some_and(|object| {
+                object
+                    .keys()
+                    .any(|key| !["projects", "todos"].contains(&key.as_str()))
+            }) {
+                return Err(format!("{field} 仅允许 projects 和 todos"));
+            }
+            for collection in ["projects", "todos"] {
+                let items = args[field][collection]
+                    .as_array()
+                    .ok_or_else(|| format!("{field}.{collection} 必须是数组"))?;
+                let mut seen = HashSet::new();
+                for item in items {
+                    let id = item["id"]
+                        .as_str()
+                        .filter(|id| !id.trim().is_empty())
+                        .ok_or_else(|| format!("{field}.{collection} 中 id 必填"))?;
+                    if !seen.insert(id) {
+                        return Err(format!("{field}.{collection} 中 id 重复"));
+                    }
+                }
+            }
+            let parsed = serde_json::from_value::<DbState>(args[field].clone())
+                .map_err(|_| format!("{field} 的状态字段格式不正确"))?;
+            let canonical =
+                serde_json::to_value(&parsed).map_err(|_| "状态解析失败".to_string())?;
+            for collection in ["projects", "todos"] {
+                if let Some(items) = args[field][collection].as_array() {
+                    for (index, item) in items.iter().enumerate() {
+                        if let Some(object) = item.as_object() {
+                            for key in object.keys() {
+                                if canonical[collection][index].get(key).is_none() {
+                                    return Err(format!("{field}.{collection} 含未知字段：{key}"));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if field == "payload" {
+                let projects: HashSet<_> = parsed
+                    .projects
+                    .iter()
+                    .map(|project| project.id.as_str())
+                    .collect();
+                if parsed
+                    .todos
+                    .iter()
+                    .any(|todo| !projects.contains(todo.project_id.as_str()))
+                {
+                    return Err("payload 中待办引用了不存在的项目".into());
+                }
+            }
+        }
+    }
+    if name == "db_save_state" {
+        // 全量快照契约：允许删除整条记录，不允许漏字段后由 serde 默认值悄悄清空。
+        for collection in ["projects", "todos"] {
+            let expected = args["expected"][collection]
+                .as_array()
+                .ok_or_else(|| "expected 格式无效".to_string())?;
+            let payload = args["payload"][collection]
+                .as_array()
+                .ok_or_else(|| "payload 格式无效".to_string())?;
+            let by_id: HashMap<_, _> = expected
+                .iter()
+                .filter_map(|item| item["id"].as_str().map(|id| (id, item)))
+                .collect();
+            for item in payload {
+                let Some(original) = item["id"].as_str().and_then(|id| by_id.get(id)) else {
+                    continue;
+                };
+                if let Some(fields) = original.as_object() {
+                    for key in fields.keys() {
+                        if item.get(key).is_none() {
+                            return Err(format!("payload.{collection} 中已有记录缺少字段 {key}；请基于完整 expected 修改"));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if name == "git_sync_commits_batch" {
+        let requests = args["requests"]
+            .as_array()
+            .ok_or_else(|| "requests 必须是数组".to_string())?;
+        if requests.is_empty() || requests.len() > 1000 {
+            return Err("requests 数量必须为 1~1000".into());
+        }
+        let mut ids = HashSet::new();
+        for request in requests {
+            let fields = request
+                .as_object()
+                .ok_or_else(|| "requests 的每一项必须是对象".to_string())?;
+            if fields
+                .keys()
+                .any(|key| !["id", "tag", "branch"].contains(&key.as_str()))
+            {
+                return Err("requests 含未知字段".into());
+            }
+            for field in ["id", "tag"] {
+                if request[field]
+                    .as_str()
+                    .is_none_or(|value| value.trim().is_empty())
+                {
+                    return Err(format!("requests.{field} 必须是非空字符串"));
+                }
+            }
+            if !ids.insert(request["id"].as_str()) {
+                return Err("requests 中 id 不能重复".into());
+            }
+            if request
+                .get("branch")
+                .is_some_and(|value| !value.is_string())
+            {
+                return Err("requests.branch 必须是字符串".into());
+            }
+        }
+    }
+    Ok(())
 }
 
 pub fn tool_schemas() -> Value {
+    let Value::Array(mut schemas) = all_tool_schemas() else {
+        return json!([]);
+    };
+    if is_readonly() {
+        schemas.retain(|schema| !WRITE_TOOLS.iter().any(|name| schema["name"] == *name));
+    }
+    for schema in &mut schemas {
+        schema["inputSchema"]["additionalProperties"] = json!(false);
+    }
+    Value::Array(schemas)
+}
+
+fn all_tool_schemas() -> Value {
     json!([
         { "name": "git_info", "description": "仓库校验 + 分支列表（直读）", "inputSchema": { "type": "object", "properties": { "repo": { "type": "string" } }, "required": ["repo"] } },
         { "name": "git_create_branch", "description": "基于当前 HEAD 新建分支（不切换），创建后推送远端同名分支并建立上游", "inputSchema": { "type": "object", "properties": { "repo": { "type": "string" }, "branch": { "type": "string" } }, "required": ["repo", "branch"] } },
         { "name": "git_create_branch_from", "description": "从切出源新建分支（先 fetch origin 源，失败回退本地），创建后推送远端同名分支并建立上游", "inputSchema": { "type": "object", "properties": { "repo": { "type": "string" }, "branch": { "type": "string" }, "from": { "type": "string" } }, "required": ["repo", "branch", "from"] } },
         { "name": "git_checkout_branch", "description": "检出目标分支", "inputSchema": { "type": "object", "properties": { "repo": { "type": "string" }, "branch": { "type": "string" } }, "required": ["repo", "branch"] } },
-        { "name": "git_sync_commits", "description": "按标记 todo-<n> 全分支检索提交（可选 branch=参考分支，返回 origin 来源标注：native 原生/merge 合并进来/cherry 剪切进来/other 不在分支上）", "inputSchema": { "type": "object", "properties": { "repo": { "type": "string" }, "tag": { "type": "string" }, "branch": { "type": "string" } }, "required": ["repo", "tag"] } },
-        { "name": "git_commits_between", "description": "时间窗抓取提交（ISO 8601 起止；按 branch 返回 origin 来源标注：native 原生/merge 合并进来/cherry 剪切进来/other 不在分支上）", "inputSchema": { "type": "object", "properties": { "repo": { "type": "string" }, "branch": { "type": "string" }, "since": { "type": "string" }, "until": { "type": "string" } }, "required": ["repo", "branch", "since", "until"] } },
+        { "name": "git_sync_commits", "description": "API 优先按标记 todo-<n> 全分支检索提交（可选 branch 仅用于本地回退时的来源标注）", "inputSchema": { "type": "object", "properties": { "repo": { "type": "string" }, "tag": { "type": "string" }, "branch": { "type": "string" } }, "required": ["repo", "tag"] } },
+        { "name": "git_sync_commits_batch", "description": "按仓库批量查询多个待办标记的提交；API 历史只拉取一次，返回每条结果及 API/本地来源、回退原因", "inputSchema": { "type": "object", "properties": { "repo": { "type": "string" }, "requests": { "type": "array", "minItems": 1, "maxItems": 1000, "items": { "type": "object", "properties": { "id": { "type": "string" }, "tag": { "type": "string" }, "branch": { "type": "string" } }, "required": ["id", "tag"], "additionalProperties": false } } }, "required": ["repo", "requests"] } },
+        { "name": "git_commits_between", "description": "API 优先时间窗抓取提交（ISO 8601 起止；branch 可选，省略查询全部分支；本地回退可按 branch 标注来源）", "inputSchema": { "type": "object", "properties": { "repo": { "type": "string" }, "branch": { "type": "string" }, "since": { "type": "string" }, "until": { "type": "string" } }, "required": ["repo", "since", "until"] } },
         { "name": "git_commit_info", "description": "按短 hash 查询单条提交", "inputSchema": { "type": "object", "properties": { "repo": { "type": "string" }, "hash": { "type": "string" } }, "required": ["repo", "hash"] } },
         { "name": "db_load_state", "description": "全量读取状态 { projects, todos }", "inputSchema": { "type": "object", "properties": { } } },
-        { "name": "db_save_state", "description": "保存状态；expected 必须为修改前 db_load_state 的原始返回值，冲突需重新读取，禁止直接覆盖", "inputSchema": { "type": "object", "properties": { "payload": { "type": "object" }, "expected": { "type": "object" } }, "required": ["payload", "expected"] } },
+        { "name": "db_save_state", "description": "保存状态；expected 使用 db_load_state 或上次保存结果的 state。返回 {ok,state} 权威快照；冲突需重新读取，禁止直接覆盖", "inputSchema": { "type": "object", "properties": { "payload": { "type": "object" }, "expected": { "type": "object" } }, "required": ["payload", "expected"] } },
     ])
 }
 
@@ -281,7 +475,7 @@ mod tests {
             readonly: true,
             token: None,
         };
-        config::set(cfg);
+        config::set(cfg).unwrap();
         let err = handle_call("db_save_state", &json!({ "payload": {} }));
         assert!(err.is_err());
         assert_eq!(err.unwrap_err().0, -32602);
@@ -289,7 +483,8 @@ mod tests {
             db_config_dir: None,
             readonly: false,
             token: None,
-        });
+        })
+        .unwrap();
     }
 
     #[test]
@@ -339,7 +534,7 @@ mod tests {
         apply_ai_markers(&mut state, &existing);
         assert_eq!(state.projects[0].created_by, "human");
         assert_eq!(state.projects[1].created_by, "ai");
-        assert!(state.todos[0].ai_coordinated);
+        assert!(!state.todos[0].ai_coordinated);
         assert_eq!(state.todos[0].created_by, "human");
         assert_eq!(state.todos[1].created_by, "ai");
         assert!(state.todos[1].ai_coordinated);
@@ -347,7 +542,6 @@ mod tests {
 
     #[test]
     fn schemas_count_ok() {
-        let schemas = tool_schemas();
-        assert_eq!(schemas.as_array().unwrap().len(), 9);
+        assert_eq!(all_tool_schemas().as_array().unwrap().len(), 10);
     }
 }

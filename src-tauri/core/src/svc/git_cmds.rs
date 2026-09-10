@@ -6,6 +6,18 @@ use crate::error::{AppError, AppResult};
 use crate::models::{CommitInfo, GitInfo};
 use crate::tool::git_cli::{self, run_git};
 
+/// API 成功（包括空结果）直接返回；未配置或请求失败才回退本地。
+fn prefer_api<T>(repo: &str, query: impl FnOnce(&str, &str) -> AppResult<T>) -> Option<T> {
+    let (url, token) = super::gitlab::configured_remote(repo)?;
+    match query(&url, &token) {
+        Ok(value) => Some(value),
+        Err(e) => {
+            log::warn!("提交 API 不可用，回退本地 Git：{e}");
+            None
+        }
+    }
+}
+
 const COMMIT_FORMAT: &str = "%H%x1f%s%x1f%cI";
 
 /// 仓库校验 + 分支列表（写入缓存的编排在 svc/repo_cache.rs）
@@ -97,7 +109,31 @@ pub fn git_checkout_branch(repo: &str, branch: &str) -> AppResult<()> {
 
 /// 按标记 `todo-<n>` 全分支检索提交；`ref_branch` 提供时按参考分支附加来源三分类标注
 /// （native/merge/cherry/other，见 annotate_commit_origins）
-pub fn git_sync_commits(repo: &str, tag: &str, ref_branch: Option<&str>) -> AppResult<Vec<CommitInfo>> {
+pub fn git_sync_commits(
+    repo: &str,
+    tag: &str,
+    ref_branch: Option<&str>,
+) -> AppResult<Vec<CommitInfo>> {
+    if tag.trim().is_empty() {
+        return Err(AppError::invalid("提交标记不能为空"));
+    }
+    let ref_branch = ref_branch.filter(|b| !b.trim().is_empty());
+    if let Some(b) = ref_branch {
+        git_cli::validate_branch_name(b)?;
+    }
+    if let Some(commits) = prefer_api(repo, |url, token| {
+        super::gitlab::commits(url, token, None, None, Some(tag))
+    }) {
+        return Ok(commits);
+    }
+    git_sync_commits_local(repo, tag, ref_branch)
+}
+
+fn git_sync_commits_local(
+    repo: &str,
+    tag: &str,
+    ref_branch: Option<&str>,
+) -> AppResult<Vec<CommitInfo>> {
     // 标记匹配必须带边界：`--grep=todo-1` 会同时命中 todo-12 / todo-100，导致提交挂到错误待办
     let pattern = format!("(^|[^0-9A-Za-z_-]){}([^0-9A-Za-z_-]|$)", regex_escape(tag));
     let out = run_git(
@@ -117,7 +153,89 @@ pub fn git_sync_commits(repo: &str, tag: &str, ref_branch: Option<&str>) -> AppR
         git_cli::validate_branch_name(b)?;
         annotate_commit_origins(repo, b, &mut commits);
     }
+    attach_branches(repo, &mut commits);
     Ok(commits)
+}
+
+#[derive(serde::Deserialize)]
+pub struct CommitRequest {
+    pub id: String,
+    pub tag: String,
+    #[serde(default)]
+    pub branch: String,
+}
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitResult {
+    pub id: String,
+    pub commits: Vec<CommitInfo>,
+    pub source: String,
+    pub warning: Option<String>,
+    pub error: Option<String>,
+}
+
+pub fn git_sync_commits_batch(
+    repo: &str,
+    requests: Vec<CommitRequest>,
+) -> AppResult<Vec<CommitResult>> {
+    if requests.len() > 1000 {
+        return Err(AppError::invalid("单次刷新最多 1000 条待办"));
+    }
+    if requests.is_empty() {
+        return Ok(Vec::new());
+    }
+    for request in &requests {
+        if request.tag.trim().is_empty() {
+            return Err(AppError::invalid("提交标记不能为空"));
+        }
+        if !request.branch.trim().is_empty() {
+            git_cli::validate_branch_name(request.branch.trim())?;
+        }
+    }
+    let warning = if let Some((url, token)) = super::gitlab::configured_remote(repo) {
+        let tags: Vec<_> = requests.iter().map(|request| request.tag.clone()).collect();
+        match super::gitlab::commits_by_tags(&url, &token, &tags) {
+            Ok(groups) => {
+                return Ok(requests
+                    .into_iter()
+                    .zip(groups)
+                    .map(|(request, commits)| CommitResult {
+                        id: request.id,
+                        commits,
+                        source: "api".into(),
+                        warning: None,
+                        error: None,
+                    })
+                    .collect())
+            }
+            Err(error) => Some(format!("API 不可用，已回退本地：{error}")),
+        }
+    } else {
+        Some("未找到唯一的仓库 API 配置，已读取本地记录".into())
+    };
+    Ok(requests
+        .into_iter()
+        .map(|request| {
+            let branch = request.branch.trim();
+            match git_sync_commits_local(repo, &request.tag, (!branch.is_empty()).then_some(branch))
+            {
+                Ok(commits) => CommitResult {
+                    id: request.id,
+                    commits,
+                    source: "local".into(),
+                    warning: warning.clone(),
+                    error: None,
+                },
+                Err(error) => CommitResult {
+                    id: request.id,
+                    commits: Vec::new(),
+                    source: "local".into(),
+                    warning: warning.clone(),
+                    error: Some(error.to_string()),
+                },
+            }
+        })
+        .collect())
 }
 
 /// 转义 POSIX ERE 元字符（`--grep` 用扩展正则匹配，标记由用户/MCP 提供）
@@ -143,19 +261,36 @@ pub fn git_commits_between(
     until_iso: &str,
 ) -> AppResult<Vec<CommitInfo>> {
     // branch 来自任务字段（自由文本）：校验后才能作为位置参数
-    git_cli::validate_branch_name(branch)?;
+    let branch = branch.trim();
+    if !branch.is_empty() {
+        git_cli::validate_branch_name(branch)?;
+    }
+    if let Some(commits) = prefer_api(repo, |url, token| {
+        super::gitlab::commits(
+            url,
+            token,
+            (!branch.is_empty()).then_some(branch),
+            Some((since_iso, until_iso)),
+            None,
+        )
+    }) {
+        return Ok(commits);
+    }
     let out = run_git(
         repo,
         &[
             "log",
-            branch,
+            if branch.is_empty() { "--all" } else { branch },
             &format!("--since={since_iso}"),
             &format!("--until={until_iso}"),
             &format!("--format={COMMIT_FORMAT}"),
         ],
     )?;
     let mut commits = git_cli::parse_commit_lines(&out);
-    annotate_commit_origins(repo, branch, &mut commits);
+    if !branch.is_empty() {
+        annotate_commit_origins(repo, branch, &mut commits);
+    }
+    attach_branches(repo, &mut commits);
     Ok(commits)
 }
 
@@ -169,6 +304,9 @@ pub fn git_commit_info(repo: &str, short_hash: &str) -> AppResult<CommitInfo> {
     if !(4..=40).contains(&hash.len()) || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(AppError::invalid("提交 hash 必须是 4~40 位十六进制字符"));
     }
+    if let Some(commit) = prefer_api(repo, |url, token| super::gitlab::commit(url, token, hash)) {
+        return Ok(commit);
+    }
     let out = run_git(
         repo,
         &[
@@ -179,6 +317,7 @@ pub fn git_commit_info(repo: &str, short_hash: &str) -> AppResult<CommitInfo> {
         ],
     )?;
     let mut list = git_cli::parse_commit_lines(&out);
+    attach_branches(repo, &mut list);
     list.pop()
         .ok_or_else(|| AppError::git(format!("未找到提交「{short_hash}」")))
 }
@@ -208,23 +347,90 @@ pub fn current_branch(repo: &str) -> Option<String> {
 /// - **other 不在分支上**：不可达该分支（全分支检索时可能命中其它分支的提交）
 ///
 /// 参考分支无效 / 仓库异常时静默跳过（origin 保持空串），由调用方决定展示降级。
+struct OriginAnalysis {
+    fp: HashSet<String>,
+    reach: HashSet<String>,
+    intro_by_commit: HashMap<String, String>,
+    cherry_set: HashSet<String>,
+    cherry_source: HashMap<String, String>,
+}
+type OriginCache =
+    HashMap<(String, String), (String, std::time::Instant, std::sync::Arc<OriginAnalysis>)>;
+static ORIGIN_CACHE: std::sync::LazyLock<std::sync::Mutex<OriginCache>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
+
 pub fn annotate_commit_origins(repo: &str, ref_branch: &str, commits: &mut [CommitInfo]) {
     if commits.is_empty() {
         return;
     }
+    let refs = run_git(repo, &["for-each-ref", "--format=%(refname):%(objectname)"]);
+    let key = (repo.to_string(), ref_branch.to_string());
+    let cached = refs.as_ref().ok().and_then(|refs| {
+        ORIGIN_CACHE.lock().ok().and_then(|cache| {
+            cache
+                .get(&key)
+                .filter(|(snapshot, at, _)| snapshot == refs && at.elapsed().as_secs() < 60)
+                .map(|(_, _, analysis)| analysis.clone())
+        })
+    });
+    let analysis = match cached {
+        Some(analysis) => analysis,
+        None => {
+            let Some(analysis) = build_origin_analysis(repo, ref_branch) else {
+                return;
+            };
+            let analysis = std::sync::Arc::new(analysis);
+            if let (Ok(refs), Ok(mut cache)) = (refs, ORIGIN_CACHE.lock()) {
+                if cache.len() >= 8 {
+                    cache.clear();
+                }
+                cache.insert(key, (refs, std::time::Instant::now(), analysis.clone()));
+            }
+            analysis
+        }
+    };
+    for c in commits.iter_mut() {
+        if !analysis.reach.contains(&c.hash) {
+            c.origin = "other".to_string();
+        } else if analysis.fp.contains(&c.hash) {
+            if analysis.cherry_set.contains(&c.hash) {
+                c.origin = "cherry".to_string();
+                c.source = analysis
+                    .cherry_source
+                    .get(&c.hash)
+                    .cloned()
+                    .unwrap_or_default();
+            } else {
+                c.origin = "native".to_string();
+            }
+        } else {
+            c.origin = "merge".to_string();
+            c.merge_hash = analysis
+                .intro_by_commit
+                .get(&c.hash)
+                .cloned()
+                .unwrap_or_default();
+        }
+    }
+}
+
+fn build_origin_analysis(repo: &str, ref_branch: &str) -> Option<OriginAnalysis> {
     // 参考分支不存在 → 无法判定，保持空串
     if run_git(repo, &["rev-parse", "--verify", "--quiet", ref_branch]).is_err() {
-        return;
+        return None;
     }
     let fp = rev_set(repo, &["rev-list", "--first-parent", ref_branch]);
     let reach = rev_set(repo, &["rev-list", ref_branch]);
     if reach.is_empty() {
-        return;
+        return None;
     }
 
     // 主线上的合并提交 → 其引入的侧提交集合（合并提交自身在主线，排除）
     let mut intro_by_commit: HashMap<String, String> = HashMap::new();
-    if let Ok(merges) = run_git(repo, &["rev-list", "--first-parent", "--merges", ref_branch]) {
+    if let Ok(merges) = run_git(
+        repo,
+        &["rev-list", "--first-parent", "--merges", ref_branch],
+    ) {
         for m in merges.lines().map(|l| l.trim()).filter(|l| !l.is_empty()) {
             let Ok(fp1) = run_git(repo, &["rev-parse", &format!("{m}^")]) else {
                 continue;
@@ -250,21 +456,13 @@ pub fn annotate_commit_origins(repo: &str, ref_branch: &str, commits: &mut [Comm
 
     let (cherry_set, cherry_source) = detect_cherry_picks(repo, ref_branch);
 
-    for c in commits.iter_mut() {
-        if !reach.contains(&c.hash) {
-            c.origin = "other".to_string();
-        } else if fp.contains(&c.hash) {
-            if cherry_set.contains(&c.hash) {
-                c.origin = "cherry".to_string();
-                c.source = cherry_source.get(&c.hash).cloned().unwrap_or_default();
-            } else {
-                c.origin = "native".to_string();
-            }
-        } else {
-            c.origin = "merge".to_string();
-            c.merge_hash = intro_by_commit.get(&c.hash).cloned().unwrap_or_default();
-        }
-    }
+    Some(OriginAnalysis {
+        fp,
+        reach,
+        intro_by_commit,
+        cherry_set,
+        cherry_source,
+    })
 }
 
 /// 剪切特征检测（相对参考分支 B）：返回（剪切提交集合, 提交 → 来源说明）
@@ -395,6 +593,31 @@ mod tests {
     }
 
     #[test]
+    fn no_branch_queries_all_refs_and_tag_boundary() {
+        let (root, repo) = setup_origin_repo();
+        let r = repo.to_str().unwrap();
+        run_git(r, &["checkout", "-b", "feature"]).unwrap();
+        run_git(r, &["commit", "--allow-empty", "-m", "修复 todo-1"]).unwrap();
+        let expected = run_git(r, &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_string();
+        run_git(r, &["commit", "--allow-empty", "-m", "修复 todo-12"]).unwrap();
+        run_git(r, &["checkout", "main"]).unwrap();
+        let tagged = git_sync_commits(r, "todo-1", Some("")).unwrap();
+        assert_eq!(tagged.len(), 1);
+        assert_eq!(tagged[0].hash, expected);
+        let all =
+            git_commits_between(r, "", "2000-01-01T00:00:00Z", "2037-01-01T00:00:00Z").unwrap();
+        assert!(all.iter().any(|c| c.hash == expected));
+        assert!(all.iter().all(|c| c.origin.is_empty()));
+        let main =
+            git_commits_between(r, "main", "2000-01-01T00:00:00Z", "2037-01-01T00:00:00Z").unwrap();
+        assert!(!main.iter().any(|c| c.hash == expected));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn git_info_nonexistent_path() {
         let info = git_info("Z:/definitely/not/exists/xyz").unwrap();
         assert!(!info.repo_exists);
@@ -499,22 +722,34 @@ mod tests {
         run_git(r, &["checkout", "-b", "feature"]).unwrap();
         std::fs::write(repo.join("f.txt"), "2").unwrap();
         run_git(r, &["commit", "-am", "feat B"]).unwrap();
-        let b = run_git(r, &["rev-parse", "HEAD"]).unwrap().trim().to_string();
+        let b = run_git(r, &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_string();
 
         // main: 剪切 -x B → cp
         run_git(r, &["checkout", "main"]).unwrap();
         run_git(r, &["cherry-pick", "-x", b.as_str()]).unwrap();
-        let cp = run_git(r, &["rev-parse", "HEAD"]).unwrap().trim().to_string();
+        let cp = run_git(r, &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_string();
 
         // main: 原生 C
         std::fs::write(repo.join("g.txt"), "1").unwrap();
         run_git(r, &["add", "g.txt"]).unwrap();
         run_git(r, &["commit", "-m", "feat C"]).unwrap();
-        let c = run_git(r, &["rev-parse", "HEAD"]).unwrap().trim().to_string();
+        let c = run_git(r, &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_string();
 
         // 合并 feature → M
         run_git(r, &["merge", "--no-ff", "feature", "-m", "merge feature"]).unwrap();
-        let m = run_git(r, &["rev-parse", "HEAD"]).unwrap().trim().to_string();
+        let m = run_git(r, &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_string();
 
         let mut commits = vec![
             commit_info(&c),
@@ -550,7 +785,10 @@ mod tests {
         run_git(r, &["checkout", "-b", "feature"]).unwrap();
         std::fs::write(repo.join("f.txt"), "2").unwrap();
         run_git(r, &["commit", "-am", "feat B"]).unwrap();
-        let b = run_git(r, &["rev-parse", "HEAD"]).unwrap().trim().to_string();
+        let b = run_git(r, &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_string();
 
         // main: 无 -x 剪切 B → cp（不合并 feature）
         run_git(r, &["checkout", "main"]).unwrap();
@@ -558,12 +796,18 @@ mod tests {
         // （父提交/树/消息/时间戳一致），此时 `git cherry` 无输出，测试会假失败。
         std::thread::sleep(std::time::Duration::from_millis(1_100));
         run_git(r, &["cherry-pick", b.as_str()]).unwrap();
-        let cp = run_git(r, &["rev-parse", "HEAD"]).unwrap().trim().to_string();
+        let cp = run_git(r, &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_string();
 
         std::fs::write(repo.join("g.txt"), "1").unwrap();
         run_git(r, &["add", "g.txt"]).unwrap();
         run_git(r, &["commit", "-m", "feat C"]).unwrap();
-        let c = run_git(r, &["rev-parse", "HEAD"]).unwrap().trim().to_string();
+        let c = run_git(r, &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_string();
 
         let mut commits = vec![commit_info(&c), commit_info(&cp), commit_info(&b)];
         annotate_commit_origins(r, "main", &mut commits);
@@ -579,4 +823,9 @@ mod tests {
         assert_eq!(by(&b).origin, "other", "feature 未合并时源提交不在 main 上");
         let _ = std::fs::remove_dir_all(&root);
     }
+}
+
+/// 工具路径诊断，不启动 Git 或 curl 子进程。
+pub fn tool_paths() -> Vec<crate::tool::proc::ToolPath> {
+    crate::tool::proc::tool_paths()
 }

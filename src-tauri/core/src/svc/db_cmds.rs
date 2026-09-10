@@ -66,8 +66,11 @@ pub fn load_state() -> AppResult<Option<DbState>> {
         .lock()
         .map_err(|_| AppError::invalid("读锁获取失败"))?;
     let (conn, _report) = db::open_and_init(&path, &backup_dir()?)?;
-    // Read a fresh snapshot: count + max(updated_at) can miss concurrent edits.
-    Ok(Some(db::load_state(&conn)?))
+    // 两张表在同一只读事务中读取，避免 MCP 跨进程提交造成混合快照。
+    let tx = conn.unchecked_transaction()?;
+    let state = db::load_state(&tx)?;
+    tx.commit()?;
+    Ok(Some(state))
 }
 
 /// 差异写落库：写锁全程互斥 + 保存前校验（分支规则 / 泳道归属由 db::save_state 承担）+ 清指纹缓存
@@ -483,9 +486,11 @@ fn mcp_settings_from_conn(conn: &Connection) -> AppResult<McpSettings> {
 
 /// 从指定库文件读取 MCP 设置（MCP server 启动校验复用）
 pub fn mcp_read_from_db(path: &Path) -> AppResult<McpSettings> {
-    let conn = db::open(path)?;
-    db::init(&conn)?;
-    mcp_settings_from_conn(&conn)
+    let conn = db::open_existing(path, false)?;
+    let tx = conn.unchecked_transaction()?;
+    let settings = mcp_settings_from_conn(&tx)?;
+    tx.commit()?;
+    Ok(settings)
 }
 
 /// 读取 MCP 集成设置（无数据源 / key 缺失 → 默认：启用 + 全局固定授权 Token）

@@ -4,7 +4,7 @@ import { DirectoryInput } from "@/components/project/DirectoryInput";
 // 泳道配置使用独立 SwimlaneManageDialog（看板内管理）
 
 import * as React from "react";
-import { useForm } from "react-hook-form";
+import { Controller, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { toast } from "sonner";
@@ -54,6 +54,18 @@ const schema = z.object({
 
 type FormValues = z.infer<typeof schema>;
 
+const draftSchema = z.object({
+  version: z.literal(1),
+  savedAt: z.number(),
+  projectUpdatedAt: z.number().nullable(),
+  values: schema.omit({ frontendRepoToken: true, backendRepoToken: true }).extend({ name: z.string() }),
+  ruleEnabled: z.boolean(),
+  steps: z.array(z.object({ id: z.string(), from: z.string(), to: z.string(), action: z.enum(["checkout", "merge"]), note: z.string() })),
+  defs: z.array(z.object({ role: z.string(), name: z.string(), code: z.string() })),
+});
+type ProjectDraft = z.infer<typeof draftSchema>;
+const DRAFT_MAX_AGE = 30 * 24 * 60 * 60 * 1000;
+
 interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -73,8 +85,12 @@ const BRANCH_DEF_TEMPLATE: BranchDef[] = [
   { role: "test", name: "测试", code: "test" },
 ];
 
+const isCredentialRef = (value: string) => /^(keyring|session):\/\//.test(value);
+const tokenPlaceholder = (value: string) => value.startsWith("session://")
+  ? "临时凭据：重启后需重新输入" : value.startsWith("keyring://") ? "已存系统钥匙串；输入以替换" : "可选，用于读取私有仓库";
+
 export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
-  const { upsertProject } = useAppStore();
+  const upsertProject = useAppStore(state => state.upsertProject);
   const isEdit = !!project;
   const submittedProject = React.useRef<Project | null>(null);
   React.useEffect(() => { submittedProject.current = null; }, [open, project]);
@@ -94,9 +110,11 @@ export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
 
   const {
     register,
+    control,
     watch,
     setValue,
     handleSubmit,
+    getValues,
     reset,
     formState: { errors, isSubmitting, isDirty },
   } = useForm<FormValues>({
@@ -114,8 +132,71 @@ export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
     },
   });
 
+  const draftKey = `todo-project-draft.v1.${project?.id ?? "new"}`;
+  const [availableDraft, setAvailableDraft] = React.useState<ProjectDraft | null>(null);
+  const [draftError, setDraftError] = React.useState("");
+  const draftFinished = React.useRef(false);
+  const draftWriter = React.useRef<() => boolean>(() => true);
+  const clearDraft = () => {
+    try { localStorage.removeItem(draftKey); setAvailableDraft(null); setDraftError(""); }
+    catch { setDraftError("无法清除草稿，请检查本地存储权限。"); }
+  };
+  draftWriter.current = () => {
+    if (!open || draftFinished.current || !(isDirty || ruleDirty)) return true;
+    // 逐字段构造白名单，Token 和凭据引用均不进入草稿。
+    const values = getValues();
+    const draft: ProjectDraft = {
+      version: 1, savedAt: Date.now(), projectUpdatedAt: project?.updatedAt ?? null,
+      values: { name: values.name, projectDir: values.projectDir, frontendDir: values.frontendDir,
+        backendDir: values.backendDir, frontendRepoUrl: values.frontendRepoUrl,
+        backendRepoUrl: values.backendRepoUrl, productionBranch: values.productionBranch },
+      ruleEnabled, steps, defs,
+    };
+    try { localStorage.setItem(draftKey, JSON.stringify(draft)); setDraftError(""); return true; }
+    catch { setDraftError("项目草稿保存失败，请保持窗口打开并保存项目。"); return false; }
+  };
+  React.useEffect(() => {
+    if (!open) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const schedule = () => { clearTimeout(timer); timer = setTimeout(() => draftWriter.current(), 300); };
+    const subscription = watch(schedule);
+    schedule();
+    const save = (event: Event) => { if (!draftWriter.current()) event.preventDefault(); };
+    window.addEventListener("todo-save-draft", save);
+    window.addEventListener("pagehide", save);
+    return () => {
+      clearTimeout(timer); subscription.unsubscribe();
+      window.removeEventListener("todo-save-draft", save);
+      window.removeEventListener("pagehide", save);
+    };
+  }, [open, watch, ruleEnabled, steps, defs, isDirty, ruleDirty]);
+  const restoreDraft = () => {
+    if (!availableDraft) return;
+    if (availableDraft.projectUpdatedAt !== (project?.updatedAt ?? null)) {
+      setDraftError("项目已发生变化，旧草稿不能直接恢复；可保留草稿或选择丢弃。");
+      return;
+    }
+    for (const [key, value] of Object.entries(availableDraft.values)) {
+      setValue(key as keyof ProjectDraft["values"], value, { shouldDirty: true, shouldValidate: true });
+    }
+    setRuleEnabledRaw(availableDraft.ruleEnabled);
+    setStepsRaw(availableDraft.steps); setDefsRaw(availableDraft.defs);
+    setRuleDirty(true); setAvailableDraft(null);
+    toast.info("项目草稿已恢复，Token 请按需重新输入。");
+  };
+
   React.useEffect(() => {
     if (open) {
+      draftFinished.current = false;
+      setAvailableDraft(null); setDraftError("");
+      try {
+        const raw = localStorage.getItem(draftKey);
+        if (raw) {
+          const parsed = draftSchema.safeParse(JSON.parse(raw));
+          if (parsed.success && Date.now() - parsed.data.savedAt < DRAFT_MAX_AGE) setAvailableDraft(parsed.data);
+          else localStorage.removeItem(draftKey);
+        }
+      } catch { setDraftError("无法读取项目草稿，请检查本地存储权限。"); }
       setRuleDirty(false);
       setShowToken(false);
       reset({
@@ -146,7 +227,7 @@ export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
           : BRANCH_DEF_TEMPLATE.map((b) => ({ ...b })),
       );
     }
-  }, [open, project, reset]);
+  }, [open, project, reset, draftKey]);
 
   useEditingGuard(open && (isDirty || ruleDirty));
   const requestOpenChange = (next: boolean) => {
@@ -193,6 +274,13 @@ export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
     upsertProject(p);
     submittedProject.current = useAppStore.getState().projects.find(item => item.id === p.id) ?? p;
     await flushPersistence();
+    const savedProject = useAppStore.getState().projects.find(item => item.id === p.id);
+    submittedProject.current = savedProject ?? submittedProject.current;
+    if ([savedProject?.frontendRepoToken, savedProject?.backendRepoToken].some(value => value?.startsWith("session://"))) {
+      toast.warning("系统钥匙串不可用，Token 仅保存在当前进程；重启或使用 MCP 时需重新输入");
+    }
+    draftFinished.current = true;
+    clearDraft();
     toast.success(isEdit ? "项目已更新" : "项目已创建");
     onOpenChange(false);
     } catch (error) { toast.error(`项目未保存：${String(error)}`); }
@@ -223,6 +311,12 @@ export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
 
         <form onSubmit={handleSubmit(onSubmit)} className="flex min-h-0 flex-1 flex-col">
         <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-7 py-6">
+          {availableDraft && <div className="rounded-lg border bg-muted/40 p-3 text-sm">
+            <p>有一份未提交的项目草稿（{new Date(availableDraft.savedAt).toLocaleString()}）。</p>
+            <div className="mt-2 flex gap-2"><Button type="button" size="sm" variant="outline" onClick={restoreDraft}>恢复草稿</Button>
+              <Button type="button" size="sm" variant="ghost" onClick={clearDraft}>丢弃草稿</Button></div>
+          </div>}
+          {draftError && <p role="alert" className="text-sm text-destructive">{draftError}</p>}
           <h3 className="tk-section-title">基础信息</h3>
           <div className="space-y-2">
             <Label htmlFor="name">项目名称 *</Label>
@@ -257,7 +351,11 @@ export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
             </div>
             <div className="space-y-2">
               <Label htmlFor="frontendRepoToken">前端仓库 GitLab Token</Label>
-              <Input id="frontendRepoToken" type={showToken ? "text" : "password"} placeholder="可选，启用远端分支" {...register("frontendRepoToken")} />
+              <Controller name="frontendRepoToken" control={control} render={({ field }) => (
+                <Input {...field} id="frontendRepoToken" type={showToken ? "text" : "password"}
+                  value={isCredentialRef(field.value) ? "" : field.value} placeholder={tokenPlaceholder(field.value)} />
+              )} />
+              {watch("frontendRepoToken") && <button type="button" className="text-xs text-muted-foreground" onClick={() => setValue("frontendRepoToken", "", { shouldDirty: true })}>清除前端 Token 关联</button>}
             </div>
             <div className="space-y-2">
               <Label htmlFor="backendRepoUrl">后端仓库地址（http(s)）</Label>
@@ -265,10 +363,15 @@ export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
             </div>
             <div className="space-y-2">
               <Label htmlFor="backendRepoToken">后端仓库 GitLab Token</Label>
-              <Input id="backendRepoToken" type={showToken ? "text" : "password"} placeholder="可选，启用远端分支" {...register("backendRepoToken")} />
+              <Controller name="backendRepoToken" control={control} render={({ field }) => (
+                <Input {...field} id="backendRepoToken" type={showToken ? "text" : "password"}
+                  value={isCredentialRef(field.value) ? "" : field.value} placeholder={tokenPlaceholder(field.value)} />
+              )} />
+              {watch("backendRepoToken") && <button type="button" className="text-xs text-muted-foreground" onClick={() => setValue("backendRepoToken", "", { shouldDirty: true })}>清除后端 Token 关联</button>}
             </div>
           </div>
 
+          <p className="mt-3 text-xs text-muted-foreground">Token 优先保存到系统钥匙串；不可用时仅当前进程有效，重启或使用 MCP 时需重新输入。复制数据库到其他设备后也需重新配置。</p>
           <button type="button" className="mt-3 flex items-center gap-2 text-xs text-muted-foreground" onClick={()=>setShowToken(v=>!v)}>{showToken ? <EyeOff className="h-3.5 w-3.5"/> : <Eye className="h-3.5 w-3.5"/>}{showToken ? "隐藏 Token" : "显示 Token"}</button>
           </details>
           {/* 分支规则（可视化） */}
@@ -375,9 +478,10 @@ export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
     </Dialog>
     <Dialog open={discardOpen} onOpenChange={setDiscardOpen}>
       <DialogContent><DialogTitle>放弃未保存的项目修改？</DialogTitle>
-        <DialogDescription>项目表单不会自动保存，关闭后这些修改将丢失。</DialogDescription>
+        <DialogDescription>可保留草稿后关闭，下次继续编辑。Token 不会保存在草稿中。</DialogDescription>
         <div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setDiscardOpen(false)}>继续编辑</Button>
-          <Button onClick={() => { setDiscardOpen(false); onOpenChange(false); }}>放弃修改</Button></div>
+          <Button variant="outline" onClick={() => { draftFinished.current = true; clearDraft(); setDiscardOpen(false); onOpenChange(false); }}>放弃修改</Button>
+          <Button onClick={() => { if (!draftWriter.current()) { toast.error("草稿未保存，窗口已保留，请先保存项目。"); return; } setDiscardOpen(false); onOpenChange(false); }}>保留草稿并关闭</Button></div>
       </DialogContent>
     </Dialog>
     </>

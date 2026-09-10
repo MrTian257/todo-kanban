@@ -30,6 +30,25 @@ pub fn open(path: &Path) -> AppResult<Connection> {
     Ok(conn)
 }
 
+/// MCP 使用现有且已升级的库；不创建文件、不建表、不迁移，读路径不修改 journal_mode。
+pub fn open_existing(path: &Path, writable: bool) -> AppResult<Connection> {
+    let flags = if writable {
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
+    } else {
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+    };
+    let conn = Connection::open_with_flags(path, flags)?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
+    let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version != schema::USER_VERSION {
+        return Err(AppError::Version(format!(
+            "数据库版本为 v{version}，MCP 需要 v{}；请先用匹配版本的桌面应用完成升级",
+            schema::USER_VERSION
+        )));
+    }
+    Ok(conn)
+}
+
 /// 内存库（测试用）
 pub fn open_in_memory() -> rusqlite::Result<Connection> {
     Connection::open_in_memory()
@@ -154,9 +173,19 @@ fn save_state_inner(
         actual.todos.sort_by(|a, b| a.id.cmp(&b.id));
         expected.todos.sort_by(|a, b| a.id.cmp(&b.id));
         if actual != expected {
-            return Err(AppError::invalid("STATE_CONFLICT: 数据已被其他窗口或 MCP 修改，请重新读取后处理冲突"));
+            return Err(AppError::invalid(
+                "STATE_CONFLICT: 数据已被其他窗口或 MCP 修改，请重新读取后处理冲突",
+            ));
         }
     }
+    // 冲突检查成功后才迁移凭据。新引用不可变，事务失败也不会覆盖原有凭据。
+    let mut protected = state.clone();
+    for project in &mut protected.projects {
+        project.frontend_repo_token =
+            crate::svc::credentials::protect(&project.frontend_repo_token)?;
+        project.backend_repo_token = crate::svc::credentials::protect(&project.backend_repo_token)?;
+    }
+    let state = &protected;
     ensure_next_seq(&tx)?;
 
     // 项目泳道索引

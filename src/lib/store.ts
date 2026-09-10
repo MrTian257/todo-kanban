@@ -5,7 +5,7 @@
 import { moveTask } from "./boardOrder";
 import { create } from "zustand";
 import { AppState, Project, Swimlane, Todo } from "./types";
-import { isTauri, loadState, saveState } from "./storage";
+import { isTauri, loadState, saveState, pollState } from "./storage";
 import { normalizeProject, normalizeState } from "./normalize";
 import { gitInfoCached } from "./git";
 
@@ -351,14 +351,17 @@ export function startExternalSync() {
   stopSync?.();
   let stopped = false;
   let running = false;
+  let revision: string | null = null;
   const sync = async () => {
     const state = useAppStore.getState();
     if (stopped || running || !state.loaded || version !== savedVersion || state.persistence !== "saved") return;
     running = true;
     const startedVersion = version;
     try {
-      const disk = await loadState();
+      const response = await pollState(revision);
+      const disk = response.state;
       if (stopped || version !== startedVersion || activeSave) return;
+      revision = response.revision;
       if (disk) {
         persisted = disk;
         const normalized = normalizeState(disk);

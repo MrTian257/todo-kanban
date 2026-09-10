@@ -23,3 +23,8 @@ export async function saveState(state: AppState, expected: AppState): Promise<Ap
   sessionStorage.setItem("todo-kanban-preview-v1", JSON.stringify(saved));
   return saved;
 }
+
+/** revision 只用于当前后端观察连接；不持久化，重启后自动重新取得完整快照。 */
+export async function pollState(revision: string | null): Promise<{ revision: string; state: AppState | null }> {
+  return invoke("db_poll_state", { revision });
+}

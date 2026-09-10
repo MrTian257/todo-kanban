@@ -6,7 +6,9 @@ import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/compone
 import { Button } from "@/components/ui/button";
 
 export function PersistenceStatus() {
-  const { persistence, persistenceError, syncError } = useAppStore();
+  const persistence = useAppStore(state => state.persistence);
+  const persistenceError = useAppStore(state => state.persistenceError);
+  const syncError = useAppStore(state => state.syncError);
   const [reloadRequested, setReloadRequested] = useState(false);
   const gitCount = useSyncExternalStore(subscribeGitActivity, getGitActivity);
   const exportLocal = () => {
@@ -24,7 +26,7 @@ export function PersistenceStatus() {
     {persistence === "error" && <Button size="sm" variant="outline" onClick={() => void retryPersistence().catch(error => toast.error(String(error)))}>重试保存</Button>}
     {problem && <><Button size="sm" variant="outline" onClick={exportLocal}>导出本地副本</Button><Button size="sm" variant="outline" onClick={() => setReloadRequested(true)}>重新读取</Button></>}
     <Dialog open={reloadRequested} onOpenChange={setReloadRequested}><DialogContent><DialogTitle>重新读取数据</DialogTitle><DialogDescription>这会放弃当前未落库的变更。请先导出本地副本；编辑草稿仍保留。</DialogDescription><div className="flex justify-end gap-2"><Button variant="outline" onClick={exportLocal}>导出本地副本</Button><Button variant="outline" onClick={() => setReloadRequested(false)}>取消</Button><Button onClick={() => {
-      window.dispatchEvent(new Event("todo-save-draft"));
+      if (!window.dispatchEvent(new Event("todo-save-draft", { cancelable: true }))) { toast.error("草稿保存失败，请先保存编辑内容。"); return; }
       void reloadRemoteState().then(() => setReloadRequested(false)).catch(error => toast.error(String(error)));
     }}>确认重新读取</Button></div></DialogContent></Dialog>
     {syncError && !problem && <Button size="sm" variant="outline" onClick={() => void flushPersistence().then(reloadRemoteState).catch(error => toast.error(String(error)))}>重试同步</Button>}

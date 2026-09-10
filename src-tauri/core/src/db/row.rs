@@ -167,24 +167,31 @@ pub const PROJECT_UPSERT: &str = "INSERT INTO projects (id, name, project_dir, f
     swimlanes=excluded.swimlanes, created_by=excluded.created_by
   WHERE excluded.updated_at >= projects.updated_at";
 
-pub fn load_state_from_conn(conn: &rusqlite::Connection) -> AppResult<DbState> {
+pub fn load_projects_from_conn(conn: &rusqlite::Connection) -> AppResult<Vec<DbProject>> {
     let mut projects = Vec::new();
-    {
-        let mut stmt = conn.prepare(PROJECT_SELECT)?;
-        let mut rows = stmt.query([])?;
-        while let Some(row) = rows.next()? {
-            projects.push(row_to_project(row)?);
-        }
+    let mut stmt = conn.prepare(PROJECT_SELECT)?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        projects.push(row_to_project(row)?);
     }
+    Ok(projects)
+}
+
+pub fn load_todos_from_conn(conn: &rusqlite::Connection) -> AppResult<Vec<DbTodo>> {
     let mut todos = Vec::new();
-    {
-        let mut stmt = conn.prepare(TODO_SELECT)?;
-        let mut rows = stmt.query([])?;
-        while let Some(row) = rows.next()? {
-            todos.push(row_to_todo(row)?);
-        }
+    let mut stmt = conn.prepare(TODO_SELECT)?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        todos.push(row_to_todo(row)?);
     }
-    Ok(DbState { projects, todos })
+    Ok(todos)
+}
+
+pub fn load_state_from_conn(conn: &rusqlite::Connection) -> AppResult<DbState> {
+    Ok(DbState {
+        projects: load_projects_from_conn(conn)?,
+        todos: load_todos_from_conn(conn)?,
+    })
 }
 
 /// UPSERT 待办（updated_at 较新者胜）

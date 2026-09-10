@@ -2,17 +2,13 @@
 import { memo, useId } from "react";
 import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import remarkMath from "remark-math";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
-import rehypeKatex from "rehype-katex";
-import rehypeHighlight from "rehype-highlight";
 import type { PluggableList } from "unified";
-import "katex/dist/katex.min.css";
 import { attachmentDisplayUrl } from "@/lib/attachments";
 import { cn } from "@/lib/utils";
 
-const remarkPlugins: PluggableList = [remarkGfm, remarkMath];
+const remarkPlugins: PluggableList = [remarkGfm];
 const rehypePlugins: PluggableList = [
   rehypeRaw,
   [rehypeSanitize, {
@@ -29,8 +25,6 @@ const rehypePlugins: PluggableList = [
     // attachment：macOS/Linux 上附件展示 URL 的协议形态（Windows 为 http://attachment.localhost）
     protocols: { ...defaultSchema.protocols, src: [...(defaultSchema.protocols?.src ?? []), "data", "attachment"] },
   }],
-  [rehypeKatex, { trust: false, strict: "ignore" }],
-  [rehypeHighlight, { detect: false }],
 ];
 const components: Components = {
   a: ({ node: _node, href, children, ...props }) => (
@@ -57,10 +51,10 @@ function safeUrl(url: string, key: string) {
   return defaultUrlTransform(url);
 }
 
-export const MarkdownView = memo(function MarkdownView({ content, className }: { content: string; className?: string }) {
+export const MarkdownView = memo(function MarkdownView({ content, className, extraRemark = [], extraRehype = [] }: { content: string; className?: string; extraRemark?: PluggableList; extraRehype?: PluggableList }) {
   const id = useId().replace(/:/g, "");
   if (!content?.trim()) return <span className="text-muted-foreground">（无备注）</span>;
   return <div className={cn("md-editor text-sm leading-relaxed", className)}>
-    <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} remarkRehypeOptions={{ clobberPrefix: `md-${id}-`, footnoteLabel: "脚注", footnoteBackLabel: "返回正文" }} components={components} urlTransform={safeUrl}>{content}</ReactMarkdown>
+    <ReactMarkdown remarkPlugins={[...remarkPlugins, ...extraRemark]} rehypePlugins={[...rehypePlugins, ...extraRehype]} remarkRehypeOptions={{ clobberPrefix: `md-${id}-`, footnoteLabel: "脚注", footnoteBackLabel: "返回正文" }} components={components} urlTransform={safeUrl}>{content}</ReactMarkdown>
   </div>;
 });

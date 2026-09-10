@@ -1,13 +1,13 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-// IBM Plex 双声部：sans 讲人话，mono 唱数据（tag/hash/日期/计数）
-import "@fontsource/ibm-plex-sans/400.css";
-import "@fontsource/ibm-plex-sans/500.css";
-import "@fontsource/ibm-plex-sans/600.css";
-import "@fontsource/ibm-plex-mono/400.css";
-import "@fontsource/ibm-plex-mono/500.css";
+// 仅打包编程等宽字体常用拉丁字符；中文由系统中文字体提供。
+import "@fontsource/ibm-plex-mono/latin-400.css";
+import "@fontsource/ibm-plex-mono/latin-500.css";
 import "./index.css";
 import App from "./App";
+import { isMacOS } from "@/lib/platform";
+
+document.documentElement.dataset.platform = isMacOS ? "macos" : "other";
 import { installContextMenuSystem, registerEditableContextMenu } from "@/lib/context-menu";
 import { installInputSuggestionControl } from "@/lib/input-suggestions";
 

@@ -120,6 +120,7 @@ mod macos_terminate {
         pending: bool,
         /// 前端已确认退出（放行后不再拦截）
         allowed: bool,
+        generation: u64,
     }
 
     impl TerminateState {
@@ -132,6 +133,7 @@ mod macos_terminate {
                 return Decision::Now;
             }
             self.pending = true;
+            self.generation = self.generation.wrapping_add(1);
             Decision::Ask
         }
 
@@ -152,6 +154,7 @@ mod macos_terminate {
         armed: false,
         pending: false,
         allowed: false,
+        generation: 0,
     });
     /// 供 IMP 回调使用的 AppHandle
     static APP: OnceLock<tauri::AppHandle> = OnceLock::new();
@@ -281,8 +284,20 @@ mod macos_terminate {
         if let Err(error) = window.emit("app-quit-requested", ()) {
             log::error!("退出请求发送失败：{error}");
             let _ = take_reply(false);
-            return NSApplicationTerminateReply::TerminateNow;
+            return NSApplicationTerminateReply::TerminateCancel;
         }
+        // 前端无响应时只取消本次系统退出，不强制结束或丢弃未保存的数据。
+        let generation = STATE.lock().ok().map(|state| state.generation);
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(30));
+            let cancelled = STATE.lock().map(|mut state| {
+                if Some(state.generation) == generation { state.reply(false) } else { false }
+            }).unwrap_or(false);
+            if cancelled {
+                log::warn!("退出确认超时，已取消本次系统退出，保留当前数据");
+                hop_reply(false);
+            }
+        });
         NSApplicationTerminateReply::TerminateLater
     }
 

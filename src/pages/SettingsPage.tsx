@@ -22,6 +22,7 @@ import { gcOrphanAttachments, migrateInlineImages } from "@/lib/attachments";
 import { DEFAULT_MCP_TOKEN, mcpGetConfig, mcpSetConfig } from "@/lib/mcp";
 import { useSkin, SKINS } from "@/lib/theme";
 import { cn } from "@/lib/utils";
+import { toolPaths, type ToolPath } from "@/lib/git";
 import { dbCheckVersion, type VersionReport } from "@/lib/version";
 
 export function SettingsPage() {
@@ -31,6 +32,14 @@ export function SettingsPage() {
   const [mcpToken, setMcpToken] = React.useState(DEFAULT_MCP_TOKEN);
   const [mcpShowToken, setMcpShowToken] = React.useState(false);
   const [mcpSaving, setMcpSaving] = React.useState(false);
+  const [tools, setTools] = React.useState<ToolPath[]>([]);
+  const [toolError, setToolError] = React.useState("");
+  React.useEffect(() => {
+    let alive = true;
+    void toolPaths().then(value => { if (alive) setTools(value); })
+      .catch(error => { if (alive) setToolError(String(error)); });
+    return () => { alive = false; };
+  }, []);
   const [version, setVersion] = React.useState<VersionReport | null>(null);
 
   React.useEffect(() => {
@@ -244,7 +253,14 @@ export function SettingsPage() {
               数据由更高版本创建或版本过旧时拒绝打开并提示（见设置页顶部错误页）。
             </p>
             <p>• 浏览器预览模式无本地存储（演示数据只读），完整功能仅桌面端。</p>
-            <p>• Git 操作依赖本机 <code>git</code>（PATH，版本 ≥ 2.20）；GitLab 远端增强可选系统 <code>curl</code>。</p>
+            <p>• Git 操作依赖本机 Git ≥ 2.20；GitLab 接口使用系统 curl。</p>
+            {tools.map(tool => <div key={tool.name} className="rounded-lg border p-3">
+              <p className="font-medium text-foreground">{tool.name} · {tool.available ? "已定位" : "路径不可用"}</p>
+              <code className="block break-all text-xs">{tool.path}</code>
+              <p className="mt-1 text-xs">来源：{tool.source}；仅检查路径，未验证运行结果。</p>
+            </div>)}
+            {toolError && <p role="alert" className="text-destructive">工具路径读取失败：{toolError}</p>}
+            <p className="text-xs">可通过 TODO_KANBAN_GIT_PATH / TODO_KANBAN_CURL_PATH 环境变量指定绝对路径；设置后需重启应用。macOS 在 PATH 中找不到工具时会查询系统及 Homebrew 常用目录。</p>
             <div>
               • 软件版本 <Badge variant="secondary">{version?.softwareVersion ?? "2.0.0"}</Badge>（泳道看板） 当前主题皮肤：
               <Badge variant="outline" className="ml-1">{SKINS.find((s) => s.id === skin)?.name}</Badge>

@@ -16,10 +16,10 @@ pub struct McpConfig {
 
 static CONFIG: Mutex<Option<McpConfig>> = Mutex::new(None);
 
-pub fn set(config: McpConfig) {
-    if let Ok(mut g) = CONFIG.lock() {
-        *g = Some(config);
-    }
+pub fn set(config: McpConfig) -> Result<(), String> {
+    let mut current = CONFIG.lock().map_err(|_| "MCP 配置锁不可用".to_string())?;
+    *current = Some(config);
+    Ok(())
 }
 
 pub fn get() -> Option<McpConfig> {
@@ -27,52 +27,65 @@ pub fn get() -> Option<McpConfig> {
 }
 
 /// 解析命令行与环境变量
-pub fn parse(args: &[String]) -> McpConfig {
-    let mut dir: Option<PathBuf> = None;
-    let mut i = 0;
-    while i < args.len() {
-        if args[i] == "--db-config" && i + 1 < args.len() {
-            // 指定包含 todo-kanban.db 的目录
-            dir = Some(PathBuf::from(&args[i + 1]));
-            i += 2;
-        } else {
-            i += 1;
+pub fn parse(args: &[String]) -> Result<McpConfig, String> {
+    let mut dir = None;
+    let mut token = None;
+    let mut cli_readonly = false;
+    let mut index = 1;
+    while index < args.len() {
+        let flag = args[index].as_str();
+        match flag {
+            "--readonly" => {
+                cli_readonly = true;
+                index += 1;
+            }
+            "--db-config" | "--token" => {
+                let value = args
+                    .get(index + 1)
+                    .filter(|value| !value.trim().is_empty() && !value.starts_with("--"))
+                    .ok_or_else(|| format!("{flag} 缺少参数值"))?;
+                if flag == "--db-config" {
+                    if dir.is_some() {
+                        return Err("--db-config 不能重复".into());
+                    }
+                    dir = Some(PathBuf::from(value));
+                } else {
+                    if token.is_some() {
+                        return Err("--token 不能重复".into());
+                    }
+                    token = Some(value.clone());
+                }
+                index += 2;
+            }
+            _ => return Err("存在未知命令行选项；仅支持 --db-config、--token、--readonly".into()),
         }
     }
     if dir.is_none() {
-        // 环境变量同样指定目录（非文件）
-        if let Ok(v) = std::env::var("MCP_TODO_DB_CONFIG") {
-            if !v.trim().is_empty() {
-                dir = Some(PathBuf::from(v));
-            }
-        }
-    }
-    let readonly = std::env::var("MCP_TODO_READONLY")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
-    // --token <key> 或环境变量 MCP_TODO_TOKEN（设置页授权 Token，默认 sk-GLOBAl_MCP_BY_ADMIN）
-    let mut token: Option<String> = None;
-    i = 0;
-    while i < args.len() {
-        if args[i] == "--token" && i + 1 < args.len() {
-            token = Some(args[i + 1].clone());
-            i += 2;
-        } else {
-            i += 1;
-        }
+        dir = std::env::var("MCP_TODO_DB_CONFIG")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .map(PathBuf::from);
     }
     if token.is_none() {
-        if let Ok(v) = std::env::var("MCP_TODO_TOKEN") {
-            if !v.trim().is_empty() {
-                token = Some(v);
-            }
-        }
+        token = std::env::var("MCP_TODO_TOKEN")
+            .ok()
+            .filter(|value| !value.trim().is_empty());
     }
-    McpConfig {
+    let readonly_setting = match std::env::var("MCP_TODO_READONLY") {
+        Ok(value) => value,
+        Err(std::env::VarError::NotPresent) => String::new(),
+        Err(_) => return Err("MCP_TODO_READONLY 编码无效，请使用 0/1/false/true".into()),
+    };
+    let readonly = match readonly_setting.trim().to_ascii_lowercase().as_str() {
+        "" | "0" | "false" => cli_readonly,
+        "1" | "true" => true,
+        _ => return Err("MCP_TODO_READONLY 仅接受 0/1/false/true".into()),
+    };
+    Ok(McpConfig {
         db_config_dir: dir,
         readonly,
         token,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -81,7 +94,7 @@ mod tests {
 
     #[test]
     fn parse_args_ok() {
-        let cfg = parse(&["mcp-server".into(), "--db-config".into(), "C:/data".into()]);
+        let cfg = parse(&["mcp-server".into(), "--db-config".into(), "C:/data".into()]).unwrap();
         assert_eq!(cfg.db_config_dir, Some(PathBuf::from("C:/data")));
         assert!(!cfg.readonly);
         assert!(cfg.token.is_none());
@@ -93,7 +106,8 @@ mod tests {
             "mcp-server".into(),
             "--token".into(),
             "sk-GLOBAl_MCP_BY_ADMIN".into(),
-        ]);
+        ])
+        .unwrap();
         assert_eq!(cfg.token.as_deref(), Some("sk-GLOBAl_MCP_BY_ADMIN"));
     }
 }

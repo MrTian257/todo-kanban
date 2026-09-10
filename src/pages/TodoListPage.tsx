@@ -11,6 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { RefreshCommitsButton } from "@/components/board/RefreshCommitsButton";
 import { EmptyState } from "@/components/board/EmptyState";
 import { VirtualTodoList } from "@/components/todo/VirtualTodoList";
 import { Input } from "@/components/ui/input";
@@ -55,6 +56,7 @@ export function TodoListPage() {
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <h1 className="tk-page-heading">全部待办</h1>
         <div className="ml-auto flex flex-wrap items-center gap-2">
+          <RefreshCommitsButton todoIds={list.map(todo => todo.id)} label="刷新当前结果" />
           <Select value={status} onValueChange={setStatus}>
             <SelectTrigger className="h-8 w-32">
               <SelectValue placeholder="状态" />

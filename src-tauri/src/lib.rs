@@ -82,7 +82,17 @@ pub fn run() {
         None => vec![Target::new(TargetKind::Stdout)],
     };
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        use tauri::Manager;
+        if let Some(window) = app.get_webview_window("main") {
+            if let Err(error) = window.show().and_then(|_| window.unminimize()).and_then(|_| window.set_focus()) {
+                log::warn!("唤醒主窗口失败：{error}");
+            }
+        }
+    }));
+    builder
         .on_window_event(desktop::on_window_event)
         .plugin(
             tauri_plugin_log::Builder::new()
@@ -124,6 +134,7 @@ pub fn run() {
             desktop::finish_quit,
             desktop::cancel_quit,
             desktop::arm_quit_protection,
+            commands::tool_paths,
             commands::git_info,
             commands::git_info_refresh,
             commands::git_info_remote,
@@ -131,9 +142,11 @@ pub fn run() {
             commands::git_create_branch_from,
             commands::git_checkout_branch,
             commands::git_sync_commits,
+            commands::git_sync_commits_batch,
             commands::git_commits_between,
             commands::git_commit_info,
             commands::db_load_state,
+            commands::db_poll_state,
             commands::db_save_state,
             commands::mcp_get_config,
             commands::mcp_set_config,

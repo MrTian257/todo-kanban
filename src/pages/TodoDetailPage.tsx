@@ -43,7 +43,7 @@ const schema = z
     title: z.string().trim().min(1, "标题必填"),
     note: z.string(),
     repoPath: z.string().min(1, "请选择代码目录"),
-    branch: z.string().min(1, "请选择分支"),
+    branch: z.string().trim(),
     createBranch: z.boolean(),
     newBranchName: z.string(),
     branchFrom: z.string(),
@@ -82,7 +82,9 @@ function TodoDetailForm() {
   const { projectId = "", todoId = "new" } = useParams();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const { projects, todos, upsertTodo } = useAppStore();
+  const projects = useAppStore(state => state.projects);
+  const todos = useAppStore(state => state.todos);
+  const upsertTodo = useAppStore(state => state.upsertTodo);
   const project = projects.find((p) => p.id === projectId);
   const isNew = todoId === "new";
   const editing = isNew ? null : todos.find((t) => t.id === todoId);
@@ -100,7 +102,7 @@ function TodoDetailForm() {
       title: editing?.title ?? "",
       note: editing?.note ?? "",
       repoPath: editing?.repoPath ?? (project?.frontendDir || project?.backendDir || project?.projectDir || ""),
-      branch: editing?.branch ?? project?.productionBranch ?? "",
+      branch: editing?.branch ?? "",
       createBranch: false,
       newBranchName: "",
       branchFrom: project?.productionBranch ?? "",
@@ -162,12 +164,12 @@ function TodoDetailForm() {
   }, [editing, isDirty, isSubmitting, reset]);
   React.useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const saveDraft = () => {
+    const saveDraft = (event?: Event) => {
       if (!dirtyRef.current || finishedSave.current) return;
       try {
         localStorage.setItem(draftKey, JSON.stringify(getValues()));
         setDraftError("");
-      } catch { setDraftError("草稿写入失败（可能空间不足），请复制内容后再离开。"); }
+      } catch { event?.preventDefault(); setDraftError("草稿写入失败（可能空间不足），请复制内容后再离开。"); }
     };
     const subscription = watch(() => { clearTimeout(timer); timer = setTimeout(saveDraft, 500); });
     window.addEventListener("pagehide", saveDraft);
@@ -472,14 +474,16 @@ function TodoDetailForm() {
           </div>
 
           <div className="space-y-2">
-            <Label>任务关联分支</Label>
+            <Label>任务关联分支（可选）</Label>
             <BranchSelect
               branches={gitInfo?.branches ?? []}
+              placeholder="不指定分支（查询全部分支）"
               value={branchValue}
               onChange={(b) => setValue("branch", b, {shouldDirty:true,shouldValidate:true})}
               productionBranch={project.productionBranch || undefined}
               currentBranch={gitInfo?.current_branch}
             />
+            {branchValue && <button type="button" className="text-xs text-muted-foreground hover:text-primary" onClick={() => setValue("branch", "", {shouldDirty:true,shouldValidate:true})}>清空分支</button>}
             {errors.branch && <p className="text-xs text-destructive">{errors.branch.message}</p>}
             <div className="flex items-center gap-2 pt-1">
               <Checkbox

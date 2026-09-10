@@ -46,7 +46,7 @@ export async function gitCheckoutBranch(repo: string, branch: string): Promise<v
   await invoke("git_checkout_branch", { repo, branch });
 }
 
-/** 同步提交：可选 branch=参考分支（来源三分类标注的基准），缺省由后端回退当前检出分支 */
+/** 同步提交：可选 branch=参考分支（来源三分类标注的基准），缺省不做分支来源标注 */
 export async function gitSyncCommits(repo: string, tag: string, branch?: string): Promise<CommitInfo[]> {
   if (!isTauri()) throw new Error("非桌面环境，git 能力不可用");
   return invoke<CommitInfo[]>("git_sync_commits", { repo, tag, branch: branch ?? null });
@@ -99,4 +99,20 @@ export async function gitInfoCached(repo: string): Promise<GitInfo> {
 /** 分支写操作成功后失效（前端缓存 + 后端缓存由命令侧失效） */
 export function invalidateGitInfo(repo: string) {
   cache.delete(keyOf(repo));
+}
+export interface CommitBatchResult {
+  id: string;
+  commits: CommitInfo[];
+  source: "api" | "local";
+  warning: string | null;
+  error: string | null;
+}
+export async function gitSyncCommitsBatch(repo: string, requests: { id: string; tag: string; branch: string }[]): Promise<CommitBatchResult[]> {
+  if (!isTauri()) throw new Error("非桌面环境，git 能力不可用");
+  return invoke("git_sync_commits_batch", { repo, requests });
+}
+
+export interface ToolPath { name: string; path: string; source: string; available: boolean }
+export async function toolPaths(): Promise<ToolPath[]> {
+  return isTauri() ? tauriInvoke<ToolPath[]>("tool_paths") : [];
 }

@@ -109,6 +109,24 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
+  // 窗口失焦只弱化工具栏和导航，不降低正文可读性。
+  React.useEffect(() => {
+    if (!isMacOS) return;
+    let alive = true;
+    let stop: (() => void) | undefined;
+    const setFocused = (focused: boolean) => {
+      if (alive) document.documentElement.dataset.windowFocused = String(focused);
+    };
+    if (isTauri()) {
+      const window = getCurrentWindow();
+      void window.isFocused().then(setFocused).catch(() => {});
+      void window.onFocusChanged(({ payload }) => setFocused(payload))
+        .then(unlisten => { if (alive) stop = unlisten; else unlisten(); })
+        .catch(() => {});
+    }
+    return () => { alive = false; stop?.(); delete document.documentElement.dataset.windowFocused; };
+  }, []);
+
   // ── 侧栏宽度拖拽（Pointer Events + 指针捕获）────────────
   const onResizeStart = (e: React.PointerEvent) => {
     e.preventDefault();
@@ -153,9 +171,9 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
   const appWindow = isTauri() ? getCurrentWindow() : null;
 
   return (
-    <div className="flex h-full w-full flex-col">
+    <div className="tk-desktop-shell flex h-full w-full flex-col">
       {/* 顶栏：无边框窗口标题栏（左：折叠切换 · 中：拖动区 · 右：窗口控制） */}
-      <header className="flex h-10 shrink-0 items-center justify-between border-b bg-background pl-1.5 pr-1">
+      <header className="tk-desktop-toolbar flex h-10 shrink-0 items-center justify-between border-b bg-background pl-1.5 pr-1">
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
@@ -172,13 +190,16 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
           <TooltipContent>{collapsed ? "展开侧栏" : "收起侧栏"}</TooltipContent>
         </Tooltip>
 
-        <form className="mx-2 flex w-full min-w-0 max-w-sm items-center gap-1" onSubmit={event => { event.preventDefault(); navigate(`/todos?q=${encodeURIComponent(search)}`); }}>
+        {isMacOS && <div data-tauri-drag-region className="tk-toolbar-title h-full min-w-0 flex-1 flex items-center truncate px-3 text-sm font-semibold">
+          {location.pathname.startsWith("/project/") ? "项目工作台" : location.pathname === "/settings" ? "设置" : NAV_ITEMS.find(item => location.pathname.startsWith(item.to))?.label ?? "工作台"}
+        </div>}
+        <form className="tk-toolbar-search mx-2 flex w-full min-w-0 max-w-sm items-center gap-1" onSubmit={event => { event.preventDefault(); navigate(`/todos?q=${encodeURIComponent(search)}`); }}>
           <Input ref={searchRef} aria-label="全局搜索" value={search} onChange={event => setSearch(event.target.value)} placeholder={`搜索任务 · ${(isMacOS ? "⌘⇧F" : shortcutLabel("K"))}`} className="h-7 min-w-0 text-xs" />
           <Button type="submit" variant="ghost" size="icon" className="h-7 w-7" aria-label="搜索"><Search className="h-3.5 w-3.5" /></Button>
         </form>
 
         {/* 拖动区：点击穿透到窗口移动；双击切换最大化（Tauri 内建） */}
-        <div data-tauri-drag-region className="h-full min-w-0 flex-1" />
+        <div data-tauri-drag-region className={cn("h-full min-w-0 flex-1", isMacOS && "hidden")} />
 
         {appWindow && !isMacOS && (
           <div className="flex shrink-0 items-center gap-0.5">
@@ -236,7 +257,7 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
         {/* 侧栏 */}
         <aside
           className={cn(
-            "flex h-full shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground",
+            "tk-desktop-sidebar flex h-full shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground",
             !resizing && "transition-[width] duration-150",
             narrow && mobileExpanded && "fixed bottom-0 left-0 top-10 z-40 shadow-xl",
           )}
@@ -252,12 +273,15 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
             {!collapsed && <span className="truncate text-base font-semibold tracking-tight">todo-kanban</span>}
           </button>
 
-          <nav className="flex-1 space-y-2 overflow-y-auto p-2">
+          {isMacOS && !collapsed && <p className="px-5 pb-2 pt-3 text-[11px] font-medium text-muted-foreground">工作空间</p>}
+          <nav aria-label="主导航" className="flex-1 space-y-2 overflow-y-auto p-2">
             {NAV_ITEMS.map(({ to, label, icon: Icon }) => (
               <NavLink
                 key={to}
                 to={to}
                 title={label}
+                aria-label={label}
+                data-selected={location.pathname.startsWith(to) || (to === "/projects" && location.pathname.startsWith("/project/"))}
                 className={({ isActive }) =>
                   cn(
                     "flex items-center gap-2.5 rounded-md px-3 py-3 text-sm transition-colors",
@@ -339,7 +363,7 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
         )}
 
         {/* 内容区 */}
-        <main className="flex h-full min-w-0 flex-1 flex-col">{children}</main>
+        <main className="tk-desktop-content flex h-full min-w-0 flex-1 flex-col">{children}</main>
       </div>
     </div>
   );

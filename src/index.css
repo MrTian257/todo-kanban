@@ -4,7 +4,7 @@
 @custom-variant dark (&:is(.dark *));
 
 /* ── 基底：工程图纸（engineering ledger）───────────────────
-   微暖纸白 × 钢青，IBM Plex 双声部（sans 讲人话 / mono 唱数据）。
+   微暖纸白 × 钢青，中文系统字体与编程等宽字体。
    皮肤机制与明暗正交，见 [data-theme]。 */
 
 :root {
@@ -162,8 +162,8 @@
   --color-node-doing: var(--node-doing);
   --color-node-done: var(--node-done);
   --color-rail: var(--rail);
-  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, "Microsoft YaHei", sans-serif;
-  --font-mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  --font-sans: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", "WenQuanYi Micro Hei", sans-serif;
+  --font-mono: "IBM Plex Mono", "JetBrains Mono", "Cascadia Code", Consolas, Menlo, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", monospace;
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -349,3 +349,48 @@ input, textarea, select, button { font-family: inherit; }
 .dark input:not([type="checkbox"]):not([type="radio"]), .dark textarea, .dark select { color: var(--foreground); }
 .dark select { background-color: var(--background); }
 .dark input::placeholder, .dark textarea::placeholder { color: var(--muted-foreground); opacity: 1; }
+
+/* 编辑器与预览统一字体，避免内容主题引入其他字体栈。 */
+.vditor-reset, .md-editor { font-family: var(--font-sans); }
+.vditor-reset code, .vditor-reset pre, .md-editor code, .md-editor pre { font-family: var(--font-mono); }
+
+/* macOS 桌面：保留系统标题栏，应用工具栏使用紧凑的原生式层次。 */
+:root[data-platform="macos"] .tk-desktop-shell { --tk-toolbar-height: 48px; }
+:root[data-platform="macos"] .tk-desktop-toolbar {
+  height: var(--tk-toolbar-height); padding-inline: 10px; gap: 4px;
+  background: color-mix(in oklch, var(--muted) 62%, var(--background));
+  user-select: none; -webkit-user-select: none;
+}
+:root[data-platform="macos"] .tk-toolbar-search { max-width: 300px; }
+:root[data-platform="macos"] .tk-toolbar-search input {
+  height: 30px; border-radius: 8px; font-size: 13px;
+  background: var(--background); box-shadow: inset 0 1px 2px #00000005;
+}
+:root[data-platform="macos"] .tk-desktop-sidebar {
+  background: color-mix(in oklch, var(--sidebar) 75%, var(--muted));
+}
+:root[data-platform="macos"] .tk-desktop-sidebar.fixed { top: var(--tk-toolbar-height); }
+:root[data-platform="macos"] .tk-desktop-sidebar nav { padding-inline: 10px; }
+:root[data-platform="macos"] .tk-desktop-sidebar nav a { padding-block: 9px; border-radius: 7px; font-size: 13px; }
+:root[data-platform="macos"] .tk-desktop-sidebar nav a[data-selected="true"] {
+  background: color-mix(in oklch, var(--primary) 14%, var(--sidebar)); color: var(--primary);
+}
+:root[data-platform="macos"] .tk-desktop-content { background: var(--background); }
+:root[data-platform="macos"] .tk-page { padding: 18px 20px; }
+:root[data-platform="macos"] .tk-page-heading { font-size: 24px; letter-spacing: -.025em; }
+:root[data-platform="macos"] .tk-panel { border-radius: 10px; box-shadow: 0 1px 3px #00000005; }
+:root[data-platform="macos"] .tk-task-row { padding: 15px 18px; }
+:root[data-platform="macos"] [role="dialog"] {
+  border-radius: 14px; max-height: calc(100dvh - 40px); width: calc(100vw - 40px);
+  box-shadow: 0 18px 60px #00000028, 0 0 0 1px #00000008;
+}
+:root[data-platform="macos"] [role="dialog"] h2 { letter-spacing: -.015em; }
+:root[data-platform="macos"][data-window-focused="false"] .tk-toolbar-title { color: var(--muted-foreground); }
+:root[data-platform="macos"][data-window-focused="false"] .tk-desktop-sidebar nav a[data-selected="true"] {
+  background: var(--muted); color: var(--foreground);
+}
+@media (max-width: 700px) {
+  :root[data-platform="macos"] .tk-page { padding: 12px; }
+  :root[data-platform="macos"] .tk-toolbar-title { display: none; }
+  :root[data-platform="macos"] .tk-toolbar-search { max-width: none; }
+}

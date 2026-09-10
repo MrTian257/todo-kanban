@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { GitBranch, Pencil, Plus, Search, Settings2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { RefreshCommitsButton } from "@/components/board/RefreshCommitsButton";
 import { SwimlaneBoard } from "@/components/board/SwimlaneBoard";
 import { ProjectFormDialog } from "@/components/project/ProjectFormDialog";
 import { SwimlaneManageDialog } from "@/components/project/SwimlaneManageDialog";
@@ -33,6 +34,7 @@ export function BoardPage() {
       </div>
 
       <div className="ml-auto flex flex-wrap gap-2">
+        <RefreshCommitsButton todoIds={todos.filter(t => t.projectId === project.id && !t.archived).map(t => t.id)} />
         <Button variant="outline" className="gap-2 bg-card" onClick={() => setManage(true)}><Settings2 className="h-4 w-4" />管理泳道</Button>
         <Button variant="outline" className="gap-2 bg-card" onClick={() => setEdit(true)}><Pencil className="h-4 w-4" />编辑项目</Button>
         <Button className="gap-2" onClick={() => navigate(`/project/${project.id}/todo/new`)}><Plus className="h-4 w-4" />新建待办</Button>

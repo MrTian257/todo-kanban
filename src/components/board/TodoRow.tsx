@@ -1,3 +1,4 @@
+import { refreshCommits } from "@/lib/refreshCommits";
 import { shortcutLabel } from "@/lib/platform";
 import { deleteWithUndo } from "@/lib/deleteWithUndo";
 // 泳道看板行：列=泳道、行=待办。支持开始/完成(自动补录)/重开/归档/切分支/打开目录/同步提交/补录/手动加提交(多行批量)/复制标记/编辑/删除；
@@ -61,7 +62,6 @@ import {
   gitCheckoutBranch,
   gitCommitInfo,
   gitInfoCached,
-  gitSyncCommits,
   invalidateGitInfo,
 } from "@/lib/git";
 import { MarkdownView } from "@/components/todo/MarkdownView";
@@ -100,10 +100,22 @@ interface Props {
   showProjectName?: boolean;
 }
 
-export function TodoRow({ todo, projectName, showProjectName, variant = "list" }: Props) {
+export const TodoRow = React.memo(function TodoRow({ todo, projectName, showProjectName, variant = "list" }: Props) {
   const navigate = useNavigate();
-  const { todos, projects, patchTodo, moveTodo } = useAppStore();
-  const lanes = [...(projects.find(p=>p.id===todo.projectId)?.swimlanes ?? [])].sort((a,b)=>a.sortOrder-b.sortOrder);
+  const project = useAppStore(state => state.projects.find(p => p.id === todo.projectId));
+  const patchTodo = useAppStore(state => state.patchTodo);
+  const moveTodo = useAppStore(state => state.moveTodo);
+  const lanes = React.useMemo(() => [...(project?.swimlanes ?? [])].sort((a, b) => a.sortOrder - b.sortOrder), [project?.swimlanes]);
+  // 异步结果只应用到原任务和原项目，避免覆盖期间发生的编辑或删除。
+  const applyResult = (patch: Partial<Todo>) => {
+    const state = useAppStore.getState();
+    const latest = state.todos.find(item => item.id === todo.id);
+    const latestProject = state.projects.find(item => item.id === todo.projectId);
+    if (JSON.stringify(latest) !== JSON.stringify(todo) || JSON.stringify(latestProject) !== JSON.stringify(project)) {
+      throw new Error("待办或项目已发生变化，本次结果未写入，请重新操作。");
+    }
+    patchTodo(todo.id, patch);
+  };
   const [addCommitOpen, setAddCommitOpen] = React.useState(false);
   const [addText, setAddText] = React.useState("");
   const [expanded, setExpanded] = React.useState(false);
@@ -119,10 +131,10 @@ export function TodoRow({ todo, projectName, showProjectName, variant = "list" }
   const complete = async () => {
     setBusy("complete");
     try {
-    const updated = await autoRecaptureOnDone(todo, todo.repoPath, todo.branch, todos);
-    patchTodo(todo.id, { status: "done", doneAt: updated.doneAt, commits: updated.commits });
+    const updated = await autoRecaptureOnDone(todo, todo.repoPath, todo.branch, useAppStore.getState().todos);
+    applyResult({ status: "done", doneAt: updated.doneAt, commits: dedupeCommitsForTodo(updated, useAppStore.getState().todos).commits });
     await flushPersistence();
-    toast.success("已完成并自动补录提交");
+    toast.success("已完成");
     } catch (error) { toast.error(String(error)); } finally { setBusy(null); }
   };
   const reopen = () => patchTodo(todo.id, { status: "todo", startedAt: null, doneAt: null });
@@ -136,7 +148,7 @@ export function TodoRow({ todo, projectName, showProjectName, variant = "list" }
     try {
       await gitCheckoutBranch(todo.repoPath, branch);
       invalidateGitInfo(todo.repoPath);
-      patchTodo(todo.id, { branch });
+      applyResult({ branch });
       await flushPersistence();
       toast.success(`已检出 ${branch}`);
     } catch (e) {
@@ -168,13 +180,11 @@ export function TodoRow({ todo, projectName, showProjectName, variant = "list" }
     if (!todo.repoPath || !todo.tag) return toast.error("未绑定代码目录或标记");
     setBusy("sync");
     try {
-      // 以任务分支为参考分支做来源三分类标注（原生/合并进来/剪切进来/不在分支上）
-      const commits = await gitSyncCommits(todo.repoPath, todo.tag, todo.branch);
-      // 同一 hash 只能归属一条待办：剔除已被其它待办占用的提交（与完成/补录路径同规则）
-      const merged = [...commits.filter((c) => !todo.commits.some((x) => x.hash === c.hash)), ...todo.commits];
-      patchTodo(todo.id, { commits: dedupeCommitsForTodo({ ...todo, commits: merged }, todos).commits });
-      await flushPersistence();
-      toast.success(`同步到 ${commits.length} 条提交`);
+      const result = await refreshCommits([todo.id]);
+      if (result.failures.length) throw new Error(result.failures[0].error);
+      if (result.skipped) toast.info("任务已发生变化或缺少目录/标记，本次跳过，请重新刷新");
+      else if (result.warnings.length) toast.warning(`刷新完成，新增 ${result.added} 条提交`, { description: result.warnings.join("；") });
+      else toast.success(`刷新完成，新增 ${result.added} 条提交`);
     } catch (e) {
       toast.error(String(e));
     } finally {
@@ -183,11 +193,11 @@ export function TodoRow({ todo, projectName, showProjectName, variant = "list" }
   };
 
   const doRecapture = async () => {
-    if (!todo.repoPath || !todo.branch) return toast.error("未绑定代码目录或分支");
+    if (!todo.repoPath) return toast.error("未绑定代码目录");
     setBusy("recapture");
     try {
-      const updated = await recapture(todo, todo.repoPath, todo.branch, todos);
-      patchTodo(todo.id, { commits: updated.commits });
+      const updated = await recapture(todo, todo.repoPath, todo.branch, useAppStore.getState().todos);
+      applyResult({ commits: dedupeCommitsForTodo(updated, useAppStore.getState().todos).commits });
       await flushPersistence();
       toast.success("已按时间窗补录");
     } catch (error) { toast.error(String(error)); } finally { setBusy(null); }
@@ -216,7 +226,7 @@ export function TodoRow({ todo, projectName, showProjectName, variant = "list" }
       }
       if (added.length > 0) {
         const merged = [...added, ...todo.commits];
-        patchTodo(todo.id, { commits: dedupeCommitsForTodo({ ...todo, commits: merged }, todos).commits });
+        applyResult({ commits: dedupeCommitsForTodo({ ...todo, commits: merged }, useAppStore.getState().todos).commits });
         await flushPersistence();
       }
       const summary = [`新增 ${added.length}`, duplicated > 0 ? `重复 ${duplicated}` : "", failed.length > 0 ? `失败 ${failed.length}` : ""].filter(Boolean).join("、");
@@ -252,7 +262,7 @@ export function TodoRow({ todo, projectName, showProjectName, variant = "list" }
       label: l.name,
       disabled: l.id === todo.swimlaneId,
       onSelect: () =>
-        moveTodo(todo.projectId, todo.id, l.id, todos.filter((t) => t.projectId === todo.projectId && t.swimlaneId === l.id && !t.archived).length),
+        moveTodo(todo.projectId, todo.id, l.id, useAppStore.getState().todos.filter((t) => t.projectId === todo.projectId && t.swimlaneId === l.id && !t.archived).length),
     }));
     return [
       { label: expanded ? "收起详情" : "展开详情", icon: GitCommitHorizontal, onSelect: () => setExpanded((v) => !v) },
@@ -362,7 +372,7 @@ export function TodoRow({ todo, projectName, showProjectName, variant = "list" }
                 <CheckCircle2 className={cn("h-3.5 w-3.5", busy === "complete" ? "animate-pulse text-emerald-500" : "text-emerald-500")} />
               </Button>
             </TooltipTrigger>
-            <TooltipContent>完成（自动补录提交）</TooltipContent>
+            <TooltipContent>{todo.repoPath.trim() && todo.branch.trim() ? "完成（自动补录该分支提交）" : "完成（不自动记录提交）"}</TooltipContent>
           </Tooltip>
         ) : (
           <Tooltip>
@@ -402,7 +412,7 @@ export function TodoRow({ todo, projectName, showProjectName, variant = "list" }
             <DropdownMenuItem onClick={() => setAddCommitOpen(true)}>
               <Plus className="h-3.5 w-3.5" /> 手动添加提交
             </DropdownMenuItem>
-            <DropdownMenuSub><DropdownMenuSubTrigger>移动到泳道</DropdownMenuSubTrigger><DropdownMenuSubContent>{lanes.map(l=><DropdownMenuItem key={l.id} disabled={l.id===todo.swimlaneId} onClick={()=>moveTodo(todo.projectId,todo.id,l.id,todos.filter(t=>t.projectId===todo.projectId&&t.swimlaneId===l.id&&!t.archived).length)}>{l.name}</DropdownMenuItem>)}</DropdownMenuSubContent></DropdownMenuSub>
+            <DropdownMenuSub><DropdownMenuSubTrigger>移动到泳道</DropdownMenuSubTrigger><DropdownMenuSubContent>{lanes.map(l=><DropdownMenuItem key={l.id} disabled={l.id===todo.swimlaneId} onClick={()=>moveTodo(todo.projectId,todo.id,l.id,useAppStore.getState().todos.filter(t=>t.projectId===todo.projectId&&t.swimlaneId===l.id&&!t.archived).length)}>{l.name}</DropdownMenuItem>)}</DropdownMenuSubContent></DropdownMenuSub>
             <DropdownMenuSeparator />
             <DropdownMenuItem className="text-destructive" onClick={del}>
               <Trash2 className="h-3.5 w-3.5" /> 删除
@@ -455,4 +465,4 @@ export function TodoRow({ todo, projectName, showProjectName, variant = "list" }
       </Dialog>
     </div>
   );
-}
+});

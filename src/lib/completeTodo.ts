@@ -1,4 +1,4 @@
-// 完成时自动补录：抓取「创建待办之后 ~ 完成时间」之间指定分支上的提交（committer date 过滤）
+// 完成时仅在指定代码目录和分支后自动补录该分支的提交（committer date 过滤）
 
 import { gitCommitsBetween } from "./git";
 import { Todo } from "./types";
@@ -25,33 +25,31 @@ function dedupeById(commits: Todo["commits"]): Todo["commits"] {
   });
 }
 
-/** 完成时自动补录 [createdAt ~ doneAt]；repo/branch 无效时静默返回原值 */
+/** 完成时自动补录 [createdAt ~ doneAt]；无目录或分支时仅标记完成，保留已有提交 */
 export async function autoRecaptureOnDone(
   todo: Todo,
   repoPath: string,
   branch: string,
   allTodos: Todo[],
 ): Promise<Todo> {
-  if (!repoPath || !branch) return todo;
+  const doneAt = Date.now();
+  const completed: Todo = { ...todo, status: "done", doneAt, updatedAt: doneAt };
+  if (!repoPath.trim() || !branch.trim()) return completed;
   try {
-    const commits = await gitCommitsBetween(repoPath, branch, toIso(todo.createdAt), toIso(Date.now()));
-    const updated: Todo = {
-      ...todo,
-      status: "done",
-      doneAt: Date.now(),
+    const commits = await gitCommitsBetween(repoPath, branch.trim(), toIso(todo.createdAt), toIso(doneAt));
+    return dedupeCommitsForTodo({
+      ...completed,
       commits: mergeCommits(todo.commits, commits),
-      updatedAt: Date.now(),
-    };
-    return dedupeCommitsForTodo(updated, allTodos);
+    }, allTodos);
   } catch (e) {
     console.error("完成自动补录失败", e);
-    return { ...todo, status: "done", doneAt: Date.now(), updatedAt: Date.now() };
+    return completed;
   }
 }
 
 /** 按时间窗补录：恒从创建起、until 为最新时刻 */
 export async function recapture(todo: Todo, repoPath: string, branch: string, allTodos: Todo[]): Promise<Todo> {
-  if (!repoPath || !branch) return todo;
+  if (!repoPath) return todo;
   try {
     const commits = await gitCommitsBetween(repoPath, branch, toIso(todo.createdAt), toIso(Date.now()));
     const updated: Todo = {

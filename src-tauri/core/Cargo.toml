@@ -13,3 +13,12 @@ log = "0.4"
 uuid = { version = "1", features = ["v4"] }
 base64 = "0.22"
 todo-kanban-upgrade = { path = "../upgrade" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "=3.6.3", features = ["apple-native"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "=3.6.3", features = ["windows-native"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "=3.6.3", features = ["sync-secret-service", "crypto-rust", "vendored"] }
