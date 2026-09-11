@@ -14,11 +14,16 @@ function MeasuredRow({ todo, name, measure }: { todo: Todo; name?: string; measu
   return <div ref={ref} role="listitem"><TodoRow todo={todo} projectName={name} showProjectName /></div>;
 }
 
-export function VirtualTodoList({ todos, projects }: { todos: Todo[]; projects: Map<string, Project> }) {
+export function VirtualTodoList({ todos, projects, resetKey }: { todos: Todo[]; projects: Map<string, Project>; resetKey?: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState({ top: 0, height: 600 });
   const [pinned, setPinned] = useState<string | null>(null);
   const [heights, setHeights] = useState<Map<string, number>>(() => new Map());
+  useLayoutEffect(() => {
+    if (ref.current) ref.current.scrollTop = 0;
+    setPinned(null);
+    setViewport(previous => ({ ...previous, top: 0 }));
+  }, [resetKey]);
   const pendingHeights = useRef(new Map<string, number>());
   const measureFrame = useRef<number | null>(null);
   const scrollFrame = useRef<number | null>(null);

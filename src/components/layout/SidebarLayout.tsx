@@ -18,6 +18,7 @@ import {
   PanelLeftOpen,
   Settings,
   Square,
+  SquareKanban,
   Sun,
   FolderKanban,
   BookOpen,
@@ -32,6 +33,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { ProjectContextSwitcher } from "@/components/layout/ProjectContextSwitcher";
 
 const NAV_ITEMS = [
+  { to: "/workflow", label: "工作流", icon: SquareKanban },
   { to: "/focus", label: "今日焦点", icon: CalendarDays },
   { to: "/todos", label: "全部待办", icon: ListTodo },
   { to: "/projects", label: "项目资料", icon: FolderKanban },
@@ -159,7 +161,7 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
     let stop: (() => void) | undefined;
     void listen<string>("app-menu", ({ payload }) => {
       if (!alive) return;
-      if (["focus", "todos", "projects", "settings"].includes(payload)) navigate(`/${payload}`);
+      if (["focus", "todos", "projects", "settings", "workflow"].includes(payload)) navigate(`/${payload}`);
       else if (payload === "search") { searchRef.current?.focus(); searchRef.current?.select(); }
       else if (payload === "sidebar") {
         if (narrow) setMobileExpanded(value => !value);

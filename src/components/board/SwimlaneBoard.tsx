@@ -30,7 +30,6 @@ const collision: CollisionDetection = args => {
 type Target = {laneId:string; index:number};
 
 export function SwimlaneBoard({projectId, query = "", branch = ""}: {projectId:string; query?:string; branch?:string}) {
-  const navigate = useNavigate();
   const projects = useAppStore(s => s.projects), todos = useAppStore(s => s.todos);
   const moveTodo = useAppStore(s => s.moveTodo), saveSwimlanes = useAppStore(s => s.saveSwimlanes);
   const lanes = React.useMemo(() => [...(projects.find(p => p.id === projectId)?.swimlanes ?? [])].sort((a,b)=>a.sortOrder-b.sortOrder),[projects,projectId]);
@@ -67,7 +66,7 @@ export function SwimlaneBoard({projectId, query = "", branch = ""}: {projectId:s
   };
   const over = (e:DragMoveEvent) => {
     if (e.active.data.current?.kind === "lane") {setLaneOver(e.over ? String(e.over.id).slice(5):null);return;}
-    const next=locate(e);targetRef.current=next;setTarget(next);
+    const next=locate(e);targetRef.current=next;setTarget(previous => previous?.laneId === next?.laneId && previous?.index === next?.index ? previous : next);
   };
   const end = (e:DragEndEvent) => {
     if (e.over && active?.kind === "lane") saveSwimlanes(projectId,reorderLanes(lanes,active.id,String(e.over.id).slice(5)));
@@ -80,14 +79,16 @@ export function SwimlaneBoard({projectId, query = "", branch = ""}: {projectId:s
     {filtered && <p className="mb-2 text-xs text-muted-foreground">筛选结果中暂不调整任务顺序，清除筛选后即可拖拽。</p>}
     <div className="flex h-full items-stretch gap-5 overflow-x-auto" data-testid="kanban">
       <SortableContext items={lanes.map(l=>`lane:${l.id}`)} strategy={horizontalListSortingStrategy}>
-        {lanes.map(lane=><Lane key={lane.id} lane={lane} tasks={items.get(lane.id)??[]} activeId={active?.kind==="todo"?active.id:null} target={target?.laneId===lane.id?target:null} laneTarget={laneOver===lane.id && draggingLane?.id!==lane.id} disabled={filtered} onAdd={()=>navigate(`/project/${projectId}/todo/new?swimlane=${encodeURIComponent(lane.id)}`)} />)}
+        {lanes.map(lane=><Lane key={lane.id} lane={lane} tasks={items.get(lane.id)??[]} activeId={active?.kind==="todo"?active.id:null} target={target?.laneId===lane.id?target:null} laneTarget={laneOver===lane.id && draggingLane?.id!==lane.id} disabled={filtered} projectId={projectId} />)}
       </SortableContext>
       {lanes.length===0 && <div className="tk-panel flex-1 p-10 text-center text-muted-foreground">暂无泳道，请通过“管理泳道”添加。</div>}
     </div>
     <DragOverlay dropAnimation={null}>{draggingTask ? <div className="w-[280px] rotate-1 shadow-xl rounded-xl"><TodoRow todo={draggingTask} variant="card" /></div> : draggingLane ? <div className="tk-panel w-[300px] p-5 shadow-xl"><div className="flex gap-2 font-semibold"><GripVertical className="h-5 w-5 text-primary"/>{draggingLane.name}</div><p className="mt-2 text-xs text-muted-foreground">{items.get(draggingLane.id)?.length ?? 0} 个任务</p></div>:null}</DragOverlay>
   </DndContext>;
 }
-function Lane({lane,tasks,activeId,target,laneTarget,disabled,onAdd}:{lane:Swimlane;tasks:Todo[];activeId:string|null;target:Target|null;laneTarget:boolean;disabled:boolean;onAdd:()=>void}) {
+const Lane = React.memo(function Lane({lane,tasks,activeId,target,laneTarget,disabled,projectId}:{lane:Swimlane;tasks:Todo[];activeId:string|null;target:Target|null;laneTarget:boolean;disabled:boolean;projectId:string}) {
+  const navigate = useNavigate();
+  const onAdd = () => navigate(`/project/${projectId}/todo/new?swimlane=${encodeURIComponent(lane.id)}`);
   const sortable=useSortable({id:`lane:${lane.id}`,data:{kind:"lane",laneId:lane.id}});
   const body=useDroppable({id:`body:${lane.id}`,data:{kind:"body",laneId:lane.id},disabled});
   const destination=tasks.filter(t=>t.id!==activeId);
@@ -110,7 +111,7 @@ function Lane({lane,tasks,activeId,target,laneTarget,disabled,onAdd}:{lane:Swiml
     </div>
     <div className="mx-3 border-t py-2"><Button variant="ghost" className="w-full gap-2 text-xs text-muted-foreground" onClick={onAdd}><Plus className="h-3.5 w-3.5"/>添加任务</Button></div>
   </section>;
-}
+});
 function SortableTask({todo,disabled}:{todo:Todo;disabled:boolean}) {
   const s=useSortable({id:todo.id,data:{kind:"todo",laneId:todo.swimlaneId},disabled});
   return <div ref={s.setNodeRef} {...s.attributes} {...s.listeners} aria-label={`拖动任务 ${todo.title}`} style={{transform:CSS.Transform.toString(s.transform),transition:s.transition}} className={cn(!disabled&&"cursor-grab active:cursor-grabbing",s.isDragging&&"opacity-25")} data-task-id={todo.id}><TodoRow todo={todo} variant="card"/></div>;

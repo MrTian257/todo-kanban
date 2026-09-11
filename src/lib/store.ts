@@ -4,7 +4,7 @@
 
 import { moveTask } from "./boardOrder";
 import { create } from "zustand";
-import { AppState, LibraryResource, Project, Swimlane, Todo } from "./types";
+import { AppState, CommitInfo, LibraryResource, Project, Swimlane, Todo } from "./types";
 import { isTauri, loadState, saveState, pollState } from "./storage";
 import { normalizeProject, normalizeState } from "./normalize";
 import { gitInfoCached } from "./git";
@@ -42,7 +42,12 @@ export async function flushPersistence(): Promise<void> {
         const rebase = <T extends { id: string }>(items: T[], sent: T[], returned: T[]) => {
           const sentById = new Map(sent.map(item => [item.id, item]));
           const returnedById = new Map(returned.map(item => [item.id, item]));
-          return items.map(item => JSON.stringify(item) === JSON.stringify(sentById.get(item.id)) ? returnedById.get(item.id) ?? item : item);
+          return items.map(item => {
+            const original = sentById.get(item.id);
+            if (item !== original && JSON.stringify(item) !== JSON.stringify(original)) return item;
+            const savedItem = returnedById.get(item.id);
+            return savedItem && JSON.stringify(savedItem) !== JSON.stringify(item) ? savedItem : item;
+          });
         };
         applyWithoutSave({
           projects: rebase(latest.projects, snapshot.projects, saved.projects),
@@ -187,6 +192,7 @@ interface AppStore extends AppState {
   upsertTodo: (t: Todo) => void;
   removeTodo: (id: string) => void;
   patchTodo: (id: string, patch: Partial<Todo>) => void;
+  patchTodoCommits: (changes: Map<string, CommitInfo[]>) => void;
   /** 泳道内排序落库（memory 态；重载后按创建时间兜底） */
   commitLaneOrder: (projectId: string, laneId: string, orderedIds: string[]) => void;
   moveTodo: (projectId: string, todoId: string, laneId: string, index: number) => void;
@@ -304,6 +310,15 @@ export const useAppStore = create<AppStore>((set, get) => ({
     } else set({todos:updated});
   },
 
+  patchTodoCommits: (changes) => {
+    if (!changes.size) return;
+    const now = Date.now();
+    set({ todos: get().todos.map(todo => {
+      const commits = changes.get(todo.id);
+      return commits ? { ...todo, commits, updatedAt: Math.max(now, todo.updatedAt + 1) } : todo;
+    }) });
+  },
+
   commitLaneOrder: (projectId, laneId, orderedIds) => {
     const current = get().todos;
     const inLane = current.filter(
@@ -337,15 +352,27 @@ export const useAppStore = create<AppStore>((set, get) => ({
   saveSwimlanes: (projectId, lanes) => {
     const normalized = lanes.map((l,i)=>({...l,sortOrder:i}));
     const now=Date.now();
-    let next=get().todos;
-    for (const t of get().todos.filter(t=>t.projectId===projectId)) {
-      const current=normalized.find(l=>l.id===t.swimlaneId);
-      const target=current ?? normalized.find(l=>l.status===t.status);
-      if (!target) continue;
-      if (t.archived) next=next.map(x=>x.id===t.id?{...x,swimlaneId:target.id,status:target.status,updatedAt:now}:x);
-      else if (!current) next=moveTask(next,projectId,t.id,target,next.filter(x=>x.projectId===projectId&&x.swimlaneId===target.id&&!x.archived).length,now);
-      else if (t.status!==current.status) next=next.map(x=>x.id===t.id?{...x,status:current.status,updatedAt:now}:x);
+    const byId = new Map(normalized.map(lane => [lane.id, lane]));
+    const byStatus = new Map<Swimlane["status"], Swimlane>();
+    for (const lane of normalized) if (!byStatus.has(lane.status)) byStatus.set(lane.status, lane);
+    const tails = new Map<string, number>();
+    for (const todo of get().todos) {
+      if (todo.projectId === projectId && !todo.archived && byId.has(todo.swimlaneId)) {
+        tails.set(todo.swimlaneId, Math.max(tails.get(todo.swimlaneId) ?? -1, todo.sortOrder));
+      }
     }
+    const next = get().todos.map(todo => {
+      if (todo.projectId !== projectId) return todo;
+      const current = byId.get(todo.swimlaneId);
+      const target = current ?? byStatus.get(todo.status);
+      if (!target || (current && todo.status === current.status)) return todo;
+      let sortOrder = todo.sortOrder;
+      if (!current && !todo.archived) {
+        sortOrder = (tails.get(target.id) ?? -1) + 1;
+        tails.set(target.id, sortOrder);
+      }
+      return { ...todo, swimlaneId: target.id, status: target.status, sortOrder, updatedAt: Math.max(now, todo.updatedAt + 1) };
+    });
     set({projects:get().projects.map(p=>p.id===projectId?{...p,swimlanes:normalized,updatedAt:now}:p),todos:next});
   },
 
@@ -355,21 +382,22 @@ export const useAppStore = create<AppStore>((set, get) => ({
     if (!project) return;
     const lanes = (project.swimlanes ?? []).filter((l) => l.id !== laneId);
     const affected = todos.filter((t) => t.projectId === projectId && t.swimlaneId === laneId);
-    const migrated = affected.map((t) => {
-      const sameStatus = lanes
-        .filter((l) => l.status === t.status)
-        .sort((a, b) => a.sortOrder - b.sortOrder);
-      const target = sameStatus[0];
-      if (!target) return t;
-      return { ...t, swimlaneId: target.id, updatedAt: Date.now() };
-    });
+    const targets = new Map<Swimlane["status"], Swimlane>();
+    for (const lane of [...lanes].sort((a, b) => a.sortOrder - b.sortOrder)) {
+      if (!targets.has(lane.status)) targets.set(lane.status, lane);
+    }
+    const now = Date.now();
+    const migrated = new Map(affected.map(todo => {
+      const target = targets.get(todo.status);
+      return [todo.id, target ? { ...todo, swimlaneId: target.id, updatedAt: Math.max(now, todo.updatedAt + 1) } : todo];
+    }));
     set({
       projects: projects.map((p) =>
         p.id === projectId
           ? { ...p, swimlanes: lanes.length > 0 ? lanes : null, updatedAt: Date.now() }
           : p,
       ),
-      todos: todos.map((t) => migrated.find((m) => m.id === t.id) ?? t),
+      todos: todos.map(todo => migrated.get(todo.id) ?? todo),
     });
   },
 

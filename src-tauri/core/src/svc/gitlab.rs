@@ -165,7 +165,7 @@ impl ApiCommit {
 }
 
 /// 标记匹配完整消息，边界与本地 Git ERE 一致，避免 todo-1 命中 todo-12。
-fn matches_tag(message: &str, tag: &str) -> bool {
+pub(crate) fn matches_tag(message: &str, tag: &str) -> bool {
     fn word(c: char) -> bool {
         c.is_ascii_alphanumeric() || c == '_' || c == '-'
     }

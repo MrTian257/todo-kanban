@@ -1,3 +1,4 @@
+import { WorkflowLifecycle } from "@/components/workflow/WorkflowLifecycle";
 import { NavigationGuard } from "@/components/layout/NavigationGuard";
 import { DesktopLifecycle } from "@/components/layout/DesktopLifecycle";
 // 路由根：HashRouter + ThemeProvider + TooltipProvider + Toaster + ContextMenuOverlay + SidebarLayout
@@ -15,6 +16,7 @@ import { VersionBlockedPage } from "@/components/version/VersionBlockedPage";
 import { useAppStore, startExternalSync, startGitCacheWarm } from "@/lib/store";
 import { initSkin } from "@/lib/theme";
 import { dbCheckVersion, type VersionReport } from "@/lib/version";
+const WorkflowPage = lazy(() => import("@/pages/WorkflowPage").then(module => ({default:module.WorkflowPage})));
 const BoardPage = lazy(() => import("@/pages/BoardPage").then(module => ({ default: module.BoardPage })));
 const FocusPage = lazy(() => import("@/pages/FocusPage").then(module => ({ default: module.FocusPage })));
 const ProjectListPage = lazy(() => import("@/pages/ProjectListPage").then(module => ({ default: module.ProjectListPage })));
@@ -84,6 +86,7 @@ function Application() {
         <Toaster position="bottom-right" richColors />
         <ContextMenuOverlay />
         <DesktopLifecycle />
+        <WorkflowLifecycle />
         {versionBlocked && versionReport ? (
           <VersionBlockedPage report={versionReport} onRetry={() => window.location.reload()} />
         ) : (
@@ -93,6 +96,7 @@ function Application() {
             <div className="min-h-0 flex-1 overflow-auto"><Suspense fallback={<div className="p-6 text-muted-foreground">正在加载页面…</div>}>
             {loaded ? <Routes>
               <Route path="/" element={<RootRedirect />} />
+              <Route path="/workflow" element={<WorkflowPage />} />
               <Route path="/focus" element={<FocusPage />} />
               <Route path="/todos" element={<TodoListPage />} />
               <Route path="/projects" element={<ProjectListPage />} />

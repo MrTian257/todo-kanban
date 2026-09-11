@@ -7,7 +7,7 @@ edition = "2021"
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.32", features = ["bundled", "backup"] }
 log = "0.4"
 # 附件：id 生成（uuid v4）+ 前端 base64 图片解码（均在既有 lock 内，编译增量小）
 uuid = { version = "1", features = ["v4"] }

@@ -9,17 +9,25 @@ import {
   TodoStatus,
 } from "./types";
 
-/** 旧数据兜底标记：todo-<id前8位> */
-export function todoTag(id: string): string {
-  return `todo-${id.slice(0, 8)}`;
-}
-
 /** 按状态取泳道：优先该状态第一个泳道，兜底默认 id */
 export function swimlaneForStatus(project: Project | undefined, status: TodoStatus): string {
   const lanes = project?.swimlanes && project.swimlanes.length > 0 ? project.swimlanes : DEFAULT_SWIMLANES;
   const sorted = [...lanes].sort((a, b) => a.sortOrder - b.sortOrder);
   const hit = sorted.find((l) => l.status === status);
   return hit?.id ?? DEFAULT_SWIMLANES.find((l) => l.status === status)?.id ?? "swim-todo";
+}
+
+/** 旧数据兜底标记：todo-<id前8位>（仅用于完全没有 tag 字段的历史数据） */
+export function todoTag(id: string): string {
+  return `todo-${id.slice(0, 8)}`;
+}
+
+/**
+ * 提交标记兜底：仅当来源数据完全没有 tag 字段（旧数据）时用 todo-<id前8位>。
+ * 显式传入的空串表示「交给后端按 seq 生成 todo-<seq>」，不能在本地填入假序号。
+ */
+function normalizeTag(raw: Partial<Todo>): string {
+  return typeof raw.tag === "string" ? raw.tag : todoTag(raw.id ?? "");
 }
 
 export function normalizeTodo(raw: Partial<Todo>, project?: Project): Todo {
@@ -40,7 +48,7 @@ export function normalizeTodo(raw: Partial<Todo>, project?: Project): Todo {
     swimlaneId,
     quadrant: raw.quadrant ?? "schedule",
     seq: raw.seq ?? 0,
-    tag: raw.tag && raw.tag !== "" ? raw.tag : todoTag(id),
+    tag: normalizeTag(raw),
     startDate: raw.startDate ?? null,
     endDate: raw.endDate ?? null,
     blocker: raw.blocker ?? "",

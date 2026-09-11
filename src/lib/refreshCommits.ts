@@ -2,7 +2,7 @@
 import { gitSyncCommitsBatch } from "./git";
 import { mergeCommits } from "./completeTodo";
 import { flushPersistence, useAppStore } from "./store";
-import { dedupeCommitsForTodo } from "./todo";
+import { CommitInfo } from "./types";
 
 interface RefreshProgress { running: boolean; done: number; total: number }
 export interface RefreshResult {
@@ -57,6 +57,16 @@ export async function refreshCommits(ids: string[]): Promise<RefreshResult> {
         try {
           const responses = await gitSyncCommitsBatch(group[0].repoPath, group.map(({ id, tag, branch }) => ({ id, tag, branch })));
           const byId = new Map(responses.map(response => [response.id, response]));
+          const state = useAppStore.getState();
+          const todosById = new Map(state.todos.map(todo => [todo.id, todo]));
+          const projectsById = new Map(state.projects.map(project => [project.id, project]));
+          const owners = new Map<string, Set<string>>();
+          for (const todo of state.todos) for (const commit of todo.commits) {
+            const ids = owners.get(commit.hash) ?? new Set<string>();
+            ids.add(todo.id); owners.set(commit.hash, ids);
+          }
+          const changes = new Map<string, CommitInfo[]>();
+          // 此段不 await：校验与批量写回使用同一个同步快照。
           for (const snapshot of group) {
             const response = byId.get(snapshot.id);
             if (response?.warning && !result.warnings.includes(response.warning)) result.warnings.push(response.warning);
@@ -64,9 +74,8 @@ export async function refreshCommits(ids: string[]): Promise<RefreshResult> {
               result.failures.push({ title: snapshot.title, error: response?.error ?? "缺少查询结果" });
               continue;
             }
-            const state = useAppStore.getState();
-            const current = state.todos.find(todo => todo.id === snapshot.id);
-            const currentProject = state.projects.find(project => project.id === snapshot.projectId);
+            const current = todosById.get(snapshot.id);
+            const currentProject = projectsById.get(snapshot.projectId);
             if (!current || JSON.stringify(current) !== JSON.stringify(snapshot)
               || JSON.stringify(currentProject) !== JSON.stringify(projectsAtStart.get(snapshot.projectId))) {
               result.skipped++;
@@ -76,12 +85,22 @@ export async function refreshCommits(ids: string[]): Promise<RefreshResult> {
               result.failures.push({ title: snapshot.title, error: state.persistenceError || "请先处理保存失败" });
               continue;
             }
-            const merged = dedupeCommitsForTodo({ ...current, commits: mergeCommits(current.commits, response.commits) }, state.todos).commits;
+            const merged = mergeCommits(current.commits, response.commits).filter(commit => {
+              const claimed = owners.get(commit.hash);
+              return !claimed || (claimed.size === 1 && claimed.has(current.id));
+            });
+            for (const commit of current.commits) {
+              const claimed = owners.get(commit.hash);
+              claimed?.delete(current.id);
+              if (!claimed?.size) owners.delete(commit.hash);
+            }
+            for (const commit of merged) owners.set(commit.hash, new Set([current.id]));
             const previous = new Set(current.commits.map(commit => commit.hash));
             result.added += merged.filter(commit => !previous.has(commit.hash)).length;
-            if (JSON.stringify(merged) !== JSON.stringify(current.commits)) state.patchTodo(current.id, { commits: merged });
+            if (JSON.stringify(merged) !== JSON.stringify(current.commits)) changes.set(current.id, merged);
             result.refreshed++;
           }
+          state.patchTodoCommits(changes);
         } catch (error) {
           result.failures.push(...group.map(snapshot => ({ title: snapshot.title, error: String(error) })));
         } finally { publish({ ...progress, done: progress.done + group.length }); }

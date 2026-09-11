@@ -188,7 +188,11 @@ mod macos_terminate {
                 return;
             }
             let imp: Imp = std::mem::transmute::<
-                unsafe extern "C-unwind" fn(&AnyObject, Sel, *mut AnyObject) -> NSApplicationTerminateReply,
+                unsafe extern "C-unwind" fn(
+                    &AnyObject,
+                    Sel,
+                    *mut AnyObject,
+                ) -> NSApplicationTerminateReply,
                 Imp,
             >(should_terminate);
             // 类型编码：NSUInteger 返回值 + self/@ + _cmd/`:` + sender/@
@@ -290,9 +294,16 @@ mod macos_terminate {
         let generation = STATE.lock().ok().map(|state| state.generation);
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_secs(30));
-            let cancelled = STATE.lock().map(|mut state| {
-                if Some(state.generation) == generation { state.reply(false) } else { false }
-            }).unwrap_or(false);
+            let cancelled = STATE
+                .lock()
+                .map(|mut state| {
+                    if Some(state.generation) == generation {
+                        state.reply(false)
+                    } else {
+                        false
+                    }
+                })
+                .unwrap_or(false);
             if cancelled {
                 log::warn!("退出确认超时，已取消本次系统退出，保留当前数据");
                 hop_reply(false);

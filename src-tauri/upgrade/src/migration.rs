@@ -113,6 +113,7 @@ pub fn migrate(conn: &Connection) -> UpgradeResult<MigrateOutcome> {
         // v8 → v9：resources 表由 core 建表（CREATE TABLE IF NOT EXISTS）创建；无存量回填。
     }
 
+    // v9 → v10：workflow_state / change_history / change_proposals 由 core 幂等建表。
     tx.execute_batch(&format!("PRAGMA user_version = {CURRENT_VERSION};"))?;
     tx.commit().map_err(UpgradeError::from)?;
     // 同步写入 app_meta，便于外部诊断

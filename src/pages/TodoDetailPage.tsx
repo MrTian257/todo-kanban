@@ -1,3 +1,6 @@
+import { TaskRelations } from "@/components/workflow/TaskRelations";
+import { TaskReminder } from "@/components/workflow/TaskReminder";
+import { useWorkflow, getWorkflow, loadWorkflow, saveWorkflow } from "@/lib/workflow";
 import { useEditingGuard } from "@/lib/editingGuard";
 import { DirectoryInput } from "@/components/project/DirectoryInput";
 // 待办详情页（新建/编辑一体）：中间标题 + Markdown 源文与预览 备注；右侧字段栏
@@ -84,6 +87,7 @@ function TodoDetailForm() {
   const navigate = useNavigate();
   const { projects, todos, upsertTodo, setActiveProjectId } = useAppStore();
   const project = projects.find((p) => p.id === projectId);
+  const workflow = useWorkflow();
   const isNew = todoId === "new";
   const editing = isNew ? null : todos.find((t) => t.id === todoId);
   // 进入待办详情即同步当前项目（计划：待办详情页使用当前项目）
@@ -309,11 +313,16 @@ function TodoDetailForm() {
       project,
     );
     // 提交标记手动编辑支持：用户输入（含空串）为权威值，覆盖 normalize 的兜底；
-    // 空串 → 后端 save_state 自动生成 todo-<seq>；非空 → 保留用户标记（全局唯一校验在后端）
+    // 空串 → 后端 save_state 自动生成 todo-<seq>（后端 seq 收敛后才有正确序号，本地不填假序号）
     todo.tag = values.tag.trim();
     original.current = JSON.stringify(todo);
     upsertTodo(todo);
     await flushPersistence();
+    const parentId = isNew ? searchParams.get("parent") : null;
+    if (parentId) {
+      await loadWorkflow(); const current = getWorkflow();
+      await saveWorkflow({...current,links:[...current.links.filter(link=>link.todoId!==todo.id),{todoId:todo.id,parentId,dependsOn:[],resourceIds:[]}]});
+    }
     finishedSave.current = true;
     dirtyRef.current = false;
     clearDraft();
@@ -351,6 +360,8 @@ function TodoDetailForm() {
         if (resolution === "remote") { reset(initialValues); clearDraft(); }
         setExternalChange(false); setResolution(null);
       }}>确认</Button></div></DialogContent></Dialog>
+      {editing && <div className="mb-4 space-y-3"><TaskRelations todo={editing}/><TaskReminder todoId={editing.id}/></div>}
+      {isNew && <label className="mb-4 flex items-center gap-3 text-sm">从模板开始<select className="rounded border bg-background p-2" defaultValue="" onChange={event=>{const template=workflow.templates.find(item=>item.id===event.target.value);if(template){setValue("title",template.title,{shouldDirty:true});setValue("note",template.note,{shouldDirty:true});setValue("repoPath",template.repoPath,{shouldDirty:true});setValue("branch",template.branch,{shouldDirty:true});}event.target.value="";}}><option value="">选择任务模板</option>{workflow.templates.filter(template=>!template.projectId||template.projectId===projectId).map(template=><option key={template.id} value={template.id}>{template.name}</option>)}</select>{searchParams.has("parent") && <span className="text-muted-foreground">正在添加子任务</span>}</label>}
       {draft && <div className="mb-3 flex flex-wrap items-center gap-2 rounded border bg-card p-3 text-sm"><span>发现本地未保存草稿</span><Button type="button" size="sm" onClick={() => { const values = { ...getValues(), ...draft }; for (const key of Object.keys(values) as (keyof FormValues)[]) setValue(key, values[key], { shouldDirty: true }); setDraft(null); }}>恢复草稿</Button><Button type="button" size="sm" variant="ghost" onClick={clearDraft}>丢弃草稿</Button></div>}
       {draftError && <p role="alert" className="mb-3 text-sm text-destructive">{draftError}</p>}
       {externalChange && <div role="alert" className="mb-3 flex flex-wrap items-center gap-2 rounded border p-3 text-sm"><span>任务已被其他窗口或 MCP 修改；你的编辑仍保留。</span><Button type="button" size="sm" onClick={() => setResolution("remote")}>使用最新内容</Button>{editing && <Button type="button" size="sm" variant="outline" onClick={() => setResolution("local")}>保留我的编辑</Button>}</div>}

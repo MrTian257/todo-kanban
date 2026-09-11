@@ -16,11 +16,24 @@ import { EmptyState } from "@/components/board/EmptyState";
 import { VirtualTodoList } from "@/components/todo/VirtualTodoList";
 import { Input } from "@/components/ui/input";
 import { useAppStore } from "@/lib/store";
-import { STATUS_LABEL, STATUS_ORDER } from "@/lib/types";
+import { Todo, STATUS_LABEL, STATUS_ORDER } from "@/lib/types";
+
+// 按对象身份缓存；未变化任务跨 Store 更新复用，删除后由 GC 回收。
+const searchText = new WeakMap<Todo, string>();
+function searchable(todo: Todo): string {
+  let text = searchText.get(todo);
+  if (text === undefined) {
+    text = [todo.title, todo.note.replace(/data:image\/[^)\s]+/g, "").replace(/attachment:\/\/[^)\s]+/g, ""), todo.branch, todo.tag, todo.blocker].join("\n").toLowerCase();
+    searchText.set(todo, text);
+  }
+  return text;
+}
 
 export function TodoListPage() {
   const navigate = useNavigate();
-  const { projects, todos, activeProjectId } = useAppStore();
+  const projects = useAppStore(state => state.projects);
+  const todos = useAppStore(state => state.todos);
+  const activeProjectId = useAppStore(state => state.activeProjectId);
   const [params] = useSearchParams();
   const [saved] = useState(() => {
     try { return JSON.parse(localStorage.getItem("todo-list-filters-v1") ?? "{}"); } catch { return {}; }
@@ -43,11 +56,12 @@ export function TodoListPage() {
   const projectById = useMemo(() => new Map(projects.map((p) => [p.id, p])), [projects]);
 
   const list = useMemo(() => {
-    return todos
-      .filter((t) => (showArchived ? t.archived : !t.archived))
-      .filter((t) => (status === "all" ? true : t.status === status))
-      .filter((t) => (projectId === "all" ? true : t.projectId === projectId))
-      .filter(t => !deferredQuery || [t.title, t.note.replace(/data:image\/[^)\s]+/g, "").replace(/attachment:\/\/[^)\s]+/g, ""), t.branch, t.tag, t.blocker, projectById.get(t.projectId)?.name ?? ""].some(text => text.toLowerCase().includes(deferredQuery)))
+    return todos.filter(todo =>
+      (showArchived ? todo.archived : !todo.archived)
+      && (status === "all" || todo.status === status)
+      && (projectId === "all" || todo.projectId === projectId)
+      && (!deferredQuery || searchable(todo).includes(deferredQuery)
+        || (projectById.get(todo.projectId)?.name ?? "").toLowerCase().includes(deferredQuery)))
       .sort((a, b) => b.updatedAt - a.updatedAt);
   }, [todos, status, projectId, showArchived, deferredQuery, projectById]);
 
@@ -101,7 +115,7 @@ export function TodoListPage() {
       {list.length === 0 ? (
         <EmptyState text="没有符合条件的待办" />
       ) : (
-        <VirtualTodoList key={`${status}/${projectId}/${showArchived}/${deferredQuery}`} todos={list} projects={projectById} />
+        <VirtualTodoList resetKey={`${status}/${projectId}/${showArchived}/${deferredQuery}`} todos={list} projects={projectById} />
       )}
     </div>
   );
