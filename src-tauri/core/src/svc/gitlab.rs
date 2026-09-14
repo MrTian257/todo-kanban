@@ -3,10 +3,10 @@
 
 use crate::error::{AppError, AppResult};
 
-const MAX_PAGES: u32 = 5;
+const MAX_PAGES: u32 = 10;
 const PER_PAGE: u32 = 100;
 
-/// 拉取 GitLab 仓库全部分支名（分页 ≤500）
+/// 拉取 GitLab 仓库全部分支名（分页 ≤1000）
 pub fn branch_list(repo_url: &str, token: &str) -> AppResult<Vec<String>> {
     log::info!("GitLab 远端分支拉取开始");
     if token.is_empty() {
@@ -165,9 +165,11 @@ impl ApiCommit {
 }
 
 /// 标记匹配完整消息，边界与本地 Git ERE 一致，避免 todo-1 命中 todo-12。
+/// 仅字母数字视为标记字符：`-`、`_`、`/` 等均作为分隔符，
+/// 使 `feature/bif-REQ-00149`、`finance-REQ-00147` 这类分支/前缀中的标记也能命中。
 pub(crate) fn matches_tag(message: &str, tag: &str) -> bool {
     fn word(c: char) -> bool {
-        c.is_ascii_alphanumeric() || c == '_' || c == '-'
+        c.is_ascii_alphanumeric()
     }
     !tag.is_empty()
         && message.match_indices(tag).any(|(i, _)| {
@@ -212,14 +214,19 @@ fn collect_commits(
         .collect())
 }
 
-/// 同仓库只拉取一次历史，再为多个待办匹配完整提交消息。
-pub fn commits_by_tags(
+/// 按分支定向拉取该分支可达的提交历史，再为多个待办匹配完整提交消息。
+/// 与全量拉取（all=true）相比不受超大仓库分页/时间上限影响；分支不可达或超限时报错，由业务层回退本地。
+pub fn commits_by_branch(
     repo_url: &str,
     token: &str,
+    branch: &str,
     tags: &[String],
 ) -> AppResult<Vec<Vec<crate::models::CommitInfo>>> {
     let (base, path) = parse_repo_url(repo_url)?;
-    let url = format!("{base}/api/v4/projects/{path}/repository/commits?all=true");
+    let url = format!(
+        "{base}/api/v4/projects/{path}/repository/commits?ref_name={}",
+        percent_encode_segment(branch)
+    );
     let items = collect_api_commits(&url, |url| curl_json(url, token))?;
     Ok(tags
         .iter()
@@ -352,9 +359,15 @@ mod tests {
         assert_eq!(calls, 2);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].date, "2026-09-09T00:00:00Z");
-        assert!(!matches_tag("todo-12 todo-1_extra x-todo-1", "todo-1"));
-        assert!(!matches_tag("anything", ""));
+        // 数字延伸仍隔离（todo-1 不命中 todo-12）
+        assert!(!matches_tag("todo-12", "todo-1"));
+        assert!(!matches_tag("REQ-001490", "REQ-00149"));
+        // `-`/`_`/`/` 是分隔符：分支名/前缀中的标记可命中
+        assert!(matches_tag("feature/bif-REQ-00149", "REQ-00149"));
+        assert!(matches_tag("x-todo-1", "todo-1"));
+        assert!(matches_tag("todo-1_extra", "todo-1"));
         assert!(matches_tag("中文(todo-1)", "todo-1"));
+        assert!(!matches_tag("anything", ""));
     }
 
     #[test]

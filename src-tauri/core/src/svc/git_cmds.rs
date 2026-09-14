@@ -1,6 +1,6 @@
 //! git 命令业务层：7 个命令（执行器在 tool/git_cli.rs，子进程构造在 tool/proc.rs）。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::error::{AppError, AppResult};
 use crate::models::{CommitInfo, GitInfo};
@@ -120,11 +120,12 @@ pub fn git_sync_commits(
     let ref_branch = ref_branch.filter(|b| !b.trim().is_empty());
     if let Some(b) = ref_branch {
         git_cli::validate_branch_name(b)?;
-    }
-    if let Some(commits) = prefer_api(repo, |url, token| {
-        super::gitlab::commits(url, token, None, None, Some(tag))
-    }) {
-        return Ok(commits);
+        // 按参考分支定向拉取该分支历史，避免超大仓库全量拉取超出分页/时间上限
+        if let Some(commits) = prefer_api(repo, |url, token| {
+            super::gitlab::commits(url, token, Some(b), None, Some(tag))
+        }) {
+            return Ok(commits);
+        }
     }
     git_sync_commits_local(repo, tag, ref_branch)
 }
@@ -134,8 +135,9 @@ fn git_sync_commits_local(
     tag: &str,
     ref_branch: Option<&str>,
 ) -> AppResult<Vec<CommitInfo>> {
-    // 标记匹配必须带边界：`--grep=todo-1` 会同时命中 todo-12 / todo-100，导致提交挂到错误待办
-    let pattern = format!("(^|[^0-9A-Za-z_-]){}([^0-9A-Za-z_-]|$)", regex_escape(tag));
+    // 标记匹配必须带边界：`--grep=todo-1` 会同时命中 todo-12 / todo-100，导致提交挂到错误待办；
+    // `-`、`_`、`/` 视为分隔符（与 gitlab.rs matches_tag 同规则），使分支名/前缀中的标记也能命中
+    let pattern = format!("(^|[^0-9A-Za-z]){}([^0-9A-Za-z]|$)", regex_escape(tag));
     let out = run_git(
         repo,
         &[
@@ -192,27 +194,60 @@ pub fn git_sync_commits_batch(
             git_cli::validate_branch_name(request.branch.trim())?;
         }
     }
-    let warning = if let Some((url, token)) = super::gitlab::configured_remote(repo) {
-        let tags: Vec<_> = requests.iter().map(|request| request.tag.clone()).collect();
-        match super::gitlab::commits_by_tags(&url, &token, &tags) {
-            Ok(groups) => {
-                return Ok(requests
-                    .into_iter()
-                    .zip(groups)
-                    .map(|(request, commits)| CommitResult {
-                        id: request.id,
-                        commits,
-                        source: "api".into(),
-                        warning: None,
-                        error: None,
-                    })
-                    .collect())
+    // 按分支分组：API 定向拉取要求 ref_name；无分支的请求只能走本地检索。
+    let mut api_groups: BTreeMap<String, Vec<CommitRequest>> = BTreeMap::new();
+    let mut local_requests: Vec<CommitRequest> = Vec::new();
+    for request in requests {
+        let branch = request.branch.trim().to_string();
+        if branch.is_empty() {
+            local_requests.push(request);
+        } else {
+            api_groups.entry(branch).or_default().push(request);
+        }
+    }
+    let mut results: Vec<CommitResult> = Vec::with_capacity(
+        api_groups.values().map(Vec::len).sum::<usize>() + local_requests.len(),
+    );
+    let mut warnings: Vec<String> = Vec::new();
+    // 每个分支组一次定向 API 请求；整组失败回退本地，绝不截断返回。
+    if let Some((url, token)) = super::gitlab::configured_remote(repo) {
+        for (branch, group) in api_groups {
+            let tags: Vec<String> = group.iter().map(|request| request.tag.clone()).collect();
+            match super::gitlab::commits_by_branch(&url, &token, &branch, &tags) {
+                Ok(commit_groups) => {
+                    for (request, commits) in group.into_iter().zip(commit_groups) {
+                        results.push(CommitResult {
+                            id: request.id,
+                            commits,
+                            source: "api".into(),
+                            warning: None,
+                            error: None,
+                        });
+                    }
+                }
+                Err(error) => {
+                    warnings.push(format!("分支 {branch} 的 API 不可用，已回退本地：{error}"));
+                    local_requests.extend(group);
+                }
             }
-            Err(error) => Some(format!("API 不可用，已回退本地：{error}")),
         }
     } else {
-        Some("未找到唯一的仓库 API 配置，已读取本地记录".into())
-    };
+        warnings.push("未找到唯一的仓库 API 配置，已读取本地记录".into());
+        local_requests.extend(api_groups.into_values().flatten());
+    }
+    if !local_requests.is_empty() {
+        results.extend(local_batch_results(repo, local_requests, &warnings)?);
+    }
+    Ok(results)
+}
+
+/// 本地检索兜底：全量 git log --all 搜索，warning 统一附加到每条结果。
+fn local_batch_results(
+    repo: &str,
+    requests: Vec<CommitRequest>,
+    warnings: &[String],
+) -> AppResult<Vec<CommitResult>> {
+    let warning = (!warnings.is_empty()).then(|| warnings.join("；"));
     let found = local_batch_commits(repo, &requests);
     let mut results = Vec::with_capacity(requests.len());
     match found {
@@ -282,7 +317,7 @@ fn local_batch_commits(
     for request in requests {
         if seen_tags.insert(request.tag.as_str()) {
             patterns.push(format!(
-                "(^|[^0-9A-Za-z_-]){}([^0-9A-Za-z_-]|$)",
+                "(^|[^0-9A-Za-z]){}([^0-9A-Za-z]|$)",
                 regex_escape(&request.tag)
             ));
         }
@@ -705,6 +740,60 @@ mod tests {
             git_commits_between(r, "main", "2000-01-01T00:00:00Z", "2037-01-01T00:00:00Z").unwrap();
         assert!(!main.iter().any(|c| c.hash == expected));
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// 边界放宽后，连字符/斜杠前缀中的标记（feature/bif-REQ-00149）可命中，数字延伸仍隔离；
+    /// batch 无仓库 API 配置时整体回退本地并附加 warning。
+    #[test]
+    fn hyphen_prefixed_tag_hits_and_batch_local_fallback() {
+        if std::process::Command::new("git")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        let (root, repo) = setup_origin_repo();
+        let r = repo.to_str().unwrap();
+        run_git(r, &["checkout", "-b", "feature/bif-REQ-00149"]).unwrap();
+        run_git(
+            r,
+            &[
+                "commit",
+                "--allow-empty",
+                "-m",
+                "Merge branch 'feature/bif-REQ-00149'",
+            ],
+        )
+        .unwrap();
+        run_git(r, &["commit", "--allow-empty", "-m", "feat: REQ-00149 修复"]).unwrap();
+        run_git(r, &["commit", "--allow-empty", "-m", "fix REQ-001490 隔离"]).unwrap();
+        // 单条：无分支走本地检索，连字符前缀命中
+        let commits = git_sync_commits(r, "REQ-00149", None).unwrap();
+        assert_eq!(
+            commits.len(),
+            2,
+            "应命中连字符前缀与空格前缀两条，数字延伸 REQ-001490 隔离"
+        );
+        // batch：分支非空但无 API 配置 → 本地兜底 + warning
+        let results = git_sync_commits_batch(
+            r,
+            vec![CommitRequest {
+                id: "a".into(),
+                tag: "REQ-00149".into(),
+                branch: "feature/bif-REQ-00149".into(),
+            }],
+        )
+        .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].commits.len(), 2);
+        assert_eq!(results[0].source, "local");
+        assert!(results[0]
+            .warning
+            .as_deref()
+            .unwrap_or("")
+            .contains("未找到唯一的仓库 API 配置"));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

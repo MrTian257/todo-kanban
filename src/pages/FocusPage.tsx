@@ -14,7 +14,7 @@ export function FocusPage() {
   const blocked=pending.filter(todo=>blockers(todo.id,workflow,todos).length>0 || !!todo.blocker.trim());
   const blockedIds=new Set(blocked.map(todo=>todo.id));
   const ready=pending.filter(todo=>!blockedIds.has(todo.id));
-  return <div className="tk-page h-full overflow-y-auto"><div className="mx-auto max-w-5xl">
+  return <div className="tk-page h-full overflow-y-auto"><div className="w-full">
     <div className="tk-eyebrow flex items-center gap-2"><CalendarDays className="h-3.5 w-3.5"/>{new Intl.DateTimeFormat('zh-CN',{month:'long',day:'numeric',weekday:'long'}).format(new Date())}</div>
     <h1 className="tk-page-heading">今日焦点</h1><p className="mt-2 text-sm text-muted-foreground">专注眼前的进展。进行中或今天创建的任务会出现在这里。</p>
     <div className="mb-5 mt-9 flex items-center gap-2"><h2 className="text-sm font-semibold">可以推进</h2><span className="rounded-md bg-primary/8 px-2 py-0.5 text-xs text-primary">{ready.length}</span></div>

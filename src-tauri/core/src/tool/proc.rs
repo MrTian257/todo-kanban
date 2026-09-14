@@ -68,7 +68,7 @@ fn resolve_program(program: &str) -> (PathBuf, &'static str) {
             if !dir.is_absolute() {
                 continue;
             }
-            let candidate = dir.join(filename);
+            let candidate = dir.join(&filename);
             if executable(&candidate) {
                 return (candidate, "PATH");
             }

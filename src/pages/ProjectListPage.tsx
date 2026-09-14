@@ -17,7 +17,7 @@ export function ProjectListPage() {
   const [deleteTarget, setDeleteTarget] = useState<Project | null>(null);
   const visible=projects.filter(p=>p.archived===archived&&p.name.toLowerCase().includes(query.trim().toLowerCase()));
   const create=()=>{setEditing(null);setOpen(true);};
-  return <div className="tk-page h-full overflow-y-auto"><div className="mx-auto max-w-7xl">
+  return <div className="tk-page h-full overflow-y-auto"><div className="w-full">
     <div className="tk-eyebrow">工作空间 / 项目管理</div>
     <header className="mb-7 flex items-center justify-between gap-4"><div><h1 className="tk-page-heading">项目资料</h1><p className="mt-2 text-sm text-muted-foreground">把任务、代码与进展，整理在一起。</p></div><Button className="gap-2" onClick={create}><Plus className="h-4 w-4"/>新建项目</Button></header>
     <div className="mb-6 flex flex-wrap items-center gap-3"><div className="flex gap-1 rounded-lg bg-muted p-1">{[false,true].map(v=><button key={String(v)} onClick={()=>setArchived(v)} className={`rounded-md px-4 py-1.5 text-sm ${v===archived?'bg-card font-medium text-primary shadow-sm':'text-muted-foreground'}`}>{v?'已归档':'活跃项目'} <span className="ml-1 text-xs">{projects.filter(p=>p.archived===v).length}</span></button>)}</div><div className="relative ml-auto w-64 max-w-full"><Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground"/><Input aria-label="搜索项目" placeholder="搜索项目…" className="h-10 bg-card pl-9" value={query} onChange={e=>setQuery(e.target.value)}/></div></div>

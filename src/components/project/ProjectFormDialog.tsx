@@ -248,9 +248,9 @@ export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
     const rule: BranchRule | null = {
       enabled: ruleEnabled,
       steps: steps.filter((s) => s.from && s.to && s.action),
-      // 只保留填了编码的定义（未填编码=不启用该角色）
+      // 只保留填了编码的定义（未填编码=不启用该角色）；名称缺省用角色默认标签
       branches: defs
-        .map((b) => ({ role: b.role, name: b.name.trim(), code: b.code.trim() }))
+        .map((b) => ({ role: b.role, name: b.name.trim() || BRANCH_ROLE_LABEL[b.role] || b.role, code: b.code.trim() }))
         .filter((b) => b.code !== ""),
     };
     const p: Project = {

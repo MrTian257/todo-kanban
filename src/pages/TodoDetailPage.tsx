@@ -45,7 +45,8 @@ const schema = z
   .object({
     title: z.string().trim().min(1, "标题必填"),
     note: z.string(),
-    repoPath: z.string().min(1, "请选择代码目录"),
+    // 代码目录可选：留空表示不关联 git 仓库（提交检索/仓库信息自动跳过）
+    repoPath: z.string(),
     branch: z.string().trim(),
     createBranch: z.boolean(),
     newBranchName: z.string(),

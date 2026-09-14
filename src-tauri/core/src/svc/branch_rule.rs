@@ -11,7 +11,7 @@ pub fn validate(rule: &Option<DbBranchRule>) -> AppResult<()> {
         if !r.enabled {
             return Ok(());
         }
-        // 分支定义校验：role 枚举 + 不重复 + 启用时名称与编码必填
+        // 分支定义校验：role 枚举 + 不重复 + 启用时编码必填（名称可缺省，展示层回退角色默认标签）
         let mut defined: std::collections::HashSet<&str> = std::collections::HashSet::new();
         for (i, b) in r.branches.iter().enumerate() {
             if !ROLES.contains(&b.role.as_str()) {
@@ -26,12 +26,6 @@ pub fn validate(rule: &Option<DbBranchRule>) -> AppResult<()> {
                     "第 {} 个分支定义：角色「{}」重复",
                     i + 1,
                     b.role
-                )));
-            }
-            if b.name.trim().is_empty() {
-                return Err(AppError::invalid(format!(
-                    "第 {} 个分支定义：名称必填",
-                    i + 1
                 )));
             }
             if b.code.trim().is_empty() {
@@ -184,6 +178,21 @@ mod tests {
             }],
         };
         assert!(validate(&Some(rule)).is_err());
+    }
+
+    #[test]
+    fn branch_def_empty_name_allowed() {
+        // 名称非必填：编码已填时名称缺省由展示层回退角色默认标签
+        let rule = DbBranchRule {
+            enabled: true,
+            steps: vec![],
+            branches: vec![crate::models::DbBranchDef {
+                role: "production".into(),
+                name: "".into(),
+                code: "main".into(),
+            }],
+        };
+        assert!(validate(&Some(rule)).is_ok());
     }
 
     #[test]
