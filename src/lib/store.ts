@@ -3,6 +3,8 @@
 // 外部同步仅在无待保存变更时应用；读取失败不会创建或保存空状态。
 
 import { moveTask } from "./boardOrder";
+import { rebaseRecords, reconcileRecords } from "./stateReconcile";
+import { collectWarmRepos, warmRepos } from "./repoWarm";
 import { create } from "zustand";
 import { AppState, CommitInfo, LibraryResource, Project, Swimlane, Todo } from "./types";
 import { isTauri, loadState, saveState, pollState } from "./storage";
@@ -39,20 +41,10 @@ export async function flushPersistence(): Promise<void> {
         savedVersion = writingVersion;
         // Preserve newer edits while applying server-generated seq/tag to unchanged records.
         const latest = useAppStore.getState();
-        const rebase = <T extends { id: string }>(items: T[], sent: T[], returned: T[]) => {
-          const sentById = new Map(sent.map(item => [item.id, item]));
-          const returnedById = new Map(returned.map(item => [item.id, item]));
-          return items.map(item => {
-            const original = sentById.get(item.id);
-            if (item !== original && JSON.stringify(item) !== JSON.stringify(original)) return item;
-            const savedItem = returnedById.get(item.id);
-            return savedItem && JSON.stringify(savedItem) !== JSON.stringify(item) ? savedItem : item;
-          });
-        };
         applyWithoutSave({
-          projects: rebase(latest.projects, snapshot.projects, saved.projects),
-          todos: rebase(latest.todos, snapshot.todos, saved.todos),
-          resources: rebase(latest.resources, snapshot.resources, saved.resources),
+          projects: rebaseRecords(latest.projects, snapshot.projects, saved.projects),
+          todos: rebaseRecords(latest.todos, snapshot.todos, saved.todos),
+          resources: rebaseRecords(latest.resources, snapshot.resources, saved.resources),
         });
       } catch (error) {
         const message = String(error);
@@ -445,8 +437,11 @@ export function startExternalSync() {
         persisted = disk;
         const normalized = normalizeState(disk);
         const current = useAppStore.getState();
-        if (JSON.stringify(normalized) !== JSON.stringify({ projects: current.projects, todos: current.todos, resources: current.resources })) {
-          applyWithoutSave({ ...normalized, activeProjectId: validActiveProjectId(current.activeProjectId, normalized.projects) });
+        const projects = reconcileRecords(current.projects, normalized.projects);
+        const todos = reconcileRecords(current.todos, normalized.todos);
+        const resources = reconcileRecords(current.resources, normalized.resources);
+        if (projects !== current.projects || todos !== current.todos || resources !== current.resources) {
+          applyWithoutSave({ projects, todos, resources, activeProjectId: validActiveProjectId(current.activeProjectId, projects) });
         }
       }
       useAppStore.setState({ syncError: "" });
@@ -472,12 +467,8 @@ export function startGitCacheWarm() {
   let stopped = false;
   const timer = window.setTimeout(async () => {
     if (!isTauri()) return;
-    const { projects, todos } = useAppStore.getState();
-    const repos = new Set([...projects.flatMap(p => [p.projectDir, p.frontendDir, p.backendDir]), ...todos.map(t => t.repoPath)]);
-    for (const repo of repos) {
-      if (stopped) return;
-      if (repo) await gitInfoCached(repo).catch(() => {});
-    }
+    const { projects, todos, activeProjectId } = useAppStore.getState();
+    await warmRepos(collectWarmRepos(projects, todos, activeProjectId), gitInfoCached, () => stopped);
   }, 60_000);
   const stop = () => { stopped = true; clearTimeout(timer); if (stopWarm === stop) stopWarm = null; };
   stopWarm = stop;

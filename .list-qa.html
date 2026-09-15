@@ -1,0 +1,19 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><title>列表性能临时验证</title><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><output id="qa-preference" style="position:fixed;bottom:0;right:0;z-index:9999;background:white;color:black;font-size:10px">偏好写入：0</output><div id="root"></div><script type="module">
+import RefreshRuntime from '/@react-refresh';
+RefreshRuntime.injectIntoGlobalHook(window); window.$RefreshReg$=()=>{}; window.$RefreshSig$=()=>type=>type; window.__vite_plugin_react_preamble_installed__=true;
+const get=Storage.prototype.getItem, set=Storage.prototype.setItem;
+let preference=null, count=0;
+Storage.prototype.getItem=function(key){return key==='todo-list-filters-v1'?preference:get.call(this,key)};
+Storage.prototype.setItem=function(key,value){if(key==='todo-list-filters-v1'){preference=value;document.querySelector('#qa-preference').textContent=`偏好写入：${++count} ${value}`;return;}set.call(this,key,value)};
+sessionStorage.removeItem('todo-kanban-preview-v1');
+const { useAppStore } = await import('/src/lib/store.ts');
+await useAppStore.getState().initAppStore();
+const state=useAppStore.getState();
+const now=Date.now();
+const resources=Array.from({length:50},(_,i)=>({id:`r-${i}`,projectId:state.projects[0].id,title:`资料 ${i+1}`,url:'',note:'# 阅读标题\n\n'+ '普通摘要 '.repeat(100)+'\n\n全文末尾标记',tags:[i%2?'前端':'后端'],createdAt:now-i,updatedAt:now-i}));
+state.replaceState({projects:state.projects,todos:state.todos,resources});
+useAppStore.setState({activeProjectId:state.projects[0].id});
+const {saveWorkflow,getWorkflow}=await import('/src/lib/workflow.ts');
+await saveWorkflow({...getWorkflow(),links:[{todoId:state.todos[0].id,parentId:null,dependsOn:[],resourceIds:['r-0','r-24']}]});
+await import('/src/main.tsx');
+</script></body></html>

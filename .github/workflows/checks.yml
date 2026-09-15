@@ -1,0 +1,46 @@
+name: 回归检查
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: 类型检查与前端构建
+        run: npm run build
+      - name: 前端逻辑回归
+        run: npm run test:logic
+
+  rust:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: src-tauri
+    steps:
+      - uses: actions/checkout@v4
+      - name: 安装 Rust 检查组件
+        run: rustup component add clippy
+      - name: 核心与 MCP 测试
+        run: cargo test --locked -p todo-kanban-core -p mcp-server
+      - name: 核心与 MCP 静态检查
+        run: cargo clippy --locked -p todo-kanban-core -p mcp-server --all-targets -- -D warnings

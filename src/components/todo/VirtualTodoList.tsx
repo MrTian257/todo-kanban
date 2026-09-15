@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { TodoRow } from "@/components/board/TodoRow";
 import { Project, Todo } from "@/lib/types";
 
-function MeasuredRow({ todo, name, measure }: { todo: Todo; name?: string; measure: (id: string, height: number) => void }) {
+function MeasuredRow({ todo, name, detail, measure }: { todo: Todo; name?: string; detail?: ReactNode; measure: (id: string, height: number) => void }) {
   const ref = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const node = ref.current;
@@ -11,10 +11,10 @@ function MeasuredRow({ todo, name, measure }: { todo: Todo; name?: string; measu
     observer.observe(node);
     return () => observer.disconnect();
   }, [todo.id, measure]);
-  return <div ref={ref} role="listitem"><TodoRow todo={todo} projectName={name} showProjectName /></div>;
+  return <div ref={ref} role="listitem"><TodoRow todo={todo} projectName={name} showProjectName />{detail}</div>;
 }
 
-export function VirtualTodoList({ todos, projects, resetKey }: { todos: Todo[]; projects: Map<string, Project>; resetKey?: string }) {
+export function VirtualTodoList({ todos, projects, resetKey, renderDetail, label = "待办搜索结果", className = "" }: { todos: Todo[]; projects: Map<string, Project>; resetKey?: string; renderDetail?: (todo: Todo) => ReactNode; label?: string; className?: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState({ top: 0, height: 600 });
   const [pinned, setPinned] = useState<string | null>(null);
@@ -97,13 +97,13 @@ export function VirtualTodoList({ todos, projects, resetKey }: { todos: Todo[]; 
   const pinnedIndex = pinned ? (indexById.get(pinned) ?? -1) : -1;
   if (pinnedIndex >= 0) indices.add(pinnedIndex);
   const visible = [...indices].sort((a, b) => a - b);
-  return <div ref={ref} role="list" aria-label="待办搜索结果" className="tk-panel min-h-64 min-w-0 flex-1 overflow-y-auto" onScroll={updateViewport}>
+  return <div ref={ref} role="list" aria-label={label} className={`tk-panel min-h-64 min-w-0 flex-1 overflow-y-auto ${className}`} onScroll={updateViewport}>
     {visible.map((index, position) => {
       const previousEnd = position === 0 ? 0 : offsets[visible[position - 1] + 1];
       const todo = todos[index];
       return <div key={todo.id} onFocusCapture={() => setPinned(todo.id)} onPointerDownCapture={() => setPinned(todo.id)}>
         <div aria-hidden="true" style={{ height: Math.max(0, offsets[index] - previousEnd) }} />
-        <MeasuredRow todo={todo} name={projects.get(todo.projectId)?.name} measure={measure} />
+        <MeasuredRow todo={todo} name={projects.get(todo.projectId)?.name} detail={renderDetail?.(todo)} measure={measure} />
       </div>;
     })}
     <div aria-hidden="true" style={{ height: Math.max(0, total - (visible.length ? offsets[visible[visible.length - 1] + 1] : 0)) }} />

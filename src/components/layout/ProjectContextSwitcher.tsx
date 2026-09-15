@@ -9,7 +9,9 @@ import { cn } from "@/lib/utils";
 
 export function ProjectContextSwitcher({ collapsed }: { collapsed: boolean }) {
   const navigate = useNavigate();
-  const { activeProjectId, projects, setActiveProjectId } = useAppStore();
+  const activeProjectId = useAppStore(state => state.activeProjectId);
+  const projects = useAppStore(state => state.projects);
+  const setActiveProjectId = useAppStore(state => state.setActiveProjectId);
   const active = projects.find((p) => p.id === activeProjectId && !p.archived);
   const activeProjects = projects.filter((p) => !p.archived);
 

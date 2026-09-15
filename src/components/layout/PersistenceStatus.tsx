@@ -12,8 +12,8 @@ export function PersistenceStatus() {
   const [reloadRequested, setReloadRequested] = useState(false);
   const gitCount = useSyncExternalStore(subscribeGitActivity, getGitActivity);
   const exportLocal = () => {
-    const { projects, todos } = useAppStore.getState();
-    const data = { projects: projects.map(p => ({ ...p, frontendRepoToken: "", backendRepoToken: "" })), todos };
+    const { projects, todos, resources } = useAppStore.getState();
+    const data = { projects: projects.map(p => ({ ...p, frontendRepoToken: "", backendRepoToken: "" })), todos, resources };
     const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
     const a = document.createElement("a"); a.href = url; a.download = `todo-local-${Date.now()}.json`; a.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
