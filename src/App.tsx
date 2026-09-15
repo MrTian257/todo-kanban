@@ -30,7 +30,8 @@ import { PersistenceStatus } from "@/components/layout/PersistenceStatus";
 let startupVersionCheck: ReturnType<typeof dbCheckVersion> | undefined;
 
 function RootRedirect() {
-  const { projects, loaded } = useAppStore();
+  const projects = useAppStore(state => state.projects);
+  const loaded = useAppStore(state => state.loaded);
   if (!loaded) {
     return <div className="flex h-full items-center justify-center text-muted-foreground">加载中…</div>;
   }

@@ -33,8 +33,7 @@ export function TaskRelations({ todo }: { todo: Todo }) {
     </DialogContent></Dialog>
     <ResourceDetailDialog resource={draft ? readingResource : null} projectName={readingResource?.projectId ? projects.find(project => project.id === readingResource.projectId)?.name : undefined} linked={!!readingResource && (draft?.resourceIds.includes(readingResource.id) ?? false)} onToggleLink={readingResource ? (linked) => toggleResource(readingResource.id, linked) : undefined} onOpenChange={next => { if (!next) setReading(null); }}/></>;
 }
-export function ResourceBacklinks({ resourceId }: { resourceId: string }) {
-  const workflow = useWorkflow(); const todos = useAppStore(state => state.todos); const navigate = useNavigate();
-  const ids = new Set(workflow.links.filter(link => link.resourceIds.includes(resourceId)).map(link=>link.todoId));
-  return <div className="mt-2 flex flex-wrap gap-1">{todos.filter(todo=>ids.has(todo.id)).map(todo => <button key={todo.id} className="rounded bg-primary/10 px-2 py-1 text-xs text-primary" onClick={() => navigate(`/project/${todo.projectId}/todo/${todo.id}`)}>关联任务：{todo.title}</button>)}</div>;
+export function ResourceBacklinks({ todos }: { todos: Todo[] }) {
+  const navigate = useNavigate();
+  return <div className="mt-2 flex flex-wrap gap-1">{todos.map(todo => <button key={todo.id} className="rounded bg-primary/10 px-2 py-1 text-xs text-primary" onClick={() => navigate(`/project/${todo.projectId}/todo/${todo.id}`)}>关联任务：{todo.title}</button>)}</div>;
 }

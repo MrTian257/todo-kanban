@@ -1,3 +1,5 @@
+import { newestFirst } from "@/lib/listPerformance";
+import { useDebouncedPreference } from "@/lib/useDebouncedPreference";
 // 全部待办：全部待办一览（状态/项目筛选，支持快捷创建）
 
 import { useDeferredValue, useEffect, useMemo, useState } from "react";
@@ -49,21 +51,19 @@ export function TodoListPage() {
   useEffect(() => {
     if (projectId !== "all" && !projects.some(project => project.id === projectId)) setProjectId("all");
   }, [projects, projectId]);
-  useEffect(() => {
-    try { localStorage.setItem("todo-list-filters-v1", JSON.stringify({ status, projectId, showArchived, query })); } catch { /* Filters are optional. */ }
-  }, [status, projectId, showArchived, query]);
+  useDebouncedPreference("todo-list-filters-v1", { status, projectId, showArchived, query });
 
   const projectById = useMemo(() => new Map(projects.map((p) => [p.id, p])), [projects]);
 
+  const sortedTodos = useMemo(() => newestFirst(todos), [todos]);
   const list = useMemo(() => {
-    return todos.filter(todo =>
+    return sortedTodos.filter(todo =>
       (showArchived ? todo.archived : !todo.archived)
       && (status === "all" || todo.status === status)
       && (projectId === "all" || todo.projectId === projectId)
       && (!deferredQuery || searchable(todo).includes(deferredQuery)
-        || (projectById.get(todo.projectId)?.name ?? "").toLowerCase().includes(deferredQuery)))
-      .sort((a, b) => b.updatedAt - a.updatedAt);
-  }, [todos, status, projectId, showArchived, deferredQuery, projectById]);
+        || (projectById.get(todo.projectId)?.name ?? "").toLowerCase().includes(deferredQuery)));
+  }, [sortedTodos, status, projectId, showArchived, deferredQuery, projectById]);
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col bg-background tk-page">
