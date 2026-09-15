@@ -6,7 +6,7 @@ import { moveTask } from "./boardOrder";
 import { create } from "zustand";
 import { AppState, CommitInfo, LibraryResource, Project, Swimlane, Todo } from "./types";
 import { isTauri, loadState, saveState, pollState } from "./storage";
-import { normalizeProject, normalizeState } from "./normalize";
+import { normalizeProject, normalizeState, swimlaneForStatus } from "./normalize";
 import { gitInfoCached } from "./git";
 
 // Persistence tracks only user mutations; reads and status updates never write back.
@@ -297,13 +297,18 @@ export const useAppStore = create<AppStore>((set, get) => ({
   patchTodo: (id, patch) => {
     const current = get().todos.find(t => t.id === id);
     if (!current) return;
-    const lanes = get().projects.find(p => p.id === current.projectId)?.swimlanes ?? [];
+    const project = get().projects.find(p => p.id === current.projectId);
+    const lanes = project?.swimlanes ?? [];
     const explicit = patch.swimlaneId ? lanes.find(l => l.id === patch.swimlaneId) : undefined;
     const oldLane = lanes.find(l => l.id === current.swimlaneId);
-    const target = explicit ?? (patch.status && oldLane?.status !== patch.status
+    const nextStatus = explicit?.status ?? patch.status ?? current.status;
+    let target = explicit ?? (patch.status && oldLane?.status !== patch.status
       ? [...lanes].sort((a,b) => a.sortOrder-b.sortOrder).find(l => l.status === patch.status) : oldLane);
+    // 没有任何泳道处于目标状态（泳道被删、MCP/恢复快照直接改状态）时仍要挑一个状态匹配的泳道，
+    // 否则任务会长期留在状态不符的列（normalize 与后端都只修悬空泳道，不修状态/泳道不一致）。
+    if (!target) target = lanes.find(l => l.id === swimlaneForStatus(project, nextStatus));
     const now = Date.now();
-    const updated = get().todos.map(t => t.id === id ? { ...t, ...patch, status: explicit?.status ?? patch.status ?? t.status, updatedAt:now } : t);
+    const updated = get().todos.map(t => t.id === id ? { ...t, ...patch, status: nextStatus, updatedAt:now } : t);
     if (target && target.id !== current.swimlaneId) {
       const index = updated.filter(t => t.projectId === current.projectId && t.swimlaneId === target.id && !t.archived).length;
       set({todos:moveTask(updated, current.projectId, id, target, index, now)});

@@ -10,6 +10,8 @@ use crate::models::CommitInfo;
 use crate::tool::proc::quiet_command;
 
 pub const GIT_TIMEOUT: Duration = Duration::from_secs(30);
+/// 子进程结束后等待读取线程回传输出的上限（进程已退出，正常应瞬时返回）
+const READ_TIMEOUT: Duration = Duration::from_secs(5);
 const FIELD_SEP: char = '\x1f';
 
 /// 系统 git 版本（设置页展示用；失败返回 None，不影响主流程）
@@ -55,15 +57,20 @@ pub fn run_git(repo: &str, args: &[&str]) -> AppResult<String> {
         .stderr
         .take()
         .ok_or_else(|| AppError::git("无法读取 git 标准错误"))?;
-    let out_reader = std::thread::spawn(move || {
+    // 读取结果用 channel 回传：join() 会一直等到读取线程结束，而读取线程要等所有写端关闭——
+    // git 派生的 helper（credential helper / GIT_ASKPASS / ssh / gpg）可能继承并长期持有管道，
+    // 即使 git 已退出或被超时 kill，join 也会无限阻塞。改用 recv_timeout 给读取设上限。
+    let (out_tx, out_rx) = std::sync::mpsc::channel();
+    let (err_tx, err_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
         let mut buf = Vec::new();
         let _ = out_pipe.read_to_end(&mut buf);
-        buf
+        let _ = out_tx.send(buf);
     });
-    let err_reader = std::thread::spawn(move || {
+    std::thread::spawn(move || {
         let mut buf = Vec::new();
         let _ = err_pipe.read_to_end(&mut buf);
-        buf
+        let _ = err_tx.send(buf);
     });
 
     let start = Instant::now();
@@ -89,9 +96,21 @@ pub fn run_git(repo: &str, args: &[&str]) -> AppResult<String> {
         }
     }
 
-    // 读取线程随管道关闭自然结束（超时分支已 kill 子进程）
-    let out_bytes = out_reader.join().unwrap_or_default();
-    let err_bytes = err_reader.join().unwrap_or_default();
+    // 子进程已结束（或被 kill）：正常情况下管道立即关闭；被 helper 抢占时退化为有上限的等待
+    let out_bytes = match out_rx.recv_timeout(READ_TIMEOUT) {
+        Ok(buf) => buf,
+        Err(_) => {
+            log::warn!("git 标准输出读取超时（可能有子进程占用管道），按空输出处理");
+            Vec::new()
+        }
+    };
+    let err_bytes = match err_rx.recv_timeout(READ_TIMEOUT) {
+        Ok(buf) => buf,
+        Err(_) => {
+            log::warn!("git 标准错误读取超时（可能有子进程占用管道），按空输出处理");
+            Vec::new()
+        }
+    };
     if timed_out {
         return Err(AppError::git("git 命令执行超时（30s）"));
     }

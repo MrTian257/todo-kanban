@@ -20,7 +20,7 @@
 | [02-development/directory-map.md](02-development/directory-map.md) | 开发者 | 前端/后端/MCP 目录与文件地图、「去哪里改」速查 |
 | [02-development/frontend-guide.md](02-development/frontend-guide.md) | 前端 | store/持久化链、git 封装与缓存、表单、拖拽落库、提交关联、Markdown 备注 |
 | [02-development/backend-guide.md](02-development/backend-guide.md) | 后端 | 分层职责、新增命令/改表步骤、git/GitLab/SQLite 约定、单元测试、防闪黑框 |
-| [02-development/backend-contract.md](02-development/backend-contract.md) | 前后端 | **11 个 Tauri 命令**硬契约 + **MCP 9 tools / 3 resources** 契约 |
+| [02-development/backend-contract.md](02-development/backend-contract.md) | 前后端 | Tauri 命令硬契约（当前 38 个，见 `src-tauri/src/commands.rs`）+ **MCP 11 tools / 4 resources** 契约 |
 | [02-development/mcp-design.md](02-development/mcp-design.md) | 全员 | MCP 能力设计：目标/架构/契约/安全边界/实施状态 |
 | [02-development/theme-guide.md](02-development/theme-guide.md) | 前端 | 明暗 + 5 套皮肤机制、新增皮肤方法 |
 | [02-development/quality.md](02-development/quality.md) | 全员 | 质量门禁、单测清单、反模式清单、数据安全 |
@@ -41,7 +41,7 @@
 - **前端**：React 19 + TypeScript(strict)、Vite 7、shadcn/ui（radix-nova，基元勿手改）、Tailwind CSS v4（`@tailwindcss/vite`，无 tailwind.config）、zustand v5、React Router 7（**HashRouter**）、dnd-kit（core/sortable/utilities）、react-resizable-panels v4、react-hook-form + zod、react-day-picker v10、next-themes、sonner、lucide-react、markdown-it + turndown（WYSIWYG 备注）
 - **后端**：Tauri 2、Rust（workspace：薄壳 crate `todo-kanban` + 纯逻辑库 `todo-kanban-core` + 配置库 `todo-kanban-config`（版本等常量） + 升级分包 `todo-kanban-upgrade` + `mcp-server`）、rusqlite（bundled，WAL）、系统 git CLI、系统 curl（GitLab API）
 - **存储**：桌面端 SQLite（固定路径为**程序运行目录 `todo-kanban.db`**，schema `user_version=7`）；**数据版本升级框架**（ADR-011）：`todo-kanban-upgrade` 独立分包，启动判定版本——不兼容（过新/过旧）全屏拒绝，兼容则硬备份到运行目录 `backup/` 后逐级迁移；数据版本同时写入 `app_meta.data_version`；浏览器预览模式**无本地存储**（空态展示）
-- **扩展**：`src-tauri/mcp-server`（stdio MCP server）：9 tools + 3 resources，复用 `todo-kanban-core::svc`，零 tauri 依赖，`MCP_TODO_READONLY=1` 一键只读
+- **扩展**：`src-tauri/mcp-server`（stdio MCP server）：11 tools + 4 resources，复用 `todo-kanban-core::svc`，零 tauri 依赖，`MCP_TODO_READONLY=1` 一键只读
 
 ## 与 todo-git 原文档的映射
 
@@ -50,7 +50,7 @@
 | `README.md`（特性总览/命令表） | 并入 product-design / backend-contract（命令表已修正） |
 | `AGENTS.md`、`src-tauri/AGENTS.md`、`src/AGENTS.md`、`src/lib/AGENTS.md` | 约定/反模式并入 quality、frontend-guide、backend-guide（已按最新代码修正） |
 | `docs/README.md` | 本 README |
-| `docs/01-design/*`（4 份） | 同名保留并更新（6 页面 / 11 命令 / schema v4 / GitLab Token） |
+| `docs/01-design/*`（4 份） | 同名保留并更新（仅作背景参考；当前为 8 个页面组件 / 38 命令 / schema v10） |
 | `docs/02-development/backend-contract.md` 等（7 份） | 同名保留并更新；`mcp-plan.md` → `mcp-design.md`（去掉过程性叙事，保留设计与实施状态） |
 | `docs/后端业务逻辑与数据存储设计.md` | **拆分并入** data-model（存储语义）+ frontend-guide（store/写链/外部同步）+ refactor-notes（其中漂移未修正的部分） |
 

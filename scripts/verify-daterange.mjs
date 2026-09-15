@@ -1,6 +1,7 @@
 // CDP 验证：日期范围选择器必须选两个值后才关闭
-// 前置: chrome --remote-debugging-port=9222 已打开 http://localhost:1420/，dev server 运行中
-const HTTP = "http://127.0.0.1:9222";
+// 前置: chrome --remote-debugging-port 已打开 http://localhost:1420/，dev server 运行中（默认 9222，可用 CDP_PORT 覆盖）
+const PORT = process.env.CDP_PORT || "9222";
+const HTTP = `http://127.0.0.1:${PORT}`;
 
 async function getTarget() {
   const list = await (await fetch(`${HTTP}/json`)).json();

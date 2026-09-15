@@ -59,10 +59,14 @@ export function loadWorkflow(): Promise<void> {
 export async function refreshWorkflow(): Promise<void> {
   try {
     await loadWorkflow();
-  } catch (error) {
+  } catch {
     pendingLoad = null;
-    await loadWorkflow();
-    throw error;
+    try {
+      await loadWorkflow();
+    } catch (retryError) {
+      // 重试也失败：把重试的错误抛出去（首次错误的堆栈已无意义）
+      throw retryError;
+    }
   }
 }
 

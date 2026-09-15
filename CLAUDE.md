@@ -35,14 +35,17 @@ cargo test -p todo-kanban-core   # 核心库单测（db / git 解析 / 缓存 / 
 cargo test -p mcp-server         # MCP 单测（握手 / 工具清单 / 映射 / 只读门禁）
 ```
 
-前端纯逻辑无测试框架，用 esbuild 打包后跑 node 断言：`node scripts/test-board-order.mjs`（scripts/ 下 verify-*.mjs 同理）。
+前端纯逻辑无测试框架，用 esbuild 打包后跑 node 断言：`node scripts/test-board-order.mjs`、`node scripts/test-day-clock.mjs`（跨天刷新）。
+
+需要真实浏览器的验证脚本（CDP，先起 `npm run dev` 并用 `--remote-debugging-port` 打开页面，端口用 `CDP_PORT` 覆盖，默认 9222）：
+`node scripts/verify-dnd.mjs`（跨泳道/空白区落点/泳道内重排/按钮不误触/resize 后落点）、`verify-project-steps.mjs`（分支规则步骤编辑与回显）、`verify-daterange.mjs`（日期范围两击选择）、`probe-daterange.mjs`。
 
 发布打包：`bash build.sh`（一体化：Windows 本机构建 + 经 GitHub Actions 远程构建 macOS，产物收集到 `artifacts/<platform>/`，Windows exe 同步拷贝 `release/` 运行目录）。`--windows-only` / `--mac-only` 只打单平台。macOS 产物（.dmg）无法在 Windows 交叉构建，必须走 CI：经 `.github/workflows/build-macos.yml`（macos runner 出 dmg + mcp-server 双架构），触发要求该文件已 push 到当前分支；凭据自动获取（GITHUB_TOKEN → gh auth token → git credential），无需配置。
 
 ## 架构：三进程位面
 
 ```
-React SPA ──Tauri invoke（14 个命令）──> Rust 壳 crate（src-tauri/src/）
+React SPA ──Tauri invoke（38 个命令）──> Rust 壳 crate（src-tauri/src/）
                                             └─ 转调 todo-kanban-core（纯逻辑，无 tauri 依赖）
 mcp-server（独立 stdio 进程，复用同一个 core）
 ```
@@ -53,16 +56,16 @@ mcp-server（独立 stdio 进程，复用同一个 core）
 
 ### 数据版本升级框架（ADR-011）
 
-- 版本常量集中在 `src-tauri/config/src/lib.rs`：`CURRENT_DATA_VERSION = 8`、`MIN_SUPPORTED_DATA_VERSION`、`MIGRATION_STEPS`（v1→v8 逐级）、`CHANGELOG`。
+- 版本常量集中在 `src-tauri/config/src/lib.rs`：`CURRENT_DATA_VERSION = 10`、`MIN_SUPPORTED_DATA_VERSION`、`MIGRATION_STEPS`（v1→v10 逐级）、`CHANGELOG`。
 - `todo-kanban-upgrade::upgrade::ensure()` 编排：版本判定 →（兼容升级时）硬备份到运行目录 `backup/` → 逐级迁移 → 报告。语义：v=0（新库）不备份直接迁到最新；TooNew / TooOld 拒绝；调用方负责开连接 + 幂等建表。
 - 前端启动门禁：`db_check_version` 命令 → `src/lib/version.ts` → 不兼容时全屏 `VersionBlockedPage`（`src/components/version/`），升级成功 toast 提示。
 - **新增数据版本时**：提升 config 常量 → upgrade 写迁移 → 更新 MIGRATION_STEPS / CHANGELOG → 前端 `PREVIEW_REPORT` 同步。schema 变更需同步 `schema.rs`（DDL）、`row.rs`（行映射）、`db/mod.rs`（SELECT/INSERT）三处——**SQLite 列序是硬契约**（见 schema.rs 头部注释）。
 
 ### 存储与数据源
 
-SQLite WAL，数据源固定为**程序运行目录** `todo-kanban.db`（ADR-012）。启动自举 `ensure_db_at`：空库（app_meta 无 `seeded` 标记）→ 写入演示数据（1 项目 + 9 待办，与前端 `store.ts` demoState 对齐，固定时间戳）；已有数据（含用户清空后）绝不覆盖。日志写运行目录 `kanban.log`（轮转）。
+SQLite WAL，数据源固定为**程序运行目录** `todo-kanban.db`（ADR-012；macOS 为用户目录 `~/Library/Application Support/com.todo-kanban.app/`，目标库不存在时会先接管程序目录里的旧库与附件）。启动自举 `ensure_db_at`：**完全空白**（`db::is_pristine`：业务表 / 附件索引 / 历史 / 工作流全部为空）且 app_meta 无 `seeded` 标记 → 写入演示数据（1 项目 + 9 待办，与前端 `store.ts` demoState 对齐，固定时间戳）；已有数据（含用户清空后、只有资料或只有工作流配置）绝不覆盖。日志写运行目录 `kanban.log`（轮转）。
 
-`svc/db_cmds.rs` 是读写编排层：进程级 `DB_RW_LOCK` 读写锁；`load_state` 带指纹缓存（配合前端 2s 轮询开销趋近零）；`save_state_checked(payload, expected)` 写锁全程互斥 + 保存前校验 + 清指纹缓存；**过期快照不能删除并发新增记录**。
+`svc/db_cmds.rs` 是读写编排层：进程级 `DB_RW_LOCK` 读写锁；读路径不做进程内缓存（跨进程写入无法可靠失效），外部改动由 `svc/state_poll.rs` 用 `PRAGMA data_version` 轮询，未变化时不重读全量；`save_state_checked(payload, expected)` 写锁全程互斥 + 保存前校验；**过期快照不能删除并发新增记录**。
 
 ### 前端数据流（ADR-008 单 store 写链）
 
@@ -95,7 +98,7 @@ note 持久化只存 `attachment://<todoId>/<file>` 短引用；展示/编辑时
 
 ### MCP server（`src-tauri/mcp-server/`）
 
-手写 stdio JSON-RPC（无框架，ADR-007）：9 tools + 3 resources（`todo-kanban://state|projects|todos`），复用 core。配置解析（`config.rs`）：`--db-config` / `MCP_TODO_DB_CONFIG` 覆盖数据源目录（库文件固定为 `<dir>/todo-kanban.db`，不存在时不自动创建）→ 回退 app exe 目录；`--token` / `MCP_TODO_TOKEN`；`MCP_TODO_READONLY=1` 只读。启动校验（`bridge::verify_startup`，任一不满足即退出）：数据源可用 + 设置页「MCP 集成」启用 + Token 匹配（默认 `sk-GLOBAl_MCP_BY_ADMIN`，设置存 app_meta）。错误映射：AppError::Invalid→-32602、其余→-32603。写工具共 7 个（含 `db_save_state`，**唯一数据写入口**，必须携带修改前 `db_load_state` 返回值作 expected，禁止直接覆盖）；MCP 的 git_info 保持直读语义（不经 app 侧缓存），`git_info_refresh` / `git_info_remote` 为 app 专属不暴露。
+手写 stdio JSON-RPC（无框架，ADR-007）：11 tools + 4 resources（`todo-kanban://state|projects|todos|resources`），复用 core。配置解析（`config.rs`）：`--db-config` / `MCP_TODO_DB_CONFIG` 覆盖数据源目录（库文件固定为 `<dir>/todo-kanban.db`，不存在时不自动创建）→ 回退 app exe 目录；`--token` / `MCP_TODO_TOKEN`；`MCP_TODO_READONLY=1` 只读。启动校验（`bridge::verify_startup`，任一不满足即退出）：数据源可用 + 设置页「MCP 集成」启用 + Token 匹配（默认 `sk-GLOBAl_MCP_BY_ADMIN`，设置存 app_meta）。错误映射：AppError::Invalid→-32602、其余→-32603。写工具共 7 个（含 `db_save_state`，**唯一数据写入口**，必须携带修改前 `db_load_state` 返回值作 expected，禁止直接覆盖）；MCP 的 git_info 保持直读语义（不经 app 侧缓存），`git_info_refresh` / `git_info_remote` 为 app 专属不暴露。
 
 ### 项目 skill
 

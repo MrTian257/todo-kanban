@@ -1,5 +1,6 @@
 // 探测日期弹层 DOM 结构（辅助 verify-daterange）
-const HTTP = "http://127.0.0.1:9222";
+const PORT = process.env.CDP_PORT || "9222";
+const HTTP = `http://127.0.0.1:${PORT}`;
 
 async function main() {
   const list = await (await fetch(`${HTTP}/json`)).json();

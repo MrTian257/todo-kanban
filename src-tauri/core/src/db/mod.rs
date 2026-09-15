@@ -1,5 +1,5 @@
 //! SQLite 存储：open(WAL) / init(幂等建表+迁移) / load_state / save_state(差异写+seq 收敛+提交去重+泳道校验) /
-//! storage_fingerprint / next_seq / repair_duplicate_tags；旧 JSON 迁移见 legacy.rs（仅参考）。
+//! is_pristine / next_seq / repair_duplicate_tags；旧 JSON 迁移见 legacy.rs（仅参考）。
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -104,30 +104,38 @@ pub fn init_and_migrate(conn: &Connection, json_path: &Path) -> AppResult<bool> 
     let raw = std::fs::read_to_string(json_path)?;
     let state: DbState = serde_json::from_str(&raw)?;
     init(conn)?;
-    let empty = storage_fingerprint(conn)? == (0, 0, 0);
+    let empty = is_pristine(conn)?;
     if empty {
         save_state(conn, &state)?;
     }
     Ok(empty)
 }
 
-/// 版本信号：两表行数 + 全局 MAX(updated_at)（WAL 下跨连接稳定，不用 PRAGMA data_version）
-pub fn storage_fingerprint(conn: &Connection) -> AppResult<(usize, usize, i64)> {
-    let pc: usize = conn.query_row("SELECT COUNT(*) FROM projects", [], |r| r.get(0))?;
-    let tc: usize = conn.query_row("SELECT COUNT(*) FROM todos", [], |r| r.get(0))?;
-    let max_ts: i64 = conn
-        .query_row(
-            "SELECT MAX(x) FROM (
-               SELECT MAX(updated_at) AS x FROM projects
-               UNION ALL SELECT MAX(updated_at) FROM todos
-             )",
-            [],
-            |r| r.get::<_, Option<i64>>(0),
-        )
-        .optional()?
-        .flatten()
-        .unwrap_or(0);
-    Ok((pc, tc, max_ts))
+/// 完全空白库判定：业务表、附件索引、变更历史与工作流配置全部为空。
+/// 启动播种必须用它——只看 projects/todos 会把「只有资料」或「只有工作流配置」的库误判成空库，
+/// 而播种走的是差集写：传入快照里没有的行会被删除，等于直接清掉用户数据。
+/// 派生缓存表（git_repo_cache）与设置表（app_meta）不参与判定。
+pub fn is_pristine(conn: &Connection) -> AppResult<bool> {
+    const BUSINESS_TABLES: [&str; 8] = [
+        "projects",
+        "todos",
+        "resources",
+        "attachments",
+        "todo_attachments",
+        "change_history",
+        "change_proposals",
+        "workflow_state",
+    ];
+    for table in BUSINESS_TABLES {
+        let exists: bool =
+            conn.query_row(&format!("SELECT EXISTS(SELECT 1 FROM {table})"), [], |r| {
+                r.get(0)
+            })?;
+        if exists {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// 全量读取（事务外调用；连接需已 init）
@@ -279,7 +287,12 @@ fn save_state_inner(
             used_seqs.remove(&old.seq);
         }
         if todo.seq <= 0 || used_seqs.contains(&todo.seq) {
-            let n = next_seq(&tx)?; // 写锁（事务）内全局取号
+            // 取号可能落在已被占用的号上（计数器落后于库内 MAX(seq)：恢复备份、MCP 显式 seq），
+            // 必须复核后重取，否则自动 tag 会撞上既有记录并让整批保存永久失败。
+            let mut n = next_seq(&tx)?; // 写锁（事务）内全局取号
+            while used_seqs.contains(&n) {
+                n = next_seq(&tx)?;
+            }
             used_seqs.insert(n);
             todo.seq = n;
             // 空 tag 或系统生成的 todo-<seq>：跟随新 seq 重新生成；
@@ -372,9 +385,10 @@ fn save_state_inner(
     };
 
     let saved = row::load_state_from_conn(&tx)?;
-    crate::svc::workflow::prune(&tx, &saved)?;
     if let Some(workflow) = workflow {
-        // 并发保护：调用方确认时的配置版本必须仍是当前版本，否则拒绝（不覆盖期间的工作流修改）。
+        // 并发保护：必须在 prune 之前校验 revision —— prune 清理悬空关联时会推进 revision，
+        // 放在它后面会把「调用方确认时的版本」与「已被 prune 推进的版本」比较，导致备份恢复永久失败。
+        // 恢复分支不做 prune：工作流马上被备份内容整体覆盖，且 validate 会拒绝悬空引用。
         let current = crate::svc::workflow::read(&tx)?;
         if workflow_revision.is_some_and(|expected| expected != current.revision) {
             return Err(AppError::invalid(
@@ -385,6 +399,9 @@ fn save_state_inner(
         restored.revision = current.revision + 1;
         crate::svc::workflow::validate(&restored, &saved)?;
         crate::svc::workflow::write(&tx, &restored)?;
+    } else {
+        // 普通保存：清理悬空关联（派生清理，会推进 revision）
+        crate::svc::workflow::prune(&tx, &saved)?;
     }
     if let Some(id) = proposal {
         if tx.execute(
@@ -404,16 +421,22 @@ fn save_state_inner(
 }
 
 fn ensure_next_seq(conn: &Connection) -> AppResult<()> {
-    let has: bool = conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM app_meta WHERE key = ?1)",
-        [NEXT_SEQ_KEY],
-        |r| r.get(0),
-    )?;
-    if !has {
-        let max_seq: i64 =
-            conn.query_row("SELECT COALESCE(MAX(seq), 0) FROM todos", [], |r| r.get(0))?;
+    let max_seq: i64 =
+        conn.query_row("SELECT COALESCE(MAX(seq), 0) FROM todos", [], |r| r.get(0))?;
+    let current: Option<i64> = conn
+        .query_row(
+            "SELECT value FROM app_meta WHERE key = ?1",
+            [NEXT_SEQ_KEY],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()?
+        .and_then(|v| v.parse::<i64>().ok());
+    // 计数器缺失或被外部写入的更高 seq 甩在身后（恢复备份不还原 app_meta、MCP 显式指定 seq）时都必须抬升，
+    // 否则后续取号会与既有 seq 撞车，自动 tag 与库中记录冲突导致新建待办永久失败。
+    if current.unwrap_or(0) < max_seq {
         conn.execute(
-            "INSERT INTO app_meta (key, value) VALUES (?1, ?2)",
+            "INSERT INTO app_meta (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             rusqlite::params![NEXT_SEQ_KEY, max_seq.to_string()],
         )?;
     }
@@ -458,7 +481,10 @@ pub fn repair_duplicate_tags(conn: &Connection) -> AppResult<()> {
     }
     for mut t in todos {
         if t.seq <= 0 {
-            let n = next_seq(conn)?;
+            let mut n = next_seq(conn)?;
+            while used.contains(&n) {
+                n = next_seq(conn)?;
+            }
             used.insert(n);
             t.seq = n;
             t.tag = format!("todo-{n}");
@@ -723,21 +749,52 @@ mod tests {
         assert_eq!(loaded.todos[0].id, "t1");
     }
 
+    /// 空库判定必须覆盖资料与工作流：只有资料的库不是空库（否则启动播种会把它删掉）
     #[test]
-    fn fingerprint_changes_on_write() {
+    fn is_pristine_covers_resources_and_workflow() {
         let conn = test_conn();
-        let f0 = storage_fingerprint(&conn).unwrap();
+        assert!(is_pristine(&conn).unwrap(), "刚建表的库是空白库");
         save_state(
             &conn,
             &DbState {
-                projects: vec![project("p1")],
-                resources: vec![],
-                todos: vec![todo("t1", 1, "todo-1")],
+                projects: vec![],
+                resources: vec![resource("r1", None, "只有资料")],
+                todos: vec![],
             },
         )
         .unwrap();
-        let f1 = storage_fingerprint(&conn).unwrap();
-        assert_ne!(f0, f1);
+        assert!(
+            !is_pristine(&conn).unwrap(),
+            "只有资料的库不得被判为空库（播种的差集写会删除它）"
+        );
+
+        // 只有工作流配置（任务关系/模板/提醒）同样不是空库
+        let conn = test_conn();
+        let value = crate::svc::workflow::Workflow {
+            templates: vec![crate::svc::workflow::TaskTemplate {
+                id: "tpl".into(),
+                project_id: None,
+                name: "模板".into(),
+                title: "标题".into(),
+                note: String::new(),
+                repo_path: String::new(),
+                branch: String::new(),
+            }],
+            ..Default::default()
+        };
+        let tx = conn.unchecked_transaction().unwrap();
+        crate::svc::workflow::write(&tx, &value).unwrap();
+        tx.commit().unwrap();
+        assert!(!is_pristine(&conn).unwrap(), "有工作流配置的库不是空库");
+
+        // 变更历史也算数据
+        let conn = test_conn();
+        conn.execute(
+            "INSERT INTO change_history(id,entity,entity_id,actor,happened_at,before_json,after_json) VALUES('h1','todo','t1','human',1,NULL,NULL)",
+            [],
+        )
+        .unwrap();
+        assert!(!is_pristine(&conn).unwrap());
     }
 
     fn resource(id: &str, project_id: Option<&str>, title: &str) -> DbLibraryResource {
@@ -974,6 +1031,96 @@ mod tests {
         assert_eq!(restored.revision, 6, "恢复后配置版本应在当前版本上推进");
     }
 
+    /// 回归：恢复备份时旧工作流含「新快照中已不存在的待办」关联，prune 会推进 revision；
+    /// 版本校验必须在 prune 之前，否则恢复永远被判成并发冲突（真实缺陷）。
+    #[test]
+    fn restore_with_dangling_links_is_not_blocked_by_prune() {
+        let conn = test_conn();
+        let before = DbState {
+            projects: vec![project("p1")],
+            resources: vec![],
+            todos: vec![todo("t1", 1, "todo-1")],
+        };
+        save_state(&conn, &before).unwrap();
+        crate::svc::workflow::write(
+            &conn,
+            &crate::svc::workflow::Workflow {
+                revision: 3,
+                links: vec![crate::svc::workflow::TaskLinks {
+                    todo_id: "t1".into(),
+                    parent_id: None,
+                    depends_on: vec![],
+                    resource_ids: vec![],
+                }],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        // 恢复：t1 在备份快照里不存在，工作流换成备份里的（无关联）
+        let restored_state = DbState {
+            projects: vec![project("p1")],
+            resources: vec![],
+            todos: vec![],
+        };
+        let restored_workflow = crate::svc::workflow::Workflow {
+            revision: 1,
+            ..Default::default()
+        };
+        let result = save_state_extended(
+            &conn,
+            &restored_state,
+            &before,
+            Some(&restored_workflow),
+            Some(3),
+            None,
+            None,
+        );
+        assert!(
+            result.is_ok(),
+            "含悬空关联的恢复不应被 prune 的版本推进否决：{:?}",
+            result.err().map(|e| e.to_string())
+        );
+        assert!(load_state(&conn).unwrap().todos.is_empty());
+        let restored = crate::svc::workflow::read(&conn).unwrap();
+        assert_eq!(restored.revision, 4, "恢复后版本应在调用方确认的版本上推进");
+        assert!(restored.links.is_empty(), "恢复应整体覆盖工作流");
+    }
+
+    /// 回归：计数器落后于库内 MAX(seq)（恢复备份不还原 app_meta、MCP 显式 seq）时，
+    /// 新建待办必须取到未被占用的号，而不是撞上既有 tag 导致保存永久失败。
+    #[test]
+    fn stale_next_seq_never_collides() {
+        let conn = test_conn();
+        save_state(
+            &conn,
+            &DbState {
+                projects: vec![project("p1")],
+                resources: vec![],
+                todos: vec![todo("t1", 7, "todo-7")],
+            },
+        )
+        .unwrap();
+        // 人为把计数器压到 MAX(seq)-1（恢复备份不还原 app_meta 的等价场景）：
+        // 旧实现会取出已被占用的 7 → 自动 tag todo-7 与同批 t1 冲突 → 整批保存永久失败
+        conn.execute(
+            "UPDATE app_meta SET value = '6' WHERE key = ?1",
+            [NEXT_SEQ_KEY],
+        )
+        .unwrap();
+
+        let next = DbState {
+            projects: vec![project("p1")],
+            resources: vec![],
+            todos: vec![todo("t1", 7, "todo-7"), todo("t2", 0, "")],
+        };
+        save_state(&conn, &next).expect("计数器落后时新建待办不应被 tag 冲突拒绝");
+        let loaded = load_state(&conn).unwrap();
+        let t2 = loaded.todos.iter().find(|t| t.id == "t2").unwrap();
+        assert!(t2.seq > 7, "应取到未被占用的号，实际 {}", t2.seq);
+        assert_eq!(t2.tag, format!("todo-{}", t2.seq));
+    }
+
     /// 存储层归一不产生假冲突：库中存量 created_by 为空（v7 之前的行）时，
     /// 「读取快照原样写回」必须成功，而不是永远 STATE_CONFLICT。
     #[test]
@@ -1004,6 +1151,35 @@ mod tests {
         assert_eq!(saved.0.todos[0].swimlane_id, "swim-todo");
         // 再次读取原样写回仍幂等（读写对称，不再出现假冲突）
         save_state_checked(&conn, &saved.0, &saved.0).unwrap();
+    }
+
+    /// 变更历史的字节上限：整实体 JSON 很大时按总字节裁剪最旧记录，保留最新的
+    #[test]
+    fn history_trim_caps_total_bytes() {
+        let conn = test_conn();
+        let big = "x".repeat(1024 * 1024);
+        for index in 0..40 {
+            conn.execute(
+                "INSERT INTO change_history(id,entity,entity_id,actor,happened_at,before_json,after_json) VALUES(?1,'todo','t1','human',?2,?3,?4)",
+                rusqlite::params![format!("h{index}"), index, big, big],
+            )
+            .unwrap();
+        }
+        crate::svc::workflow::trim(&conn).unwrap();
+        let remaining: i64 = conn
+            .query_row("SELECT COUNT(*) FROM change_history", [], |r| r.get(0))
+            .unwrap();
+        // 每条约 2 MiB，32 MiB 上限 → 只保留最新的十几条
+        assert!(
+            (1..40).contains(&remaining),
+            "超字节上限的旧记录应被裁剪，实际保留 {remaining}"
+        );
+        let oldest: i64 = conn
+            .query_row("SELECT MIN(happened_at) FROM change_history", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert!(oldest > 0, "裁剪的是最旧记录，实际最早为 {oldest}");
     }
 
     /// 变更历史保留策略：只裁剪最旧记录，不触碰待批准提案

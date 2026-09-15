@@ -8,7 +8,7 @@
 core/src/
 ├── error.rs      # AppError（Display 中文）+ AppResult<T>
 ├── models.rs     # DbState/DbProject/DbTodo/DbSwimlane/CommitInfo；GitInfo 唯一 snake_case 例外
-├── db/           # SQLite：mod(open/init/open_and_init/load_state/save_state/指纹/next_seq/repair)
+├── db/           # SQLite：mod(open/init/open_and_init/load_state/save_state/is_pristine/next_seq/repair)
 │                 #   schema.rs(列序硬契约) + row.rs(行映射) + legacy.rs(旧 JSON 参考) + repo_cache.rs
 ├── svc/          # 服务编排：db_cmds / git_cmds / gitlab / branch_rule / repo_cache / attachments
 └── tool/         # git_cli.rs（git 命令执行器）+ proc.rs（进程封装）
@@ -18,7 +18,7 @@ core/src/
 
 | 想改什么 | 位置 |
 | --- | --- |
-| 新增业务命令 | `svc/db_cmds.rs`（DB_RW_LOCK + 指纹缓存）或 `svc/git_cmds.rs`（git 行为） |
+| 新增业务命令 | `svc/db_cmds.rs`（DB_RW_LOCK + 写前校验）或 `svc/git_cmds.rs`（git 行为） |
 | 读写数据库 | 一律走 `db/mod.rs` 的 `load_state` / `save_state`（差异写 + seq 收敛 + 提交去重 + 泳道校验） |
 | git 操作 | `svc/git_cmds.rs` 编排 → `tool/git_cli.rs` 执行（不直接 std::process） |
 | 泳道/分支规则 | `svc/branch_rule.rs`（8 单测：泳道校验 + 分支规则） |

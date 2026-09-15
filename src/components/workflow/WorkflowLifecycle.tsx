@@ -11,10 +11,11 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import { flushPersistence, useAppStore } from "@/lib/store";
 import { isTauri } from "@/lib/storage";
 import { isMacOS } from "@/lib/platform";
+import { dayStartMs } from "@/lib/todo";
 import { normalizeTodo } from "@/lib/normalize";
 import { autoRecaptureOnDone } from "@/lib/completeTodo";
 import { newId } from "@/lib/utils";
-import { todayStr } from "@/lib/todo";
+import { useToday } from "@/lib/dayClock";
 import { useEditingGuard } from "@/lib/editingGuard";
 import { desktopAction, refreshWorkflow } from "@/lib/workflow";
 
@@ -44,16 +45,9 @@ function writeDraft(value: QuickDraft | null) {
   }
 }
 
-/** 到下一个本地零点的毫秒数（菜单栏今日清单跨天刷新用） */
-function msUntilNextDay(): number {
-  const now = new Date();
-  const next = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 2);
-  return Math.max(1000, next.getTime() - now.getTime());
-}
-
 export function WorkflowLifecycle() {
   const loaded = useAppStore(state=>state.loaded); const projects = useAppStore(state=>state.projects); const todos = useAppStore(state=>state.todos); const navigate = useNavigate();
-  const [open,setOpen] = useState(false); const [title,setTitle] = useState(""); const [projectId,setProjectId] = useState(""); const [busy,setBusy] = useState(false); const [day,setDay] = useState(()=>todayStr()); const returnToPrevious = useRef(false); const addingId = useRef(newId()); const operation = useRef(false); const quickOpen = useRef(false); const draftRef = useRef({title:"",projectId:""});
+  const [open,setOpen] = useState(false); const [title,setTitle] = useState(""); const [projectId,setProjectId] = useState(""); const [busy,setBusy] = useState(false); const day=useToday(); const returnToPrevious = useRef(false); const addingId = useRef(newId()); const operation = useRef(false); const quickOpen = useRef(false); const draftRef = useRef({title:"",projectId:""});
   draftRef.current = {title,projectId};
   useEditingGuard(open && title.trim().length > 0);
   quickOpen.current = open;
@@ -103,12 +97,12 @@ export function WorkflowLifecycle() {
   useEffect(()=>{
     if(!loaded||!isTauri())return;
     const activeProjects=new Set(projects.filter(project=>!project.archived).map(project=>project.id));
-    const tasks=todos.filter(todo=>!todo.archived&&todo.status!=="done"&&activeProjects.has(todo.projectId)&&(todo.status==="doing"||(todo.endDate&&todo.endDate<=day)||todo.createdAt>=new Date(`${day}T00:00:00`).getTime())).sort((a,b)=>Number(b.status==="doing")-Number(a.status==="doing")).slice(0,12).map(({id,title,status})=>({id,title,status}));
+    const tasks=todos.filter(todo=>!todo.archived&&todo.status!=="done"&&activeProjects.has(todo.projectId)&&(todo.status==="doing"||(todo.endDate&&todo.endDate<=day)||todo.createdAt>=dayStartMs(day))).sort((a,b)=>Number(b.status==="doing")-Number(a.status==="doing")).slice(0,12).map(({id,title,status})=>({id,title,status}));
+    // 跨天刷新：『今天』的定义变了，菜单栏清单必须重建（否则昨天的任务会一直显示）；
+    // 日期由 useToday 统一驱动，这里不再自建零点半点定时器。
     const timer=setTimeout(()=>{void desktopAction("desktop_update_tasks",{tasks}).catch(error=>toast.error(String(error)));},250);
-    // 跨天刷新：『今天』的定义变了，菜单栏清单必须重建（否则昨天的任务会一直显示）
-    const midnight=setTimeout(()=>setDay(todayStr()),msUntilNextDay());
-    return()=>{clearTimeout(timer);clearTimeout(midnight);};
+    return()=>{clearTimeout(timer);};
   },[loaded,todos,projects,day]);
-  const close=async()=>{setOpen(false);setTitle("");writeDraft(null);if(isTauri())await desktopAction("desktop_quick_done",{returnToPrevious:returnToPrevious.current});};
-  return <Dialog open={open} onOpenChange={next=>{if(!next&&!busy){if(!title.trim())void close().catch(error=>toast.error(String(error)));else writeDraft({title,projectId,at:Date.now()});}}}><DialogContent><DialogTitle>快速添加任务</DialogTitle><DialogDescription>⌘⇧空格 / Ctrl⇧空格。保存后返回之前的应用；未保存的标题会自动保留。</DialogDescription><form className="space-y-4" onSubmit={event=>{event.preventDefault();if(busy)return;setBusy(true);void(async()=>{try{const state=useAppStore.getState();const project=state.projects.find(project=>project.id===projectId&&!project.archived);if(!project)throw new Error("请先选择项目");if(!title.trim())throw new Error("请输入任务标题");const existing=state.todos.find(todo=>todo.id===addingId.current);state.upsertTodo(normalizeTodo({...existing,id:addingId.current,projectId,title:title.trim(),note:"",branch:"",repoPath:"",tag:"",createdAt:existing?.createdAt??Date.now(),updatedAt:Date.now()},project));await flushPersistence();await close();toast.success("任务已添加");}catch(error){toast.error(String(error));}finally{setBusy(false);}})();}}><label className="block text-sm">任务标题<Input autoFocus required value={title} onChange={event=>{setTitle(event.target.value);writeDraft(event.target.value.trim()?{title:event.target.value,projectId,at:Date.now()}:null);}}/></label><label className="block text-sm">所属项目<select className="mt-1 w-full rounded border bg-background p-2" value={projectId} onChange={event=>{setProjectId(event.target.value);writeDraft({title,projectId:event.target.value,at:Date.now()});}}><option value="">选择项目</option>{projects.filter(project=>!project.archived).map(project=><option key={project.id} value={project.id}>{project.name}</option>)}</select></label>{!projects.length&&<p className="text-sm text-muted-foreground">请先在主窗口创建项目。</p>}<div className="flex justify-end gap-2"><Button type="button" variant="outline" disabled={busy} onClick={()=>void close().catch(error=>toast.error(String(error)))}>放弃并返回</Button><Button type="submit" disabled={busy||!projectId}>保存任务</Button></div></form></DialogContent></Dialog>;
+  const close=async()=>{setOpen(false);setTitle("");writeDraft(null);if(isTauri())await desktopAction("desktop_quick_done",{returnToPrevious:returnToPrevious.current});};const hideKeepingDraft=()=>{setOpen(false);writeDraft({title,projectId,at:Date.now()});if(isTauri())void desktopAction("desktop_quick_done",{returnToPrevious:returnToPrevious.current}).catch(error=>toast.error(String(error)));};
+  return <Dialog open={open} onOpenChange={next=>{if(!next&&!busy){if(!title.trim())void close().catch(error=>toast.error(String(error)));else hideKeepingDraft();}}}><DialogContent><DialogTitle>快速添加任务</DialogTitle><DialogDescription>⌘⇧空格 / Ctrl⇧空格。保存后返回之前的应用；未保存的标题会自动保留。</DialogDescription><form className="space-y-4" onSubmit={event=>{event.preventDefault();if(busy)return;setBusy(true);void(async()=>{try{const state=useAppStore.getState();const project=state.projects.find(project=>project.id===projectId&&!project.archived);if(!project)throw new Error("请先选择项目");if(!title.trim())throw new Error("请输入任务标题");const existing=state.todos.find(todo=>todo.id===addingId.current);state.upsertTodo(normalizeTodo({...existing,id:addingId.current,projectId,title:title.trim(),note:"",branch:"",repoPath:"",tag:"",createdAt:existing?.createdAt??Date.now(),updatedAt:Date.now()},project));await flushPersistence();await close();toast.success("任务已添加");}catch(error){toast.error(String(error));}finally{setBusy(false);}})();}}><label className="block text-sm">任务标题<Input autoFocus required value={title} onChange={event=>{setTitle(event.target.value);writeDraft(event.target.value.trim()?{title:event.target.value,projectId,at:Date.now()}:null);}}/></label><label className="block text-sm">所属项目<select className="mt-1 w-full rounded border bg-background p-2" value={projectId} onChange={event=>{setProjectId(event.target.value);writeDraft({title,projectId:event.target.value,at:Date.now()});}}><option value="">选择项目</option>{projects.filter(project=>!project.archived).map(project=><option key={project.id} value={project.id}>{project.name}</option>)}</select></label>{!projects.length&&<p className="text-sm text-muted-foreground">请先在主窗口创建项目。</p>}<div className="flex justify-end gap-2"><Button type="button" variant="outline" disabled={busy} onClick={()=>void close().catch(error=>toast.error(String(error)))}>放弃并返回</Button><Button type="submit" disabled={busy||!projectId}>保存任务</Button></div></form></DialogContent></Dialog>;
 }

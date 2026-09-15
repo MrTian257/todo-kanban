@@ -240,19 +240,21 @@ pub fn load_todos_from_conn(conn: &rusqlite::Connection) -> AppResult<Vec<DbTodo
     Ok(todos)
 }
 
+pub fn load_resources_from_conn(conn: &rusqlite::Connection) -> AppResult<Vec<DbLibraryResource>> {
+    let mut resources = Vec::new();
+    let mut stmt = conn.prepare(RESOURCE_SELECT)?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        resources.push(row_to_resource(row)?);
+    }
+    Ok(resources)
+}
+
 pub fn load_state_from_conn(conn: &rusqlite::Connection) -> AppResult<DbState> {
     Ok(DbState {
         projects: load_projects_from_conn(conn)?,
         todos: load_todos_from_conn(conn)?,
-        resources: {
-            let mut resources = Vec::new();
-            let mut stmt = conn.prepare(RESOURCE_SELECT)?;
-            let mut rows = stmt.query([])?;
-            while let Some(row) = rows.next()? {
-                resources.push(row_to_resource(row)?);
-            }
-            resources
-        },
+        resources: load_resources_from_conn(conn)?,
     })
 }
 

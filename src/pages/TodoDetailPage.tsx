@@ -320,15 +320,20 @@ function TodoDetailForm() {
     upsertTodo(todo);
     await flushPersistence();
     const parentId = isNew ? searchParams.get("parent") : null;
+    let linkWarning = "";
     if (parentId) {
-      await loadWorkflow(); const current = getWorkflow();
-      await saveWorkflow({...current,links:[...current.links.filter(link=>link.todoId!==todo.id),{todoId:todo.id,parentId,dependsOn:[],resourceIds:[]}]});
+      // 任务本身已经落库：父关联失败必须单独提示，报成「保存失败」会让用户重复提交建出重复任务
+      try {
+        await loadWorkflow(); const current = getWorkflow();
+        await saveWorkflow({...current,links:[...current.links.filter(link=>link.todoId!==todo.id),{todoId:todo.id,parentId,dependsOn:[],resourceIds:[]}]});
+      } catch (linkError) { linkWarning = String(linkError); }
     }
     finishedSave.current = true;
     dirtyRef.current = false;
     clearDraft();
     useAppStore.setState({ editingDirty: false });
-    toast.success(isNew ? "待办已创建" : "待办已保存");
+    if (linkWarning) toast.error(`待办已保存，但父任务关联失败：${linkWarning}`);
+    else toast.success(isNew ? "待办已创建" : "待办已保存");
     navigate(`/project/${project.id}`);
     } catch(e) {setSaveError(String(e));toast.error("保存失败，请重试");} finally {submitLock.current=false;}
   };

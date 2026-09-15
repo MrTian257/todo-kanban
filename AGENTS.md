@@ -27,7 +27,7 @@ todo-kanban/
 
 | 想改什么 | 位置 |
 | --- | --- |
-| 前端路由/页面 | `src/pages/` + `src/App.tsx`（HashRouter 6 路由） |
+| 前端路由/页面 | `src/pages/` + `src/App.tsx`（HashRouter 9 路由） |
 | 前端状态/数据流 | `src/lib/store.ts`（唯一 zustand store，ADR-008 写链） |
 | 前端类型（与后端对齐） | `src/lib/types.ts` ↔ `src-tauri/core/src/models.rs`（改字段必须两端同步） |
 | 拖拽/泳道 | `src/components/board/SwimlaneBoard.tsx` + `src/lib/boardOrder.ts`（有 node 测试） |
@@ -47,11 +47,11 @@ todo-kanban/
 | `startGitCacheWarm` | fn | `src/lib/store.ts:386` | 启动后预热 git 分支缓存 |
 | `Project` / `Todo` | type | `src/lib/types.ts:56/76` | 前后端 serde rename 强对齐契约 |
 | `GitInfo` | type | `src/lib/types.ts:19` | **唯一 snake_case 例外**（models.rs 头部注释） |
-| `commands.rs` 17 命令 | module | `src-tauri/src/commands.rs` | 薄壳：一行转调 core::svc，map_err 中文 |
+| `commands.rs` 38 命令 | module | `src-tauri/src/commands.rs` | 薄壳：一行转调 core::svc，map_err 中文 |
 | `core/src/lib.rs` | barrel | `src-tauri/core/src/lib.rs` | 导出 db/error/models/svc/tool |
-| `db_cmds.rs` | svc | `src-tauri/core/src/svc/` | 读写编排 + DB_RW_LOCK + 指纹缓存 |
+| `db_cmds.rs` | svc | `src-tauri/core/src/svc/` | 读写编排 + DB_RW_LOCK（外部改动由 state_poll 轮询） |
 | `git_cmds.rs` | svc | `src-tauri/core/src/svc/` | git 行为（执行器在 tool/git_cli.rs） |
-| `mcp-server/main.rs` | bin | `src-tauri/mcp-server/src/` | stdio JSON-RPC 循环，9 tools + 3 resources |
+| `mcp-server/main.rs` | bin | `src-tauri/mcp-server/src/` | stdio JSON-RPC 循环，11 tools + 4 resources |
 
 ## CONVENTIONS（与 CLAUDE.md 不同或补充）
 
@@ -70,6 +70,8 @@ npm run tauri dev           # 桌面开发（1440×900 无边框）
 cargo test -p todo-kanban-core   # 核心库单测（src-tauri/ 下）
 cargo test -p mcp-server         # MCP 单测
 node scripts/test-board-order.mjs  # 泳道排序纯逻辑测试
+node scripts/test-day-clock.mjs    # 跨天刷新（本地零点间隔/通知）
+CDP_PORT=9222 node scripts/verify-dnd.mjs  # 浏览器：看板拖拽（需 dev server + 远程调试端口）
 bash build.sh               # 发布打包 → ./release/
 ```
 

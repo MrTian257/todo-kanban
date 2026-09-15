@@ -53,6 +53,7 @@ import { flushPersistence, useAppStore } from "@/lib/store";
 import { CommitInfo, Todo } from "@/lib/types";
 import { fmtDateTime, shortHash } from "@/lib/format";
 import { dedupeCommitsForTodo, todoUrgency } from "@/lib/todo";
+import { useToday } from "@/lib/dayClock";
 import { useContextMenu, type ContextMenuItem } from "@/lib/context-menu";
 import {
   autoRecaptureOnDone,
@@ -124,7 +125,9 @@ export const TodoRow = React.memo(function TodoRow({ todo, projectName, showProj
   const [branchList, setBranchList] = React.useState<string[]>([]);
   const [confirmDeleteOpen, setConfirmDeleteOpen] = React.useState(false);
 
-  const urgency = todoUrgency(todo);
+  // 跨天刷新：长期驻留时「今天截止/剩余 N 天/已逾期」必须跟着日期走
+  const today = useToday();
+  const urgency = React.useMemo(() => todoUrgency(todo), [todo, today]);
 
   // ── 操作 ──────────────────────────────────────────────
   const start = () => patchTodo(todo.id, { status: "doing", startedAt: Date.now() });

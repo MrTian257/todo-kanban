@@ -12,7 +12,7 @@ Accepted（重构基线）
 ## 决策
 - zustand v5 唯一 useAppStore（9 action + loaded）；视图与数据解耦：页面不直接读 storage / 调 invoke，一切经 store action
 - 写链：action 改 state → subscribe → writeChain 串行队列逐个 saveState（桌面 invoke db_save_state；浏览器直接返回）
-- 外部感知：startExternalSync 每 2000ms + window focus 立即同步 → 全量重读（后端指纹缓存命中零开销）→ 与内存 JSON 对比 → 不同则磁盘优先整体覆盖
+- 外部感知：startExternalSync 每 2000ms + window focus 立即同步 → 先比 `PRAGMA data_version`（`svc/state_poll.rs`，未变化则跳过）→ 变了才全量重读 → 与内存 JSON 对比 → 不同则磁盘优先整体覆盖
 - 拖拽落库必须经 commitOrder / patchTodo action，禁止只改本地状态
 
 ## 备选方案

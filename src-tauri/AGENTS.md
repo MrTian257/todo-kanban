@@ -6,11 +6,11 @@
 
 | Crate | 角色 | 关键路径 |
 | --- | --- | --- |
-| `todo-kanban`（壳） | 生命周期 + invoke 注册（17 命令） | `src/main.rs`、`src/lib.rs`、`src/commands.rs` |
+| `todo-kanban`（壳） | 生命周期 + invoke 注册（38 命令） | `src/main.rs`、`src/lib.rs`、`src/commands.rs` |
 | `todo-kanban-core` | 纯业务逻辑，无 tauri 依赖，可独立单测 | `core/src/`（详见 core/src/AGENTS.md） |
 | `todo-kanban-upgrade` | 数据版本迁移引擎（备份/逐级迁移/报告） | `upgrade/src/` |
-| `todo-kanban-config` | 版本常量（SOFTWARE_VERSION、CURRENT_DATA_VERSION=8、迁移表、changelog） | `config/src/lib.rs` |
-| `mcp-server` | 独立 stdio JSON-RPC 进程（9 tools + 3 resources） | `mcp-server/src/` |
+| `todo-kanban-config` | 版本常量（SOFTWARE_VERSION、CURRENT_DATA_VERSION=10、迁移表、changelog） | `config/src/lib.rs` |
+| `mcp-server` | 独立 stdio JSON-RPC 进程（11 tools + 4 resources） | `mcp-server/src/` |
 
 ## WHERE TO LOOK
 
@@ -25,6 +25,7 @@
 ## CONVENTIONS
 
 - **命令薄壳**：`commands.rs` 每个命令 ≤ 3 行（调 core::svc + map_err 转中文 String）；不 panic；新逻辑一律放 core。
+- **浏览器验证脚本**：`scripts/verify-*.mjs` 走 CDP（先起 dev server，端口 `CDP_PORT`，默认 9222），见根 `CLAUDE.md`。
 - **单测内联**：`#[cfg(test)] mod tests` 写在源文件底部；无 tests/ 集成目录。
 - **错误类型**：统一 `core/src/error.rs` 的 `AppError`（Display 中文），`From` 自动转换，`AppResult<T>` 简写。
 - **门禁**：`cargo clippy -- -D warnings` 0 警告 + `cargo fmt`；`.editorconfig` 规定 Rust 4 空格缩进。

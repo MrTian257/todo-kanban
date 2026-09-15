@@ -1,6 +1,6 @@
 # 系统架构文档
 
-> 来源：todo-git 架构设计（已按源码核实：11 命令、schema v4、6 页面、独立 MCP 进程、防闪黑框修复）。
+> 来源：todo-git 架构设计（本文件部分数字早于当前实现，已核实的是：独立 MCP 进程、防闪黑框修复；当前为 38 个 Tauri 命令、schema v10、8 个页面组件，以源码为准）。
 
 ## 1. 总体架构
 
@@ -11,7 +11,7 @@
 │   → lib (store/storage/git/normalize/completeTodo/types/todo/theme...)  │
 │ 依赖方向：pages → components → lib（单向，禁反向）                        │
 └──────────────┬──────────────────────────────────────────────────────────┘
-               │ Tauri invoke（11 命令）+ plugin-opener（打开目录）
+               │ Tauri invoke（38 命令）+ plugin-opener（打开目录）
 ┌──────────────▼─────────────────── src-tauri/ ───────────────────────────┐
 │ 壳 crate `todo-git`（workspace 根）                                      │
 │   src/main.rs（bin 入口）→ src/lib.rs（run + invoke_handler）            │
@@ -27,7 +27,7 @@
                ▲ 独立进程（不经 Tauri invoke）
 ┌──────────────┴─────────────────── src-tauri/mcp-server/ ────────────────┐
 │ MCP server（stdio 传输）：main → protocol(逐行 JSON-RPC 2.0)             │
-│   → bridge(9 tools + 3 resources ↔ core::svc) → config(数据源解析)       │
+│   → bridge(11 tools + 4 resources ↔ core::svc) → config(数据源解析)      │
 │ 零 tauri / 零 MCP-SDK 依赖；stdout 仅协议帧，日志走 stderr                │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
@@ -49,7 +49,7 @@
 ### 3.1 壳 crate `todo-git`（workspace 根）
 
 - `src/main.rs`：`todo_git_lib::run()`；`#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]`（release 为 GUI 子系统，注释勿删）
-- `src/lib.rs`：模块声明 + tauri-plugin-log + tauri-plugin-opener + `invoke_handler`（注册全部 **11 命令**）+ `generate_context!`
+- `src/lib.rs`：模块声明 + 插件注册 + `invoke_handler`（注册全部 **38 命令**）+ `generate_context!`
 - `src/commands.rs`：**薄壳**——每个 `#[tauri::command]` 一行转调 `todo_git_core::svc::*`，错误 `map_err(err_str)` 转中文 `String`
 - 配置：`tauri.conf.json`（productName、`frontendDist ../dist`、beforeDev/BuildCommand 目前是 **bun**——见风险提示）、`capabilities/default.json`（core:default + opener:default）
 
@@ -62,12 +62,12 @@
 | `tool/git_cli.rs` | `run_git` 执行器、`parse_commit_lines`（`%H%x1f%s%x1f%cI`，≤200 行）、`parse_branch_list`、`commit_branches`、`validate_branch_name` |
 | `tool/proc.rs` | `quiet_command`：构造子进程 Command；**Windows 附加 `CREATE_NO_WINDOW`（0x0800_0000）**——release GUI 壳下 spawn git/curl 不闪控制台黑框（std 默认不加该标志）；**统一超时：git 30s / curl 10s**（超时 kill 并返回中文错误，见非功能约定） |
 | `db/mod.rs` | `open`（WAL）、`init`（幂等建表，主路径）、`init_and_migrate`（旧 JSON 迁移，仅测试/参考）、`load_state` / `save_state`（**差异写** + seq/tag 收敛 + 提交全局去重 + `app_meta.next_seq` 全局取号）、`storage_fingerprint`（版本信号） |
-| `db/schema.rs` | DDL + 迁移（`user_version=6`：v2 `app_meta`；v3 `git_repo_cache`；v4 GitLab Token 两列；v5 泳道列；v6 todos 加 `sort_order`） |
+| `db/schema.rs` | DDL + 迁移（`user_version=10`：v2 `app_meta`；v3 `git_repo_cache`；v4 GitLab Token 两列；v5 泳道列；v6 `sort_order`；v7 创建者标识；v8 附件表；v9 `resources`；v10 任务关系/模板/提醒 + 变更历史 + MCP 提案） |
 | `db/row.rs` | 行 ↔ Db* 映射（commits/branch_rule 为 JSON 文本列；NULL 默认化） |
 | `db/legacy.rs` | 旧 `todo-git.state.json` 读取（仅首次迁移参考） |
 | `db/repo_cache.rs` | `git_repo_cache` 表行访问（upsert/get，含单测） |
 | `svc/git_cmds.rs` | 7 个 git 命令业务 |
-| `svc/db_cmds.rs` | `exe_dir` / `db_path` / `db_path`（读运行目录 `todo-kanban.db` 首行）/ `db_file_ready` / `ensure_db`（预留，未暴露）/ `load_state`（读锁 + 指纹缓存）/ `save_state`（写锁 + 分支规则校验 + **泳道归属校验** + 清缓存）；`DB_RW_LOCK` 进程级读写锁 |
+| `svc/db_cmds.rs` | `exe_dir` / `data_dir` / `db_path` / `db_file_ready` / `ensure_db_at`（启动自举 + 播种，macOS 会先接管程序目录旧库）/ `load_state`（读锁，无进程内缓存）/ `save_state`（写锁 + 分支规则校验 + **泳道归属校验**）；`DB_RW_LOCK` 进程级读写锁；外部改动由 `svc/state_poll.rs` 轮询 |
 | `svc/repo_cache.rs` | `git_info` 缓存优先编排（命中即回 + 后台节流刷新 30s）、`git_info_refresh` 强刷、`git_info_remote` 远端增强、`invalidate` |
 | `svc/gitlab.rs` | GitLab API 桥：仓库地址解析（http(s)）、系统 curl 调用（`PRIVATE-TOKEN`）、分页分支拉取（5×100）、本地 ∪ 远端合并 |
 | `svc/branch_rule.rs` | 分支规则校验（未知角色/动作、自环步骤拒绝；保存前兜底，与前端 zod 一致） |
@@ -78,7 +78,7 @@ git_info / git_info_refresh / git_info_remote / git_create_branch / git_create_b
 
 ### 3.4 MCP server（workspace 成员 `mcp-server`，独立进程，零 tauri 依赖）
 
-- 定位：stdio 传输的 MCP 服务端，把核心能力以 **9 tools + 3 resources** 暴露给外部 MCP 客户端；**与 Tauri 前端完全解耦**（不经 invoke_handler/capabilities）
+- 定位：stdio 传输的 MCP 服务端，把核心能力以 **11 tools + 4 resources** 暴露给外部 MCP 客户端；**与 Tauri 前端完全解耦**（不经 invoke_handler/capabilities）
 - 分层：`main.rs`（stdio 主循环）→ `protocol.rs`（MCP 规范逐行 JSON-RPC 2.0：initialize / tools / resources / ping）→ `bridge.rs`（tools/resources ↔ `core::svc`，AppError→JSON-RPC 错误码：Invalid→-32602、其余→-32603；`MCP_TODO_READONLY=1` 拒绝写工具）→ `config.rs`（数据源目录：`MCP_TODO_DB_CONFIG`/`--db-config` 覆盖 → exe_dir 回退 `todo-kanban.db`）
 - MCP 的 `git_info` 保持**直读**语义（不经 app 侧缓存）；`git_info_refresh` / `git_info_remote` 为 app 专属命令不暴露
 - 详细设计见 mcp-design.md
@@ -92,7 +92,7 @@ App.tsx useEffect → initAppStore()
   → loadState()（lib/storage；仅 Tauri 环境有数据）
     → invoke("db_load_state") → svc/db_cmds::load_state(exe_dir)
       → db_path（todo-kanban.db 首行）→ 无数据源 → Ok(None) → 前端空态（提示生成数据文件）
-      → db::open(WAL) → db::init(user_version=6 迁移) → 指纹缓存命中即回 / 全量 SELECT → DbState
+      → db::open(WAL) → db::init(user_version=10 迁移) → 全量 SELECT → DbState
       → normalize（lib/normalize.ts：字段补默认 + 提交全局去重兜底）
   → startExternalSync（2s 轮询 + focus 立即同步）
   → startGitCacheWarm（60s 预热 git 仓库信息缓存，仅桌面端）
@@ -105,7 +105,7 @@ store action 改 state → useAppStore.subscribe → writeChain（串行队列�
   → saveState() → 桌面：invoke("db_save_state", {projects, todos})
       → svc/db_cmds::save_state（写锁 + 先校验分支规则）
       → db::save_state（差异写：UPSERT 变更行 + 差集删除，未变行跳过；
-        app_meta.next_seq 全局取号收敛 seq/tag；事务原子）→ 清指纹缓存
+        app_meta.next_seq 全局取号收敛 seq/tag；事务原子）
     （浏览器：无存储，saveState 直接返回）
 ```
 
@@ -113,7 +113,7 @@ store action 改 state → useAppStore.subscribe → writeChain（串行队列�
 
 ```
 startExternalSync：每 2000ms 轮询 + window focus 时立即 syncExternalNow
-  → loadState() 全量重读（后端指纹缓存命中零开销）→ 与内存 JSON 对比 → 不同则磁盘优先整体覆盖
+  → loadState() 全量重读（后端 `PRAGMA data_version` 未变化时不重读）→ 与内存 JSON 对比 → 不同则磁盘优先整体覆盖
 ```
 
 ### 4.4 git 仓库信息读取（三层缓存）
@@ -168,4 +168,4 @@ App 启动后 startGitCacheWarm（60s）：收集项目/待办的所有仓库路
 - `tauri.conf.json` 的 beforeDev/beforeBuild 配的是 `bun`，仓库是 npm——需 bun 才能直接 `tauri dev`，否则先手动 `npm run dev`（重构时建议直接对齐 npm）
 - Vite 端口 1420 strictPort，占用即启动失败；`src-tauri` 目录被 Vite 排除监听
 - 浏览器模式无 git 能力且无存储（勿在非 Tauri 环境调用 git 命令）
-- 后端指纹缓存不用 `PRAGMA data_version`（实测 WAL 下跨连接不稳定）
+- 外部改动检测用 `svc/state_poll.rs`：复用同一条只读连接的 `PRAGMA data_version`（每次新建连接读它在 WAL 下不稳定），未变化则不重读全量

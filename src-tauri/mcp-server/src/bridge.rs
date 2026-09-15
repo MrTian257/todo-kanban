@@ -17,7 +17,7 @@ use todo_kanban_core::svc::{db_cmds, git_cmds};
 use crate::config;
 
 pub const RESOURCES: [(&str, &str); 4] = [
-    ("todo-kanban://state", "全部状态（项目 + 待办）JSON"),
+    ("todo-kanban://state", "全部状态（项目 + 待办 + 资料）JSON"),
     ("todo-kanban://projects", "项目列表 JSON"),
     ("todo-kanban://todos", "待办列表 JSON"),
     ("todo-kanban://resources", "资料库列表 JSON"),
@@ -273,7 +273,7 @@ fn read_resource(uri: &str) -> AppResult<Value> {
     let value = match uri {
         "todo-kanban://projects" => serde_json::to_value(db::row::load_projects_from_conn(&tx)?)?,
         "todo-kanban://todos" => serde_json::to_value(db::row::load_todos_from_conn(&tx)?)?,
-        "todo-kanban://resources" => serde_json::to_value(db::load_state(&tx)?.resources)?,
+        "todo-kanban://resources" => serde_json::to_value(db::row::load_resources_from_conn(&tx)?)?,
         _ => serde_json::to_value(db::load_state(&tx)?)?,
     };
     tx.commit()?;

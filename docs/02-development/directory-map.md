@@ -54,7 +54,7 @@ src-tauri/
 ├── build.rs / tauri.conf.json / capabilities/ / icons/ / gen/
 ├── src/
 │   ├── main.rs           # bin 入口 todo_git_lib::run()（windows_subsystem 注释勿删）
-│   ├── lib.rs            # mod commands + run()（log + opener 插件；注册 11 命令）
+│   ├── lib.rs            # mod commands + run()（插件注册 + setup；注册 38 命令）
 │   └── commands.rs       # 11 个命令薄壳（一行转调 core svc，map_err(err_str)）
 ├── core/                 # workspace 成员 todo-git-core（无 tauri 依赖）
 │   ├── Cargo.toml        # deps：serde / serde_json / rusqlite(bundled) / log
@@ -77,7 +77,7 @@ src-tauri/
 │       └── svc/
 │           ├── git_cmds.rs   # 7 个 git 命令业务
 │           ├── db_cmds.rs    # exe_dir/db_path/db_path/db_file_ready/ensure_db(预留)/
-│           │                 #   load_state(读锁+指纹缓存)/save_state(写锁+规则校验)；DB_RW_LOCK
+│           │                 #   load_state(读锁)/save_state(写锁+规则校验)；DB_RW_LOCK（外部改动由 state_poll 轮询）
 │           ├── repo_cache.rs # git_info 缓存编排（命中即回+后台 30s 节流刷新/强刷/远端增强/失效，含单测）
 │           ├── gitlab.rs     # GitLab API 桥（地址解析/系统 curl/分页拉取/本地∪远端合并，含单测）
 │           └── branch_rule.rs# 分支规则校验

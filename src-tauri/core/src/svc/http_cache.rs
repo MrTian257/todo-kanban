@@ -113,11 +113,47 @@ pub fn get(url: &str, credential: &str) -> AppResult<String> {
     }
     let response =
         String::from_utf8(output.stdout).map_err(|_| AppError::git("GitLab 返回非 UTF-8 数据"))?;
-    let mut remaining = response.as_str();
-    let mut status = 0;
-    let mut etag = String::new();
-    // 兼容代理 CONNECT 与 100 Continue 等中间响应。
-    while remaining.starts_with("HTTP/") {
+    let (status, mut etag, body) = split_response(&response)?;
+    if etag.chars().any(char::is_control) {
+        etag.clear();
+    }
+    if status == 304 {
+        let cached = page
+            .as_mut()
+            .ok_or_else(|| AppError::git("服务端返回 304，但没有可复用响应"))?;
+        cached.fetched = Instant::now();
+        return Ok(cached.body.clone());
+    }
+    if !(200..300).contains(&status) {
+        return Err(AppError::git(format!("GitLab HTTP 状态异常：{status}")));
+    }
+    let body = body.to_string();
+    // 大响应不驻留缓存，避免长期占用内存。
+    if body.len() <= MAX_PAGE_BYTES {
+        *page = Some(Page {
+            body: body.clone(),
+            etag,
+            fetched: Instant::now(),
+        });
+    } else {
+        *page = None;
+    }
+    Ok(body)
+}
+
+/// 解析 `curl --include` 输出 → (状态码, ETag, 正文)。
+/// 只跳过 1xx 中间响应：正文本身以 `HTTP/` 开头的响应（例如纯文本/日志类内容）
+/// 不能被当成新的响应头再次解析，否则正文会被截断成「响应头不完整」而报错。
+fn split_response(response: &str) -> AppResult<(u16, String, &str)> {
+    let mut remaining = response;
+    let (mut status, mut etag) = (0u16, String::new());
+    loop {
+        if !remaining.starts_with("HTTP/") {
+            if status == 0 {
+                return Err(AppError::git("HTTP 响应头不完整"));
+            }
+            break;
+        }
         let (head, body) = remaining
             .split_once("\r\n\r\n")
             .or_else(|| remaining.split_once("\n\n"))
@@ -135,30 +171,41 @@ pub fn get(url: &str, credential: &str) -> AppResult<String> {
             .map(|(_, value)| value.trim().to_string())
             .unwrap_or_default();
         remaining = body;
+        if !(100..200).contains(&status) {
+            break;
+        }
     }
-    if etag.chars().any(char::is_control) {
-        etag.clear();
+    Ok((status, etag, remaining))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 正文以 HTTP/ 开头时不得被当成第二个响应重新解析
+    #[test]
+    fn body_starting_with_http_is_not_reparsed() {
+        let raw = "HTTP/1.1 200 OK\r\nETag: \"w/1\"\r\n\r\nHTTP/1.1 200 OK is a line in the body";
+        let (status, etag, body) = split_response(raw).unwrap();
+        assert_eq!(status, 200);
+        assert_eq!(etag, "\"w/1\"");
+        assert_eq!(body, "HTTP/1.1 200 OK is a line in the body");
     }
-    if status == 304 {
-        let cached = page
-            .as_mut()
-            .ok_or_else(|| AppError::git("服务端返回 304，但没有可复用响应"))?;
-        cached.fetched = Instant::now();
-        return Ok(cached.body.clone());
+
+    /// 1xx 中间响应（100 Continue）跳过，取最后一个响应
+    #[test]
+    fn informational_responses_are_skipped() {
+        let raw = "HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\nETag: abc\n\n{\"ok\":true}";
+        let (status, etag, body) = split_response(raw).unwrap();
+        assert_eq!(status, 200);
+        assert_eq!(etag, "abc");
+        assert_eq!(body, "{\"ok\":true}");
     }
-    if !(200..300).contains(&status) {
-        return Err(AppError::git(format!("GitLab HTTP 状态异常：{status}")));
+
+    /// 只有状态行、没有响应头分隔：报「响应头不完整」而不是静默当成正文
+    #[test]
+    fn truncated_head_is_rejected() {
+        assert!(split_response("HTTP/1.1 200 OK\r\nETag: \"w/1\"").is_err());
+        assert!(split_response("{\"ok\":true}").is_err());
     }
-    let body = remaining.to_string();
-    // 大响应不驻留缓存，避免长期占用内存。
-    if body.len() <= MAX_PAGE_BYTES {
-        *page = Some(Page {
-            body: body.clone(),
-            etag,
-            fetched: Instant::now(),
-        });
-    } else {
-        *page = None;
-    }
-    Ok(body)
 }

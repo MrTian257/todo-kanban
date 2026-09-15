@@ -11,7 +11,7 @@ Accepted（重构基线）
 
 ## 决策
 - protocol.rs 手写逐行 JSON-RPC 2.0（initialize / tools / resources / ping）
-- bridge.rs 映射 9 tools + 3 resources ↔ core::svc；AppError → JSON-RPC 错误码（Invalid→-32602，其余→-32603）
+- bridge.rs 映射 11 tools + 4 resources ↔ core::svc；AppError → JSON-RPC 错误码（Invalid→-32602，其余→-32603）
 - stdout 仅输出协议帧；一切日志走 stderr（stdout 污染即协议破坏）
 - MCP_TODO_READONLY=1 环境变量一键只读：拒绝全部写工具
 - 数据源解析与 app 同规则（ADR-012），MCP_TODO_DB_CONFIG / --db-config 可覆盖

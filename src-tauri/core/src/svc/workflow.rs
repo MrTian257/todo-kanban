@@ -438,11 +438,31 @@ fn sweep(value: &mut Workflow, now: i64) -> usize {
 /// 变更历史与提案的保留策略：只裁剪最旧的已处理数据，待批准提案绝不静默丢弃。
 pub fn trim(conn: &Connection) -> AppResult<()> {
     const HISTORY_KEEP: i64 = 20_000;
+    /// 历史正文总字节上限：整实体 before/after JSON 单条可达数 KB，只按条数限制仍会把库撑大。
+    const HISTORY_BYTES: i64 = 32 * 1024 * 1024;
     const PROPOSAL_KEEP: i64 = 200;
     conn.execute(
         "DELETE FROM change_history WHERE id NOT IN (SELECT id FROM change_history ORDER BY happened_at DESC, id DESC LIMIT ?1)",
         [HISTORY_KEEP],
     )?;
+    // 先算总量再决定是否做按字节裁剪：常见情况下历史很小，避免每次保存都跑窗口函数。
+    let total: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(COALESCE(LENGTH(before_json),0)+COALESCE(LENGTH(after_json),0)),0) FROM change_history",
+        [],
+        |r| r.get(0),
+    )?;
+    if total > HISTORY_BYTES {
+        conn.execute(
+            "DELETE FROM change_history WHERE id IN (
+               SELECT id FROM (
+                 SELECT id, SUM(COALESCE(LENGTH(before_json),0)+COALESCE(LENGTH(after_json),0))
+                            OVER (ORDER BY happened_at DESC, id DESC) AS total
+                 FROM change_history
+               ) WHERE total > ?1
+             )",
+            [HISTORY_BYTES],
+        )?;
+    }
     conn.execute(
         "DELETE FROM change_proposals WHERE status != 'pending' AND id NOT IN (SELECT id FROM change_proposals WHERE status != 'pending' ORDER BY created_at DESC LIMIT ?1)",
         [PROPOSAL_KEEP],

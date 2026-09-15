@@ -49,18 +49,27 @@ export async function gitCheckoutBranch(repo: string, branch: string): Promise<v
 /** 同步提交：可选 branch=参考分支（来源三分类标注的基准），缺省不做分支来源标注 */
 export async function gitSyncCommits(repo: string, tag: string, branch?: string): Promise<CommitInfo[]> {
   if (!isTauri()) throw new Error("非桌面环境，git 能力不可用");
-  return invoke<CommitInfo[]>("git_sync_commits", { repo, tag, branch: branch ?? null });
+  return invoke<RawCommitInfo[]>("git_sync_commits", { repo, tag, branch: branch ?? null }).then(toCommitList);
 }
 
 export async function gitCommitsBetween(repo: string, branch: string, since: string, until: string): Promise<CommitInfo[]> {
   if (!isTauri()) throw new Error("非桌面环境，git 能力不可用");
-  return invoke<CommitInfo[]>("git_commits_between", { repo, branch, since, until });
+  return invoke<RawCommitInfo[]>("git_commits_between", { repo, branch, since, until }).then(toCommitList);
 }
 
 export async function gitCommitInfo(repo: string, hash: string): Promise<CommitInfo> {
   if (!isTauri()) throw new Error("非桌面环境，git 能力不可用");
-  return invoke<CommitInfo>("git_commit_info", { repo, hash });
+  return invoke<RawCommitInfo>("git_commit_info", { repo, hash }).then(toCommitInfo);
 }
+
+/** git 工具返回体的 CommitInfo 用 snake_case（后端 models.rs），前端统一用 camelCase：
+ *  只差 merge_hash→mergeHash 一个字段，必须在此收口，否则落库时该字段被静默丢弃。 */
+interface RawCommitInfo extends Omit<CommitInfo, "mergeHash"> { merge_hash?: string }
+function toCommitInfo(raw: RawCommitInfo): CommitInfo {
+  const { merge_hash, ...rest } = raw;
+  return { ...rest, mergeHash: merge_hash || "" };
+}
+function toCommitList(raw: RawCommitInfo[]): CommitInfo[] { return raw.map(toCommitInfo); }
 
 // ── 前端缓存（60s TTL + 单飞去重 + 路径大小写折叠） ─────────────
 const CACHE_TTL = 60_000;
@@ -109,7 +118,9 @@ export interface CommitBatchResult {
 }
 export async function gitSyncCommitsBatch(repo: string, requests: { id: string; tag: string; branch: string }[]): Promise<CommitBatchResult[]> {
   if (!isTauri()) throw new Error("非桌面环境，git 能力不可用");
-  return invoke("git_sync_commits_batch", { repo, requests });
+  // 批量结果里的 commits 同样是后端的 snake_case，逐组收口
+  const results = await invoke<(Omit<CommitBatchResult, "commits"> & { commits: RawCommitInfo[] })[]>("git_sync_commits_batch", { repo, requests });
+  return results.map(result => ({ ...result, commits: toCommitList(result.commits ?? []) }));
 }
 
 export interface ToolPath { name: string; path: string; source: string; available: boolean }

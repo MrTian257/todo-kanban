@@ -10,12 +10,16 @@ export function todayStr(): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+/** 本地日期（YYYY-MM-DD）当天零点的时间戳；解析统一走这里，避免各处自己拼字符串 */
+export function dayStartMs(day: string): number {
+  return new Date(day + "T00:00:00").getTime();
+}
+
 /** 距今天数（负数 = 已逾期） */
 export function daysUntil(iso: string | null): number | null {
   if (!iso) return null;
   const target = new Date(iso + "T00:00:00");
-  const nowDate = new Date(todayStr() + "T00:00:00");
-  return Math.round((target.getTime() - nowDate.getTime()) / 86_400_000);
+  return Math.round((target.getTime() - dayStartMs(todayStr())) / 86_400_000);
 }
 
 export type Urgency = "overdue" | "soon" | "today" | "none";

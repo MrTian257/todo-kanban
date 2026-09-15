@@ -205,9 +205,8 @@ pub fn git_sync_commits_batch(
             api_groups.entry(branch).or_default().push(request);
         }
     }
-    let mut results: Vec<CommitResult> = Vec::with_capacity(
-        api_groups.values().map(Vec::len).sum::<usize>() + local_requests.len(),
-    );
+    let mut results: Vec<CommitResult> =
+        Vec::with_capacity(api_groups.values().map(Vec::len).sum::<usize>() + local_requests.len());
     let mut warnings: Vec<String> = Vec::new();
     // 每个分支组一次定向 API 请求；整组失败回退本地，绝不截断返回。
     if let Some((url, token)) = super::gitlab::configured_remote(repo) {
@@ -766,7 +765,11 @@ mod tests {
             ],
         )
         .unwrap();
-        run_git(r, &["commit", "--allow-empty", "-m", "feat: REQ-00149 修复"]).unwrap();
+        run_git(
+            r,
+            &["commit", "--allow-empty", "-m", "feat: REQ-00149 修复"],
+        )
+        .unwrap();
         run_git(r, &["commit", "--allow-empty", "-m", "fix REQ-001490 隔离"]).unwrap();
         // 单条：无分支走本地检索，连字符前缀命中
         let commits = git_sync_commits(r, "REQ-00149", None).unwrap();

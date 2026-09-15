@@ -1,5 +1,6 @@
-//! 数据源与状态读写编排：exe_dir / 固定 todo-kanban.db / 读锁+指纹缓存 / 写锁+校验。
-//! DB_RW_LOCK 进程级读写锁；指纹缓存配合前端 2s 轮询开销趋近零。
+//! 数据源与状态读写编排：exe_dir / 固定 todo-kanban.db / 读锁 + 写锁 + 保存前校验。
+//! DB_RW_LOCK 进程级读写锁；外部改动由前端经 `svc::state_poll`（PRAGMA data_version）轮询，
+//! 读路径不做进程内缓存——跨进程写入无法可靠失效，缓存会读到过期状态。
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -14,8 +15,6 @@ use crate::svc::attachments;
 use rusqlite::{Connection, OptionalExtension};
 
 static DB_RW_LOCK: Mutex<()> = Mutex::new(());
-type StateCache = Option<((usize, usize, i64), DbState)>;
-static FP_CACHE: Mutex<StateCache> = Mutex::new(None);
 
 /// 程序运行目录（exe 所在目录）
 pub fn exe_dir() -> AppResult<PathBuf> {
@@ -56,7 +55,7 @@ pub fn db_file_ready() -> AppResult<bool> {
     Ok(db_path()?.exists())
 }
 
-/// 全量读取：读锁（与写互斥，配合 WAL 快照读双保险）+ 指纹缓存
+/// 全量读取：读锁（与写互斥，配合 WAL 快照读双保险）
 pub fn load_state() -> AppResult<Option<DbState>> {
     let path = db_path()?;
     if !path.exists() {
@@ -73,7 +72,7 @@ pub fn load_state() -> AppResult<Option<DbState>> {
     Ok(Some(state))
 }
 
-/// 差异写落库：写锁全程互斥 + 保存前校验（分支规则 / 泳道归属由 db::save_state 承担）+ 清指纹缓存
+/// 差异写落库：写锁全程互斥 + 保存前校验（分支规则 / 泳道归属由 db::save_state 承担）
 pub fn save_state(payload: DbState) -> AppResult<()> {
     let path = db_path()?;
     let _guard = DB_RW_LOCK
@@ -84,10 +83,6 @@ pub fn save_state(payload: DbState) -> AppResult<()> {
     if !trash.is_empty() {
         attachments::move_to_trash_at(&attachments::attachments_root_at(&path), &trash);
     }
-    let mut cache = FP_CACHE
-        .lock()
-        .map_err(|_| AppError::invalid("缓存锁获取失败"))?;
-    *cache = None;
     Ok(())
 }
 
@@ -103,17 +98,24 @@ pub fn save_state_checked(payload: DbState, expected: DbState) -> AppResult<DbSt
     if !trash.is_empty() {
         attachments::move_to_trash_at(&attachments::attachments_root_at(&path), &trash);
     }
-    *FP_CACHE
-        .lock()
-        .map_err(|_| AppError::invalid("缓存锁获取失败"))? = None;
     Ok(saved)
 }
 
 /// 启动自举：使用平台数据目录 todo-kanban.db；
-/// 仅当「两表都为空且无种子标记」时写入演示数据。返回数据库路径。
-/// 已有数据（含用户清空后的库）绝不覆盖——双条件避免既有库因缺失 seeded 键被演示数据覆盖。
+/// 仅当「库完全空白且无种子标记」时写入演示数据。返回数据库路径。
+/// 已有数据（含用户清空后的库、只有资料或只有工作流配置的库）绝不覆盖——
+/// 双条件避免既有库因缺失 seeded 键被演示数据覆盖。
 pub fn ensure_db_at(dir: &Path) -> AppResult<PathBuf> {
     let path = db_path_in(dir);
+    // macOS 上数据目录从程序目录迁到了用户目录：老用户（以及开发机上的旧库）的
+    // 数据留在程序目录里。目标库还不存在时先接管旧库，避免「新库补演示数据、旧数据失踪」。
+    if !path.exists() && data_dir().is_ok_and(|current| current == dir) {
+        match adopt_legacy_data(dir) {
+            Ok(true) => log::info!("已接管程序目录中的旧数据"),
+            Ok(false) => {}
+            Err(e) => log::warn!("接管程序目录旧数据失败（继续使用新库）：{e}"),
+        }
+    }
     let (conn, _report) = db::open_and_init(&path, &dir.join("backup"))?;
     let seeded: bool = conn
         .query_row(
@@ -123,7 +125,7 @@ pub fn ensure_db_at(dir: &Path) -> AppResult<PathBuf> {
         )
         .map_err(AppError::from)?;
     // 只有真正的空库才播种：旧库（v1~v7 / 早期构建）可能没有 seeded 键，但绝不能因此被覆盖
-    let empty = db::storage_fingerprint(&conn)? == (0, 0, 0);
+    let empty = db::is_pristine(&conn)?;
     if !seeded && empty {
         seed_demo_state(&conn)?;
         conn.execute(
@@ -133,6 +135,56 @@ pub fn ensure_db_at(dir: &Path) -> AppResult<PathBuf> {
         .map_err(AppError::from)?;
     }
     Ok(path)
+}
+
+/// 把程序目录（macOS 旧版本的数据位置）里的库与附件接管到用户数据目录。
+/// 返回是否发生了接管；附件复制失败不影响库的接管（附件随后可按需重试）。
+fn adopt_legacy_data(target_dir: &Path) -> AppResult<bool> {
+    adopt_legacy_data_at(&exe_dir()?, target_dir)
+}
+
+fn adopt_legacy_data_at(legacy_dir: &Path, target_dir: &Path) -> AppResult<bool> {
+    if legacy_dir == target_dir {
+        return Ok(false);
+    }
+    let legacy_db = db_path_in(legacy_dir);
+    if !legacy_db.is_file() {
+        return Ok(false);
+    }
+    std::fs::create_dir_all(target_dir)?;
+    let target_db = db_path_in(target_dir);
+    // 旧库可能还是老数据版本（不满足 open_existing 的版本校验），所以不走 open_existing：
+    // 只读打开直接做在线备份（WAL 里已提交但未 checkpoint 的数据必须一起带走，不能复制文件），
+    // 只读打开失败（热 WAL / 权限受限）再退化为读写打开，两次都失败才放弃。
+    if let Err(error) = copy_db_readonly(&legacy_db, &target_db)
+        .or_else(|_| copy_db_readwrite(&legacy_db, &target_db))
+    {
+        // 失败可能留下半份目标文件：删掉，让后续 open_and_init 重新建库
+        let _ = std::fs::remove_file(&target_db);
+        return Err(error);
+    }
+    if let Err(e) = super::attachments::adopt_dir(
+        &super::attachments::attachments_root_at(&legacy_db),
+        &super::attachments::attachments_root_at(&target_db),
+    ) {
+        log::warn!("旧附件目录接管失败（库已接管）：{e}");
+    }
+    Ok(true)
+}
+
+/// SQLite 在线备份（只读源）
+fn copy_db_readonly(from: &Path, to: &Path) -> AppResult<()> {
+    let conn =
+        rusqlite::Connection::open_with_flags(from, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
+    conn.backup(rusqlite::DatabaseName::Main, to, None)?;
+    Ok(())
+}
+
+/// SQLite 在线备份（读写源；用于需要恢复 WAL 的旧库）
+fn copy_db_readwrite(from: &Path, to: &Path) -> AppResult<()> {
+    db::open(from)?.backup(rusqlite::DatabaseName::Main, to, None)?;
+    Ok(())
 }
 
 /// 备份目录：程序运行目录下的 backup/
@@ -539,9 +591,6 @@ fn save_extended(
     if !trash.is_empty() {
         attachments::move_to_trash_at(&attachments::attachments_root_at(&path), &trash);
     }
-    if let Ok(mut cache) = FP_CACHE.lock() {
-        *cache = None;
-    }
     Ok(saved)
 }
 
@@ -632,6 +681,134 @@ mod tests {
         let s = mcp_read_from_db(&path).unwrap();
         assert!(!s.enabled);
         assert_eq!(s.token, "sk-custom");
+        drop_conn_files(&dir);
+    }
+
+    /// 只有资料的库不得被启动播种覆盖：旧判定只看 projects/todos，会把它当成空库，
+    /// 播种走差集写会直接删掉这些资料（无种子标记的早期库同样命中）。
+    #[test]
+    fn ensure_db_at_preserves_resource_only_db() {
+        let dir = std::env::temp_dir().join(format!("tk-res-only-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("todo-kanban.db");
+        {
+            let (conn, _) = db::open_and_init(&path, &dir.join("backup")).unwrap();
+            conn.execute(
+                "INSERT INTO resources (id,project_id,title,url,note,tags,created_at,updated_at)
+                 VALUES ('r1',NULL,'接口文档','https://example.com','笔记','[]',1,1)",
+                [],
+            )
+            .unwrap();
+        }
+        ensure_db_at(&dir).unwrap();
+        let conn = db::open(&path).unwrap();
+        let state = db::load_state(&conn).unwrap();
+        assert_eq!(state.resources.len(), 1, "只有资料的库不得被演示数据覆盖");
+        assert!(state.todos.is_empty(), "不得向既有库灌入演示待办");
+        // 旧判定等价物（两表都为空）确实会把这个库当空库——这正是资料被差集删除的原因
+        let old_empty: bool = conn
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM projects)=0 AND (SELECT COUNT(*) FROM todos)=0",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(old_empty, "回归锚点：旧判定会误判为空库");
+        drop_conn_files(&dir);
+    }
+
+    /// 接管旧数据必须接受老数据版本的库：按 MCP/应用读路径的版本校验会直接拒绝它。
+    /// 走文件级在线备份而不是版本校验后的读取，正是为了让升级在接管之后由 open_and_init 完成。
+    #[test]
+    fn copy_db_readonly_accepts_older_data_version() {
+        let dir = std::env::temp_dir().join(format!("tk-adopt-db-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let legacy = dir.join("legacy.db");
+        {
+            let conn = db::open(&legacy).unwrap();
+            db::init(&conn).unwrap();
+            db::save_state(
+                &conn,
+                &DbState {
+                    projects: vec![DbProject {
+                        id: "p1".into(),
+                        name: "旧项目".into(),
+                        created_at: 1,
+                        updated_at: 1,
+                        ..Default::default()
+                    }],
+                    resources: vec![],
+                    todos: vec![],
+                },
+            )
+            .unwrap();
+            // 模拟老数据版本
+            conn.pragma_update(None, "user_version", 8i64).unwrap();
+        }
+        assert!(
+            db::open_existing(&legacy, false).is_err(),
+            "老版本库会被版本校验拒绝，接管不能依赖它"
+        );
+        let target = dir.join("target.db");
+        copy_db_readonly(&legacy, &target).unwrap();
+        let conn = rusqlite::Connection::open_with_flags(
+            &target,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        let version: i64 = conn
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 8, "备份保留原数据版本，升级交给 open_and_init");
+        let projects: i64 = conn
+            .query_row("SELECT COUNT(*) FROM projects", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(projects, 1, "旧库内容完整接管");
+
+        drop_conn_files(&dir);
+    }
+
+    /// 接管旧数据：库与附件一起搬到目标目录，目标目录里没有旧库时不做任何事
+    #[test]
+    fn adopt_legacy_data_copies_db_and_attachments() {
+        let dir = std::env::temp_dir().join(format!("tk-adopt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let legacy = dir.join("app-dir");
+        let target = dir.join("user-dir");
+        std::fs::create_dir_all(&legacy).unwrap();
+        let legacy_db = db_path_in(&legacy);
+        {
+            let (conn, _) = db::open_and_init(&legacy_db, &legacy.join("backup")).unwrap();
+            db::save_state(
+                &conn,
+                &DbState {
+                    projects: vec![DbProject {
+                        id: "p1".into(),
+                        name: "旧项目".into(),
+                        created_at: 1,
+                        updated_at: 1,
+                        ..Default::default()
+                    }],
+                    resources: vec![],
+                    todos: vec![],
+                },
+            )
+            .unwrap();
+        }
+        let attachment = legacy.join("attachments/t1/t1-0001.png");
+        std::fs::create_dir_all(attachment.parent().unwrap()).unwrap();
+        std::fs::write(&attachment, b"legacy-image").unwrap();
+
+        assert!(adopt_legacy_data_at(&legacy, &target).unwrap());
+        assert!(target.join("todo-kanban.db").is_file());
+        assert!(target.join("attachments/t1/t1-0001.png").is_file());
+        // 无旧库的目录不触发接管
+        let empty = dir.join("empty-app-dir");
+        std::fs::create_dir_all(&empty).unwrap();
+        assert!(!adopt_legacy_data_at(&empty, &dir.join("other")).unwrap());
+
         drop_conn_files(&dir);
     }
 

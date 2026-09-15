@@ -138,7 +138,7 @@ git_repo_cache（v3）: repo_path PK, repo_exists, is_repo, current_branch,
 - **写（save_state）**：进程级 `DB_RW_LOCK` 写锁全程互斥 → 单事务（unchecked_transaction）**差异写**：UPSERT 变更行（`ON CONFLICT(id) DO UPDATE`）+ 差集删除（只删快照中已移除的行），未变行跳过；**不删除快照之外的既有行**（多窗口各自保存增量互不覆盖）；`updated_at` 较新者胜
   - 内含 **seq/tag 收敛**：写锁下从 `app_meta.next_seq` 取号，冲突/无序号待办重分配全局唯一 seq 并同步改写 `tag=todo-<seq>`
   - 内含**提交全局去重**：一条 hash 只归属最先占有的 todo（库中既有优先、本批先到先得）
-  - 保存前校验每个项目分支规则（`branch_rule::validate`）；成功后清指纹缓存
+  - 保存前校验每个项目分支规则（`branch_rule::validate`）
 - **读（load_state）**：读锁（与写互斥，配合 WAL 快照读双保险）→ `storage_fingerprint`（两表行数 + MAX(updated_at)）为版本信号的进程内缓存，数据未变直接复用（配合前端 2s 轮询开销趋近零）；**不用 `PRAGMA data_version`**（WAL 下跨连接不稳定）
 - 行 ↔ 字段映射与 NULL 默认化（String→""、bool→false、Option→None、commits→[]）由 `db/row.rs` 保证
 

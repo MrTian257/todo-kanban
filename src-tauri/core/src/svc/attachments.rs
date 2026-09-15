@@ -439,6 +439,60 @@ pub fn move_to_trash_at(root: &Path, paths: &[String]) -> usize {
 
 // ── 历史内嵌图片迁移 / 孤儿清理 ─────────────────────────
 
+/// 接管旧附件目录（macOS 数据目录迁移）：只补齐目标目录缺失的文件，绝不覆盖。
+/// 跳过回收目录与符号链接；同名但内容不同时保留目标文件并告警（旧目录仍完整保留，可人工核对）。
+pub fn adopt_dir(from_root: &Path, to_root: &Path) -> AppResult<(usize, u64)> {
+    if !from_root.is_dir() {
+        return Ok((0, 0));
+    }
+    if from_root.symlink_metadata()?.file_type().is_symlink() {
+        return Err(AppError::invalid("旧附件目录不能是符号链接"));
+    }
+    let mut copied = 0;
+    let mut bytes = 0;
+    for entry in fs::read_dir(from_root)? {
+        let entry = entry?;
+        let kind = entry.file_type()?;
+        if kind.is_symlink() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if kind.is_dir() {
+            if name == "trash" {
+                continue;
+            }
+            let (n, size) = adopt_dir(&entry.path(), &to_root.join(&name))?;
+            copied += n;
+            bytes += size;
+            continue;
+        }
+        if !kind.is_file() {
+            continue;
+        }
+        let target = to_root.join(&name);
+        if target.exists() {
+            if same_file_len(&entry.path(), &target)? {
+                continue;
+            }
+            log::warn!(
+                "旧附件与现有文件同名但大小不同，保留现有文件：{}",
+                target.display()
+            );
+            continue;
+        }
+        fs::create_dir_all(to_root)?;
+        fs::copy(entry.path(), &target)?;
+        copied += 1;
+        bytes += entry.metadata()?.len();
+    }
+    Ok((copied, bytes))
+}
+
+/// 只比大小：接管是尽力而为的迁移，内容比对留给用户核对（不覆盖任何现有文件）
+fn same_file_len(left: &Path, right: &Path) -> AppResult<bool> {
+    Ok(fs::metadata(left)?.len() == fs::metadata(right)?.len())
+}
+
 /// 迁移 note 中历史内嵌 base64 图片为附件（应用进程）
 pub fn migrate_inline() -> AppResult<MigrateSummary> {
     migrate_inline_at(&db_cmds::db_path()?)
@@ -900,6 +954,32 @@ mod tests {
         assert!(!attachments_root_at(&db_path)
             .join("t1/t1-0001.png")
             .exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 接管旧附件目录：补齐缺失文件、跳过 trash、绝不覆盖同路径的现有文件
+    #[test]
+    fn adopt_dir_copies_missing_and_never_overwrites() {
+        let dir = std::env::temp_dir().join(format!("tk-adopt-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let (from, to) = (dir.join("legacy"), dir.join("current"));
+        fs::create_dir_all(from.join("t1")).unwrap();
+        fs::create_dir_all(from.join("t2")).unwrap();
+        fs::create_dir_all(from.join("trash/1/t1")).unwrap();
+        fs::create_dir_all(to.join("t1")).unwrap();
+        fs::write(from.join("t1/t1-0001.png"), b"legacy").unwrap();
+        fs::write(from.join("t2/t2-0001.png"), b"second").unwrap();
+        fs::write(from.join("trash/1/t1/t1-0009.png"), b"trashed").unwrap();
+        // 目标已有同路径文件：必须保留目标内容
+        fs::write(to.join("t1/t1-0001.png"), b"current").unwrap();
+
+        let (files, bytes) = adopt_dir(&from, &to).unwrap();
+        assert_eq!((files, bytes), (1, 6), "只补齐缺失文件并统计其大小");
+        assert_eq!(fs::read(to.join("t1/t1-0001.png")).unwrap(), b"current");
+        assert_eq!(fs::read(to.join("t2/t2-0001.png")).unwrap(), b"second");
+        assert!(!to.join("trash").exists(), "回收目录不参与接管");
+        // 幂等：再次接管不重复复制
+        assert_eq!(adopt_dir(&from, &to).unwrap(), (0, 0));
         let _ = fs::remove_dir_all(&dir);
     }
 }

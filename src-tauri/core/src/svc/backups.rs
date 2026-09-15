@@ -23,7 +23,7 @@ const ATTACHMENTS: &str = "attachments";
 /// 附件回收目录（不属于备份内容；备份复制时跳过）
 const TRASH: &str = "trash";
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupInfo {
     pub id: String,
@@ -221,39 +221,71 @@ pub fn list() -> AppResult<Vec<BackupInfo>> {
         if !entry.file_type()?.is_dir() {
             continue;
         }
-        let path = entry.path().join(MANIFEST);
-        if let Ok(data) = std::fs::read(&path) {
-            if let Ok(info) = serde_json::from_slice::<BackupInfo>(&data) {
-                if entry.file_name().to_string_lossy() == info.id {
-                    result.push(info);
-                }
-            }
+        if let Some(info) = read_manifest(&entry.path()) {
+            result.push(info);
         }
     }
     result.sort_by_key(|info| std::cmp::Reverse(info.created_at));
     Ok(result)
 }
 
+/// 附件索引中的 (相对路径, 字节数)：备份复制期间用它校验文件没有被并发删除或改写。
+fn indexed_attachments(conn: &rusqlite::Connection) -> AppResult<Vec<(String, i64)>> {
+    let mut stmt = conn.prepare("SELECT relative_path,byte_size FROM attachments")?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<Result<Vec<(String, i64)>, _>>()?;
+    Ok(rows)
+}
+
 fn create_inner() -> AppResult<BackupInfo> {
-    let path = super::db_cmds::db_path()?;
-    let writer = db::open_existing(&path, true)?;
-    // 与 MCP 跨进程写互斥；附件复制结束前不允许删除任务与附件关系。
-    let guard =
-        rusqlite::Transaction::new_unchecked(&writer, rusqlite::TransactionBehavior::Immediate)?;
-    let source = db::open_existing(&path, false)?;
+    create_at(&super::db_cmds::db_path()?, &root()?)
+}
+
+/// 备份实现：数据文件与备份根目录都是参数，便于单测覆盖三阶段流程。
+fn create_at(path: &Path, root: &Path) -> AppResult<BackupInfo> {
+    match sweep_incomplete_at(root, INCOMPLETE_GRACE) {
+        0 => {}
+        cleaned => log::info!("已清理 {cleaned} 个中断的备份目录"),
+    }
+    let attachments_root = super::attachments::attachments_root_at(path);
     let id = uuid::Uuid::new_v4().to_string();
-    let directory = root()?.join(&id);
+    let directory = root.join(&id);
     std::fs::create_dir_all(&directory)?;
     let result = (|| {
-        // 快照与清单同源：state 从写锁事务中读取，附件复制期间任务与附件关系不会被删除。
-        source.backup(rusqlite::DatabaseName::Main, directory.join(SNAPSHOT), None)?;
-        let state = db::load_state(&source)?;
+        // 阶段一（短写锁）：与 MCP 跨进程写互斥的前提下做一致性快照，并读取状态与附件索引。
+        // 锁只覆盖这里的读操作——附件可能非常大，持锁复制会让其它进程保存直接 busy_timeout 失败。
+        let (state, indexed) = {
+            let writer = db::open_existing(path, true)?;
+            let guard = rusqlite::Transaction::new_unchecked(
+                &writer,
+                rusqlite::TransactionBehavior::Immediate,
+            )?;
+            let source = db::open_existing(path, false)?;
+            // 快照与清单同源：state 从写锁事务中读取
+            source.backup(rusqlite::DatabaseName::Main, directory.join(SNAPSHOT), None)?;
+            let state = db::load_state(&source)?;
+            let indexed = indexed_attachments(&source)?;
+            // 附件复制不再持写锁：锁在 rollback 处释放。
+            guard.rollback()?;
+            (state, indexed)
+        };
+        // 阶段二（无锁）：复制附件文件
         let mut created = Vec::new();
         let (attachment_files, attachment_bytes) = copy_tree(
-            &super::attachments::attachments_root_at(&path),
+            &attachments_root,
             &directory.join(ATTACHMENTS),
             &mut created,
         )?;
+        // 阶段三：索引中的每个文件都必须已经入包且大小一致。复制期间被并发删除/改写（删除任务的
+        // 附件文件发生在库事务提交之后）会让备份变成「清单自洽但恢复时缺文件」，必须在这里拦住，
+        // 而不是产出一份不可恢复的「完整备份」。
+        for (relative, size) in &indexed {
+            let target = directory.join(ATTACHMENTS).join(relative);
+            if !target.is_file() || target.metadata()?.len() != *size as u64 {
+                return Err(AppError::invalid("附件在备份期间被修改，请稍后重新备份"));
+            }
+        }
         let info = BackupInfo {
             id,
             created_at: super::workflow::now(),
@@ -272,11 +304,78 @@ fn create_inner() -> AppResult<BackupInfo> {
         file.sync_all()?;
         Ok(info)
     })();
-    guard.rollback()?;
     if result.is_err() {
         let _ = std::fs::remove_dir_all(&directory);
     }
     result
+}
+
+/// 中断备份目录的宽限期：清单在最后写入，刚创建的目录必须留够时间，避免误删正在进行的备份。
+const INCOMPLETE_GRACE: std::time::Duration = std::time::Duration::from_secs(3_600);
+
+/// 清理中断的备份（进程在复制附件期间退出会留下没有可用清单的目录，list() 看不见也永不回收）。
+/// 只处理 UUID 命名的目录，且要求目录修改时间超过宽限期；返回清理数量。
+fn sweep_incomplete_at(root: &Path, grace: std::time::Duration) -> usize {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return 0;
+    };
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if uuid::Uuid::parse_str(&name).is_err() || !entry.file_type().is_ok_and(|k| k.is_dir()) {
+            continue;
+        }
+        let directory = entry.path();
+        if usable_manifest(&directory) {
+            continue;
+        }
+        // 取目录自身、附件目录与快照文件里最新的一次修改：附件在子目录里增长时顶层目录的
+        // mtime 不会更新，只看顶层会误判成「陈旧」并删掉正在进行的大备份。
+        // 时间不可读时按「新」处理，宁可不清理。
+        if newest_age(&directory).is_none_or(|age| age < grace) {
+            continue;
+        }
+        match std::fs::remove_dir_all(&directory) {
+            Ok(()) => {
+                log::info!("已清理中断的备份目录：{name}");
+                removed += 1;
+            }
+            Err(e) => log::warn!("清理中断的备份目录 {name} 失败：{e}"),
+        }
+    }
+    removed
+}
+
+/// 目录内各关键路径中最新的修改时间距今时长（越新越短）
+fn newest_age(directory: &Path) -> Option<std::time::Duration> {
+    [
+        directory.to_path_buf(),
+        directory.join(ATTACHMENTS),
+        directory.join(SNAPSHOT),
+    ]
+    .into_iter()
+    .filter_map(|path| {
+        std::fs::metadata(&path)
+            .and_then(|meta| meta.modified())
+            .ok()
+            .and_then(|modified| modified.elapsed().ok())
+    })
+    .min()
+}
+
+/// 目录是否带一份可列出、可恢复的清单（id 必须与目录名一致，与 list() 判定相同）
+fn usable_manifest(directory: &Path) -> bool {
+    read_manifest(directory).is_some()
+}
+
+/// 读取可用清单：清单缺失、损坏或与目录名不符时返回 None
+fn read_manifest(directory: &Path) -> Option<BackupInfo> {
+    let data = std::fs::read(directory.join(MANIFEST)).ok()?;
+    let info = serde_json::from_slice::<BackupInfo>(&data).ok()?;
+    directory
+        .file_name()
+        .is_some_and(|name| name.to_string_lossy() == info.id)
+        .then_some(info)
 }
 
 pub fn create() -> AppResult<BackupInfo> {
@@ -645,6 +744,135 @@ mod tests {
         assert_eq!(copied, (1, 4));
         assert!(dir.join("to/t1/t1-0001.png").is_file());
         assert!(!dir.join("to/trash").exists(), "回收目录不进入备份");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 中断的备份目录必须被回收，但可用备份、人工目录与宽限期内的新目录都不动。
+    #[test]
+    fn sweep_removes_only_stale_incomplete_directories() {
+        let dir = std::env::temp_dir().join(format!("tk-backup-sweep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let manifest = |id: &str| BackupInfo {
+            id: id.into(),
+            created_at: 1,
+            projects: 0,
+            todos: 0,
+            resources: 0,
+            attachment_files: 0,
+            attachment_bytes: 0,
+        };
+
+        // 复制期间进程退出：只有半份快照，没有清单
+        let orphan = uuid::Uuid::new_v4().to_string();
+        std::fs::create_dir_all(dir.join(&orphan)).unwrap();
+        std::fs::write(dir.join(&orphan).join(SNAPSHOT), b"partial").unwrap();
+        // 清单可用：必须保留
+        let good = uuid::Uuid::new_v4().to_string();
+        std::fs::create_dir_all(dir.join(&good)).unwrap();
+        std::fs::write(
+            dir.join(&good).join(MANIFEST),
+            serde_json::to_vec(&manifest(&good)).unwrap(),
+        )
+        .unwrap();
+        // 清单与目录名不符：list() 看不见，同样属于清理对象
+        let mismatched = uuid::Uuid::new_v4().to_string();
+        std::fs::create_dir_all(dir.join(&mismatched)).unwrap();
+        std::fs::write(
+            dir.join(&mismatched).join(MANIFEST),
+            serde_json::to_vec(&manifest(&good)).unwrap(),
+        )
+        .unwrap();
+        // 非 UUID 目录（人工放置）不参与清理
+        std::fs::create_dir_all(dir.join("manual")).unwrap();
+
+        assert_eq!(
+            sweep_incomplete_at(&dir, std::time::Duration::from_secs(3_600)),
+            0,
+            "宽限期内的目录不得被当作中断备份"
+        );
+        assert!(dir.join(&orphan).exists());
+
+        assert_eq!(
+            sweep_incomplete_at(&dir, std::time::Duration::ZERO),
+            2,
+            "陈旧且清单不可用的目录应被回收"
+        );
+        assert!(!dir.join(&orphan).exists());
+        assert!(!dir.join(&mismatched).exists());
+        assert!(dir.join(&good).join(MANIFEST).is_file());
+        assert!(dir.join("manual").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 备份成功路径：快照 + 附件 + 清单自洽（verify 通过），list() 能列出
+    #[test]
+    fn create_at_writes_verified_backup() {
+        let dir = std::env::temp_dir().join(format!("tk-backup-create-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_path = dir.join("todo-kanban.db");
+        let root = dir.join("snapshots");
+        let (conn, _) = db::open_and_init(&db_path, &dir.join("backup")).unwrap();
+        let info = crate::svc::attachments::import_b64_at(
+            &db_path,
+            "t1",
+            &base64_encode(&png_bytes()),
+            "x.png",
+        )
+        .unwrap();
+        let task = todo("t1", &format!("![x]({})", info.r#ref));
+        db::save_state(&conn, &state(vec![task])).unwrap();
+        drop(conn);
+
+        let backup = create_at(&db_path, &root).unwrap();
+        assert_eq!(backup.todos, 1);
+        assert_eq!(backup.attachment_files, 1);
+        let directory = root.join(&backup.id);
+        let manifest = read_manifest(&directory).expect("清单可用");
+        verify(&directory, &manifest).expect("备份自洽");
+        assert!(directory.join(SNAPSHOT).is_file());
+        assert!(directory
+            .join(ATTACHMENTS)
+            .join(&info.relative_path)
+            .is_file());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 索引里的附件在复制期间被删除（任务删除的附件文件移动发生在库事务提交之后）：
+    /// 备份必须失败并清理目录，绝不能产出「清单自洽但恢复时缺文件」的备份。
+    #[test]
+    fn create_at_rejects_backup_when_indexed_attachment_is_missing() {
+        let dir = std::env::temp_dir().join(format!("tk-backup-missing-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_path = dir.join("todo-kanban.db");
+        let root = dir.join("snapshots");
+        let (conn, _) = db::open_and_init(&db_path, &dir.join("backup")).unwrap();
+        let info = crate::svc::attachments::import_b64_at(
+            &db_path,
+            "t1",
+            &base64_encode(&png_bytes()),
+            "x.png",
+        )
+        .unwrap();
+        let task = todo("t1", &format!("![x]({})", info.r#ref));
+        db::save_state(&conn, &state(vec![task])).unwrap();
+        drop(conn);
+        std::fs::remove_file(
+            crate::svc::attachments::attachments_root_at(&db_path).join(&info.relative_path),
+        )
+        .unwrap();
+
+        let error = create_at(&db_path, &root).unwrap_err();
+        assert!(
+            error.to_string().contains("附件在备份期间被修改"),
+            "应明确报告附件在复制期间变化，实际：{error}"
+        );
+        let leftovers = std::fs::read_dir(&root).map(|it| it.count()).unwrap_or(0);
+        assert_eq!(leftovers, 0, "失败的备份不得留下目录");
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -51,7 +51,7 @@ export function SwimlaneBoard({projectId, query = "", branch = ""}: {projectId:s
   const targetRef = React.useRef<Target|null>(null);
   const sensors = useSensors(useSensor(CardPointerSensor,{activationConstraint:{distance:6}}),useSensor(KeyboardSensor,{coordinateGetter:sortableKeyboardCoordinates}));
   const reset = () => {setActive(null);setTarget(null);targetRef.current=null;setLaneOver(null);};
-  const locate = (e:DragMoveEvent):Target|null => {
+  const locate = (e:DragMoveEvent|DragEndEvent):Target|null => {
     if (!e.over) return null;
     const data = e.over.data.current;
     const laneId = data?.laneId as string | undefined;
@@ -70,7 +70,12 @@ export function SwimlaneBoard({projectId, query = "", branch = ""}: {projectId:s
   };
   const end = (e:DragEndEvent) => {
     if (e.over && active?.kind === "lane") saveSwimlanes(projectId,reorderLanes(lanes,active.id,String(e.over.id).slice(5)));
-    else if (e.over && active && targetRef.current && !filtered) moveTodo(projectId,active.id,targetRef.current.laneId,targetRef.current.index);
+    else if (e.over && active && !filtered) {
+      // 以「落下那一刻」的落点为准：onDragMove 的缓存值可能停在上一帧（布局/滚动在拖拽中变化时
+      // 会把任务放进相邻泳道），拿不到新落点时才回退到缓存。
+      const target = locate(e) ?? targetRef.current;
+      if (target) moveTodo(projectId,active.id,target.laneId,target.index);
+    }
     reset();
   };
   const draggingTask=active?.kind === "todo" ? todos.find(t=>t.id===active.id):null;
@@ -83,7 +88,7 @@ export function SwimlaneBoard({projectId, query = "", branch = ""}: {projectId:s
       </SortableContext>
       {lanes.length===0 && <div className="tk-panel flex-1 p-10 text-center text-muted-foreground">暂无泳道，请通过“管理泳道”添加。</div>}
     </div>
-    <DragOverlay dropAnimation={null}>{draggingTask ? <div className="w-[280px] rotate-1 shadow-xl rounded-xl"><TodoRow todo={draggingTask} variant="card" /></div> : draggingLane ? <div className="tk-panel w-[300px] p-5 shadow-xl"><div className="flex gap-2 font-semibold"><GripVertical className="h-5 w-5 text-primary"/>{draggingLane.name}</div><p className="mt-2 text-xs text-muted-foreground">{items.get(draggingLane.id)?.length ?? 0} 个任务</p></div>:null}</DragOverlay>
+    <DragOverlay dropAnimation={null}>{draggingTask ? <div data-drag-overlay="task" className="w-[280px] rotate-1 shadow-xl rounded-xl"><TodoRow todo={draggingTask} variant="card" /></div> : draggingLane ? <div data-drag-overlay="lane" className="tk-panel w-[300px] p-5 shadow-xl"><div className="flex gap-2 font-semibold"><GripVertical className="h-5 w-5 text-primary"/>{draggingLane.name}</div><p className="mt-2 text-xs text-muted-foreground">{items.get(draggingLane.id)?.length ?? 0} 个任务</p></div>:null}</DragOverlay>
   </DndContext>;
 }
 const Lane = React.memo(function Lane({lane,tasks,activeId,target,laneTarget,disabled,projectId}:{lane:Swimlane;tasks:Todo[];activeId:string|null;target:Target|null;laneTarget:boolean;disabled:boolean;projectId:string}) {
@@ -114,5 +119,5 @@ const Lane = React.memo(function Lane({lane,tasks,activeId,target,laneTarget,dis
 });
 function SortableTask({todo,disabled}:{todo:Todo;disabled:boolean}) {
   const s=useSortable({id:todo.id,data:{kind:"todo",laneId:todo.swimlaneId},disabled});
-  return <div ref={s.setNodeRef} {...s.attributes} {...s.listeners} aria-label={`拖动任务 ${todo.title}`} style={{transform:CSS.Transform.toString(s.transform),transition:s.transition}} className={cn(!disabled&&"cursor-grab active:cursor-grabbing",s.isDragging&&"opacity-25")} data-task-id={todo.id}><TodoRow todo={todo} variant="card"/></div>;
+  return <div ref={s.setNodeRef} {...s.attributes} {...s.listeners} aria-label={`拖动任务 ${todo.title}`} style={{transform:CSS.Transform.toString(s.transform),transition:s.transition}} className={cn(!disabled&&"cursor-grab active:cursor-grabbing",s.isDragging&&"opacity-25")} data-task-id={todo.id} data-dragging={s.isDragging?"true":undefined}><TodoRow todo={todo} variant="card"/></div>;
 }
