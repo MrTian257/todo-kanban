@@ -4,20 +4,33 @@
 import { useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { isTauri } from "./storage";
-import { AppState, Todo } from "./types";
+import { AppState, AutomationRule, CustomFieldDef, Todo } from "./types";
+import { normalizeFieldDef, normalizeRule } from "./customFields";
 import { flushPersistence, reloadRemoteState, useAppStore } from "./store";
 
 export interface TaskLinks { todoId: string; parentId: string | null; dependsOn: string[]; resourceIds: string[] }
 export interface TaskTemplate { id: string; projectId: string | null; name: string; title: string; note: string; repoPath: string; branch: string }
 export interface Reminder { id: string; todoId: string; at: number; deliveredAt: number | null }
-export interface Workflow { revision: number; links: TaskLinks[]; templates: TaskTemplate[]; reminders: Reminder[]; remindersEnabled: boolean; backupEnabled: boolean; backupHours: number; backupKeep: number }
+export interface Workflow { revision: number; links: TaskLinks[]; templates: TaskTemplate[]; reminders: Reminder[]; remindersEnabled: boolean; backupEnabled: boolean; backupHours: number; backupKeep: number; fieldDefs: CustomFieldDef[]; automations: AutomationRule[] }
 export interface HistoryEntry { id: string; entity: string; entityId: string; actor: string; happenedAt: number; before: Record<string, unknown> | null; after: Record<string, unknown> | null }
 export interface BackupInfo { id: string; createdAt: number; projects: number; todos: number; resources: number; attachmentFiles: number; attachmentBytes: number }
 export interface Proposal { id: string; createdAt: number; expected: AppState; payload: AppState; status: string }
 export interface DesktopStatus { shortcutError: string; trayError: string; backgroundError: string }
 
 const PREVIEW_KEY = "workflow-preview";
-const EMPTY: Workflow = { revision: 0, links: [], templates: [], reminders: [], remindersEnabled: false, backupEnabled: false, backupHours: 24, backupKeep: 7 };
+const EMPTY: Workflow = { revision: 0, links: [], templates: [], reminders: [], remindersEnabled: false, backupEnabled: false, backupHours: 24, backupKeep: 7, fieldDefs: [], automations: [] };
+
+/** 旧配置兜底：字段定义与自动脚本缺失时补空数组，脏项直接丢弃（前端不因配置损坏而崩） */
+function normalizeWorkflow(value: Workflow): Workflow {
+  return {
+    ...value,
+    links: Array.isArray(value.links) ? value.links : [],
+    templates: Array.isArray(value.templates) ? value.templates : [],
+    reminders: Array.isArray(value.reminders) ? value.reminders : [],
+    fieldDefs: Array.isArray(value.fieldDefs) ? value.fieldDefs.map(normalizeFieldDef).filter((def): def is CustomFieldDef => def !== null) : [],
+    automations: Array.isArray(value.automations) ? value.automations.map(normalizeRule).filter((rule): rule is AutomationRule => rule !== null) : [],
+  };
+}
 
 let current: Workflow = EMPTY;
 /** 单调 revision：低于该值的响应一律丢弃（防止迟到读取覆盖刚保存的配置） */
@@ -46,11 +59,11 @@ export function loadWorkflow(): Promise<void> {
   if (pendingLoad) return pendingLoad;
   pendingLoad = (async () => {
     if (isTauri()) {
-      publish(await invoke<Workflow>("workflow_load"));
+      publish(normalizeWorkflow(await invoke<Workflow>("workflow_load")));
       return;
     }
     const raw = sessionStorage.getItem(PREVIEW_KEY);
-    if (raw) publish(JSON.parse(raw) as Workflow);
+    if (raw) publish(normalizeWorkflow(JSON.parse(raw) as Workflow));
   })().finally(() => { pendingLoad = null; });
   return pendingLoad;
 }
@@ -81,6 +94,14 @@ export async function saveWorkflow(payload: Workflow): Promise<Workflow> {
   const saved = await invoke<Workflow>("workflow_save", { payload, expected: payload.revision });
   publish(saved);
   return saved;
+}
+
+/**
+ * 局部更新配置：以「当前已达成的配置」为基线合并，带上最新 revision 保存，
+ * 避免闭包里的旧值把别人刚保存的字段定义 / 规则改回去。
+ */
+export async function patchWorkflow(patch: Partial<Workflow>): Promise<Workflow> {
+  return saveWorkflow({ ...current, ...patch });
 }
 
 export async function desktopAction<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {

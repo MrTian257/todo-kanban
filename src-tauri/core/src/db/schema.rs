@@ -1,8 +1,8 @@
-//! DDL + 迁移。USER_VERSION = 10。
+//! DDL + 迁移。USER_VERSION = 11。
 //! 注意：SQLite 列序是硬契约——schema ↔ row ↔ mod 的 SELECT/INSERT 三处同步。
 //! 版本号必须与 config::CURRENT_DATA_VERSION 一致：open_existing 用它做跨进程版本门禁。
 
-pub const USER_VERSION: i64 = 10;
+pub const USER_VERSION: i64 = 11;
 
 /// 建表（新库直接完整 v6 形态；旧库缺列由 migrate 补）
 pub fn create_tables(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
@@ -49,7 +49,8 @@ CREATE TABLE IF NOT EXISTS todos (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   created_by TEXT NOT NULL DEFAULT 'human',   -- v7：创建者（human | ai）
-  ai_coordinated INTEGER NOT NULL DEFAULT 0    -- v7：AI 协助标记（经 MCP 修改过）
+  ai_coordinated INTEGER NOT NULL DEFAULT 0,   -- v7：AI 协助标记（经 MCP 修改过）
+  custom_fields TEXT NOT NULL DEFAULT '[]'     -- v11：自定义字段值 JSON 数组
 );
 CREATE INDEX IF NOT EXISTS idx_todos_project ON todos(project_id);
 CREATE TABLE IF NOT EXISTS app_meta (
@@ -186,6 +187,15 @@ pub fn migrate(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
         if !column_exists(conn, "projects", "created_by")? {
             conn.execute_batch(
                 "ALTER TABLE projects ADD COLUMN created_by TEXT NOT NULL DEFAULT 'human';",
+            )?;
+        }
+    }
+
+    if version < 11 {
+        // v10 → v11：todos 补 custom_fields（自定义字段值 JSON 数组；存量行为空数组）
+        if !column_exists(conn, "todos", "custom_fields")? {
+            conn.execute_batch(
+                "ALTER TABLE todos ADD COLUMN custom_fields TEXT NOT NULL DEFAULT '[]';",
             )?;
         }
     }
@@ -381,6 +391,44 @@ mod tests {
             .unwrap();
         assert_eq!(orders.len(), 2);
         assert!(orders[0] > 0, "存量应回填非零 rowid 序");
+        let v: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, USER_VERSION);
+    }
+
+    #[test]
+    fn migrate_v10_db_adds_v11_custom_fields() {
+        let conn = open_in_memory().unwrap();
+        // 模拟 v10 库（无 custom_fields 列）
+        conn.execute_batch(
+            "CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL,
+               project_dir TEXT NOT NULL DEFAULT '', frontend_dir TEXT, backend_dir TEXT,
+               frontend_repo_url TEXT, backend_repo_url TEXT, production_branch TEXT,
+               branch_rule TEXT, archived INTEGER, created_at INTEGER, updated_at INTEGER,
+               frontend_repo_token TEXT, backend_repo_token TEXT, swimlanes TEXT,
+               created_by TEXT NOT NULL DEFAULT 'human');
+             CREATE TABLE todos (id TEXT PRIMARY KEY, project_id TEXT, title TEXT,
+               note TEXT, repo_path TEXT, branch TEXT, status TEXT, swimlane_id TEXT,
+               quadrant TEXT, seq INTEGER, tag TEXT, start_date TEXT, end_date TEXT,
+               blocker TEXT, archived INTEGER, started_at INTEGER, done_at INTEGER,
+               commits TEXT, sort_order INTEGER, created_at INTEGER, updated_at INTEGER,
+               created_by TEXT NOT NULL DEFAULT 'human', ai_coordinated INTEGER NOT NULL DEFAULT 0);
+             CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             INSERT INTO todos (id, project_id, title, created_at, updated_at)
+               VALUES ('t1','p1','旧任务',1,1);
+             PRAGMA user_version = 10;",
+        )
+        .unwrap();
+        crate::db::init(&conn).unwrap();
+        assert!(column_exists(&conn, "todos", "custom_fields").unwrap());
+        // 存量行补空数组（读取侧解析为无自定义字段）
+        let fields: String = conn
+            .query_row("SELECT custom_fields FROM todos WHERE id='t1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(fields, "[]");
         let v: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();

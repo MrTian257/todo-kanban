@@ -8,6 +8,9 @@ use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
+use super::automation::{self, AutomationRule};
+use super::fields::{self, FieldDef};
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskLinks {
@@ -53,6 +56,12 @@ pub struct Workflow {
     pub backup_enabled: bool,
     pub backup_hours: u32,
     pub backup_keep: usize,
+    /// 自定义字段定义（v11）：全局或按项目限定的扩展属性
+    #[serde(default)]
+    pub field_defs: Vec<FieldDef>,
+    /// 自动脚本（v11）：声明式规则，由保存事务在 core 内执行
+    #[serde(default)]
+    pub automations: Vec<AutomationRule>,
 }
 impl Default for Workflow {
     fn default() -> Self {
@@ -65,6 +74,8 @@ impl Default for Workflow {
             backup_enabled: false,
             backup_hours: 24,
             backup_keep: 7,
+            field_defs: vec![],
+            automations: vec![],
         }
     }
 }
@@ -97,6 +108,12 @@ pub fn write(conn: &Connection, value: &Workflow) -> AppResult<()> {
 }
 pub fn load() -> AppResult<Workflow> {
     read(&db::open_existing(&super::db_cmds::db_path()?, false)?)
+}
+
+/// 读取指定数据文件的工作流配置。MCP 用 --db-config 指向别的目录时，
+/// 必须与它读到的是同一个库（不能走 app 侧默认路径）。
+pub fn read_at(path: &std::path::Path) -> AppResult<Workflow> {
+    read(&db::open_existing(path, false)?)
 }
 fn unique<'a>(ids: impl Iterator<Item = &'a str>) -> AppResult<()> {
     let mut seen = HashSet::new();
@@ -144,6 +161,10 @@ pub fn validate(value: &Workflow, state: &DbState) -> AppResult<()> {
     if !(1..=720).contains(&value.backup_hours) || !(1..=100).contains(&value.backup_keep) {
         return Err(AppError::invalid("备份间隔为 1~720 小时，保留数量为 1~100"));
     }
+    // 自定义字段与自动脚本：只做词表 / 结构 / 上限校验，引用的泳道与字段允许失效
+    // （删泳道或删字段后仍必须能保存配置，失效项由前端标注且不参与运行）。
+    fields::validate_defs(&value.field_defs)?;
+    automation::validate(&value.automations)?;
     unique(value.links.iter().map(|v| v.todo_id.as_str()))?;
     unique(value.templates.iter().map(|v| v.id.as_str()))?;
     unique(value.reminders.iter().map(|v| v.id.as_str()))?;

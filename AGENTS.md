@@ -35,6 +35,7 @@ todo-kanban/
 | Rust 业务逻辑 | `src-tauri/core/src/`（svc/ 编排、db/ 存储、tool/ git CLI） |
 | 数据版本升级 | `src-tauri/config/src/lib.rs` + `upgrade/` + schema.rs/row.rs/db 三处（ADR-011） |
 | MCP 工具 | `src-tauri/mcp-server/src/bridge.rs` + `protocol.rs`，业务走 core/svc |
+| 自定义字段 / 自动脚本 | 定义与规则 `core/src/svc/workflow.rs`（fieldDefs / automations）+ `svc/fields.rs` + `svc/automation.rs`；值 `todos.custom_fields`（v11）；执行点 `db/mod.rs::save_state_inner`；前端词表 `src/lib/customFields.ts` + `src/components/workflow/*Panel.tsx` |
 | 主题/皮肤 | `src/lib/theme.ts` + `src/index.css` |
 
 ## CODE MAP
@@ -51,7 +52,7 @@ todo-kanban/
 | `core/src/lib.rs` | barrel | `src-tauri/core/src/lib.rs` | 导出 db/error/models/svc/tool |
 | `db_cmds.rs` | svc | `src-tauri/core/src/svc/` | 读写编排 + DB_RW_LOCK（外部改动由 state_poll 轮询） |
 | `git_cmds.rs` | svc | `src-tauri/core/src/svc/` | git 行为（执行器在 tool/git_cli.rs） |
-| `mcp-server/main.rs` | bin | `src-tauri/mcp-server/src/` | stdio JSON-RPC 循环，11 tools + 4 resources |
+| `mcp-server/main.rs` | bin | `src-tauri/mcp-server/src/` | stdio JSON-RPC 循环，11 tools + 5 resources（含 fields） |
 
 ## CONVENTIONS（与 CLAUDE.md 不同或补充）
 

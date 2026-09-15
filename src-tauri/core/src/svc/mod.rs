@@ -9,7 +9,9 @@ pub mod credentials;
 pub mod http_cache;
 pub mod state_poll;
 
+pub mod automation;
 pub mod backups;
+pub mod fields;
 pub mod history;
 pub mod proposals;
 pub mod workflow;

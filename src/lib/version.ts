@@ -30,9 +30,9 @@ export interface VersionReport {
 /** 浏览器预览模式默认报告（无真实数据源；依赖版本留空，界面显示「—」而不是假版本号） */
 const PREVIEW_REPORT: VersionReport = {
   status: "ok",
-  dataVersion: 10,
+  dataVersion: 11,
   appMin: 1,
-  appMax: 10,
+  appMax: 11,
   softwareVersion: "2.0.0",
   from: null,
   to: null,

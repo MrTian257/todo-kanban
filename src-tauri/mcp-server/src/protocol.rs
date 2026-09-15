@@ -139,11 +139,16 @@ mod tests {
     }
 
     #[test]
-    fn resources_list_has_4() {
+    fn resources_list_has_5() {
         let resp =
             handle_request(&json!({ "jsonrpc": "2.0", "id": 3, "method": "resources/list" }))
                 .unwrap();
-        assert_eq!(resp["result"]["resources"].as_array().unwrap().len(), 4);
+        let resources = resp["result"]["resources"].as_array().unwrap();
+        assert_eq!(resources.len(), 5);
+        // v11：自定义字段定义与自动脚本（只读资源）
+        assert!(resources
+            .iter()
+            .any(|item| item["uri"] == "todo-kanban://fields"));
     }
 
     #[test]

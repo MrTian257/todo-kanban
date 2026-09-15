@@ -162,10 +162,21 @@ pub fn same_state(actual: &DbState, expected: &DbState) -> bool {
         && actual_resources == expected_resources
 }
 
+/// 保存选项。恢复类路径（备份/历史恢复）不放行自定义字段自动脚本，见 ADR-014 的运行矩阵。
+#[derive(Default)]
+struct SaveOptions<'a> {
+    workflow: Option<&'a crate::svc::workflow::Workflow>,
+    workflow_revision: Option<i64>,
+    proposal: Option<&'a str>,
+    attachments: Option<&'a crate::svc::backups::AttachmentSnapshot>,
+    /// 是否执行自定义字段默认值与自动脚本：普通保存 / 提案应用为 true，恢复类路径为 false
+    automations: bool,
+}
+
 /// 差异写落库（单事务）：UPSERT 变更行（updated_at 较新者胜）+ 差集删除 + seq/tag 收敛 + 提交全局去重 + 泳道校验
 /// 返回待移入 trash 的附件路径清单（调用方负责移动文件；种子场景直接忽略）
 pub fn save_state(conn: &Connection, state: &DbState) -> AppResult<Vec<String>> {
-    save_state_inner(conn, state, None, None, None, None, None).map(|(_, trash)| trash)
+    save_state_inner(conn, state, None, SaveOptions::default()).map(|(_, trash)| trash)
 }
 
 /// Compare the caller's read snapshot under a cross-process SQLite write lock.
@@ -175,7 +186,25 @@ pub fn save_state_checked(
     state: &DbState,
     expected: &DbState,
 ) -> AppResult<(DbState, Vec<String>)> {
-    save_state_inner(conn, state, Some(expected), None, None, None, None)
+    save_state_inner(
+        conn,
+        state,
+        Some(expected),
+        SaveOptions {
+            automations: true,
+            ..SaveOptions::default()
+        },
+    )
+}
+
+/// 恢复历史版本等「忠实还原」路径：与 save_state_checked 相同，但不执行自动脚本——
+/// 否则恢复出来的旧快照会被规则立刻改写成新值，与用户所选版本不一致。
+pub fn save_state_restored(
+    conn: &Connection,
+    state: &DbState,
+    expected: &DbState,
+) -> AppResult<(DbState, Vec<String>)> {
+    save_state_inner(conn, state, Some(expected), SaveOptions::default())
 }
 
 pub fn save_state_extended(
@@ -191,10 +220,15 @@ pub fn save_state_extended(
         conn,
         state,
         Some(expected),
-        workflow,
-        workflow_revision,
-        proposal,
-        attachments,
+        SaveOptions {
+            workflow,
+            workflow_revision,
+            proposal,
+            attachments,
+            // 提案应用是普通业务写入（放行自动脚本）；备份恢复必须停用脚本，
+            // 否则恢复出来的历史字段值会被规则立刻改写。
+            automations: workflow.is_none() && attachments.is_none(),
+        },
     )
 }
 
@@ -202,10 +236,7 @@ fn save_state_inner(
     conn: &Connection,
     state: &DbState,
     expected: Option<&DbState>,
-    workflow: Option<&crate::svc::workflow::Workflow>,
-    workflow_revision: Option<i64>,
-    proposal: Option<&str>,
-    attachments: Option<&crate::svc::backups::AttachmentSnapshot>,
+    options: SaveOptions<'_>,
 ) -> AppResult<(DbState, Vec<String>)> {
     // 分支规则校验（保存前兜底，与前端 zod 同规则）
     for p in &state.projects {
@@ -227,7 +258,7 @@ fn save_state_inner(
             ));
         }
     }
-    if let Some(attachments) = attachments {
+    if let Some(attachments) = options.attachments {
         attachments.install(&tx)?;
     }
 
@@ -278,6 +309,8 @@ fn save_state_inner(
             row::upsert_project(&tx, p)?;
         }
     }
+    // 收敛后的待写快照（seq/tag 收敛 + 泳道归属回退 + 提交去重）；自动脚本在写库前统一求值
+    let mut converged: Vec<DbTodo> = Vec::with_capacity(state.todos.len());
     for t in &state.todos {
         let mut todo = t.clone();
         // 归一后再与库中行比较，避免存储层原始值造成无意义的重复写
@@ -330,8 +363,40 @@ fn save_state_inner(
         }
         // 提交去重（本批先到先得）
         todo.commits.retain(|c| claimed.insert(c.hash.clone()));
-        if existing_by_id.get(todo.id.as_str()).copied() != Some(&todo) {
-            row::upsert_todo(&tx, &todo)?;
+        converged.push(todo);
+    }
+
+    // 自定义字段：新建任务补默认值 + 执行自动脚本。
+    // 恢复类路径（备份/历史恢复）与种子写入跳过：还原必须忠实，不能被规则改写。
+    if options.automations {
+        let config = crate::svc::workflow::read(&tx)?;
+        if !config.field_defs.is_empty() || !config.automations.is_empty() {
+            for todo in converged.iter_mut() {
+                if !existing_by_id.contains_key(todo.id.as_str()) {
+                    crate::svc::fields::apply_defaults(todo, &config.field_defs);
+                }
+            }
+            let outcome = crate::svc::automation::run(
+                &existing.todos,
+                &mut converged,
+                &state.projects,
+                &config.field_defs,
+                &config.automations,
+                crate::svc::fields::now_ms(),
+            );
+            if outcome.actions > 0 {
+                log::info!(
+                    "自动脚本应用 {} 条动作（涉及 {} 个任务）",
+                    outcome.actions,
+                    outcome.todos
+                );
+            }
+        }
+    }
+
+    for todo in &converged {
+        if existing_by_id.get(todo.id.as_str()).copied() != Some(todo) {
+            row::upsert_todo(&tx, todo)?;
         }
     }
     for resource in &state.resources {
@@ -385,12 +450,15 @@ fn save_state_inner(
     };
 
     let saved = row::load_state_from_conn(&tx)?;
-    if let Some(workflow) = workflow {
+    if let Some(workflow) = options.workflow {
         // 并发保护：必须在 prune 之前校验 revision —— prune 清理悬空关联时会推进 revision，
         // 放在它后面会把「调用方确认时的版本」与「已被 prune 推进的版本」比较，导致备份恢复永久失败。
         // 恢复分支不做 prune：工作流马上被备份内容整体覆盖，且 validate 会拒绝悬空引用。
         let current = crate::svc::workflow::read(&tx)?;
-        if workflow_revision.is_some_and(|expected| expected != current.revision) {
+        if options
+            .workflow_revision
+            .is_some_and(|expected| expected != current.revision)
+        {
             return Err(AppError::invalid(
                 "STATE_CONFLICT: 工作流配置已变化，请刷新后重新确认",
             ));
@@ -403,7 +471,7 @@ fn save_state_inner(
         // 普通保存：清理悬空关联（派生清理，会推进 revision）
         crate::svc::workflow::prune(&tx, &saved)?;
     }
-    if let Some(id) = proposal {
+    if let Some(id) = options.proposal {
         if tx.execute(
             "UPDATE change_proposals SET status='applied' WHERE id=?1 AND status='pending'",
             [id],

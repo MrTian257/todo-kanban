@@ -20,11 +20,15 @@
 | `Swimlane` | `DbSwimlane` | 见 §3.4（v5 新增，存于 projects.swimlanes JSON 列） |
 | `BranchRuleStep` / `BranchRule` | `DbBranchRuleStep` / `DbBranchRule` | 见 §3.3 |
 | `Project` | `DbProject` | 见 §3.2 |
-| `AppState`（store 顶层） | `DbState` | { projects, todos } |
+| `AppState`（store 顶层） | `DbState` | { projects, todos, resources } |
+| `CustomFieldValue` | `DbCustomFieldValue` | v11；{ fieldId, value }，value = `CustomValue`（null / 布尔 / 数字 / 文本 / 字符串数组） |
+| `CustomValue` | `CustomValue` | untagged 枚举，JSON 形态就是原生标量（前端无需解包） |
+| `CustomFieldDef` | `FieldDef` | v11 字段定义，存于 workflow_state 的 fieldDefs（见 §3.6） |
+| `AutomationRule` | `AutomationRule` | v11 自动脚本，存于 workflow_state 的 automations（见 §3.7） |
 
 ## 3. 字段明细
 
-### 3.1 Todo（DbTodo，表 todos 23 列）
+### 3.1 Todo（DbTodo，表 todos 24 列）
 
 | 字段 | 类型（前端） | 说明 |
 | --- | --- | --- |
@@ -47,6 +51,7 @@
 | commits | CommitInfo[] | 关联提交记录（JSON 列） |
 | createdBy | human \| ai | 创建者（v7；MCP 新建为 ai，UI 新建为 human，存量默认 human） |
 | aiCoordinated | boolean | AI 协助标记（v7；经 MCP 创建或修改过为 true，卡片显示「AI 创建 / AI 协助」） |
+| customFields | CustomFieldValue[] | **自定义字段值（v11）**：数组 `[{ fieldId, value }]`，规范化后按 fieldId 升序、空值不落库。定义见 §3.6，自动写入见 §3.7 |
 | createdAt / updatedAt | number | 时间戳（毫秒） |
 
 ### 3.2 Project（DbProject，表 projects 16 列）
@@ -64,6 +69,42 @@
 | archived | boolean | 已归档 |
 | createdBy | human \| ai | 创建者（v7；MCP 新建为 ai，UI 新建为 human，存量默认 human；项目卡片显示「AI 创建」） |
 | createdAt / updatedAt | number | 时间戳 |
+
+### 3.6 自定义字段定义（FieldDef，v11）
+
+| 字段 | 说明 |
+| --- | --- |
+| id | 稳定标识 `f-<uuid 前 8 位>`，创建后不可修改（任务值按 id 关联） |
+| label | 显示名（可改，同一作用范围内唯一，≤50 字符） |
+| type | text / number / date / datetime / select / multiselect / checkbox |
+| source | **值来源**：manual（手动填写并落库）/ builtin（引用任务内置属性，只读派生、不落库）/ rule（由自动脚本写入，只读） |
+| builtin | source=builtin 时的内置属性名：createdAt / updatedAt / startedAt / doneAt / startDate / endDate / status / swimlane / branch / tag / seq / commitCount / project / blocker |
+| options | select / multiselect 的候选项（≤100，非空且不重复） |
+| defaultValue | source=manual 的新建默认值（后端在新建任务时补写，前端表单同时预填） |
+| required | 仅前端提示（后端不阻断，便于 MCP / 脚本创建任务） |
+| showOnCard | 是否在看板卡片上展示（最多 3 个 + 「+N」） |
+| projectId | null=所有项目；否则限定单个项目 |
+| sortOrder | 详情页字段顺序 |
+
+上限：字段 ≤ 200，单值 ≤ 2000 字符，多选 ≤ 50 项。
+
+### 3.7 自动脚本（AutomationRule，v11）
+
+`@jsonc
+{
+  "id": "a-xxxxxxxx", "name": "进入开发泳道记录时间", "enabled": true,
+  "trigger": { "kind": "laneEntered", "laneId": "swim-doing", "to": "", "fieldId": "" },
+  "conditions": [ { "kind": "project", "projectId": "p1", "laneId": "", "status": "", "fieldId": "", "op": "equals", "value": null } ],
+  "actions": [ { "kind": "setField", "target": "f-8f3a1c2b", "value": { "kind": "now", "value": null, "name": "", "fieldId": "", "text": "" } } ]
+}
+`@
+
+- 触发器：created / laneEntered / statusChanged / fieldChanged / commitAdded（对保存前后快照做 diff）
+- 条件（且）：project / lane / status / field（equals / notEmpty / empty）
+- 动作：setField / clearField；target = 自定义字段 id 或 `builtin:startedAt|doneAt|startDate|endDate|blocker`
+- 取值表达式：now（本地毫秒）/ today（本地日期）/ constant / attribute（内置属性）/ field（另一字段值）/ template
+- 收敛约束：每条规则对每个任务每次保存至多触发一次；单次保存最多 3 轮；动作总数上限 5000；类型不匹配的动作跳过并记日志
+- 执行位置：`db::save_state_inner`（core 内、写事务中）；恢复备份 / 历史恢复 / 种子 / 迁移不执行（见 ADR-014）
 
 ### 3.3 分支规则（DbBranchRule / DbBranchRuleStep）
 
@@ -96,7 +137,7 @@
 
 > ⚠ 历史遗留：前端 `storage.ts` 顶部注释写着「环境变量 TODO_GIT_DB_PATH 优先」——**与实现不符**（Rust 侧无此环境变量，始终走 todo-kanban.db），重构时勿被误导。
 
-### 4.2 Schema（`db/schema.rs`，`USER_VERSION = 7`）
+### 4.2 Schema（`db/schema.rs`，`USER_VERSION = 11`）
 
 ```sql
 projects（16 列）: id PK, name, project_dir, frontend_dir, backend_dir,
@@ -105,7 +146,7 @@ projects（16 列）: id PK, name, project_dir, frontend_dir, backend_dir,
   frontend_repo_token, backend_repo_token,          -- v4 新增
   swimlanes TEXT(JSON, 可空),                        -- v5 新增
   created_by TEXT NOT NULL DEFAULT 'human'           -- v7 新增（human | ai）
-todos（23 列）: id PK, project_id, title, note, repo_path, branch,
+todos（24 列）: id PK, project_id, title, note, repo_path, branch,
   status DEFAULT 'todo', swimlane_id TEXT,           -- v5 新增（可空；按 status 映射默认泳道）
   quadrant DEFAULT 'schedule', seq, tag,
   start_date, end_date, blocker, archived,
@@ -113,7 +154,8 @@ todos（23 列）: id PK, project_id, title, note, repo_path, branch,
   sort_order INTEGER NOT NULL DEFAULT 0,              -- v6 新增（泳道内排序）
   created_at, updated_at,
   created_by TEXT NOT NULL DEFAULT 'human',           -- v7 新增（human | ai）
-  ai_coordinated INTEGER NOT NULL DEFAULT 0           -- v7 新增（AI 协助标记）
+  ai_coordinated INTEGER NOT NULL DEFAULT 0,          -- v7 新增（AI 协助标记）
+  custom_fields TEXT NOT NULL DEFAULT '[]'            -- v11 新增（自定义字段值 JSON 数组）
 索引：idx_todos_project ON todos(project_id)
 app_meta（v2）: key PK, value —— key='next_seq' 为任务全局序号分配源（已分配最大序号）
 git_repo_cache（v3）: repo_path PK, repo_exists, is_repo, current_branch,
@@ -130,6 +172,10 @@ git_repo_cache（v3）: repo_path PK, repo_exists, is_repo, current_branch,
 | v4 → v5 | projects 补 `swimlanes`、todos 补 `swimlane_id`（幂等保护）；**存量 todo 按 status 回填** swim-todo / swim-doing / swim-done；存量项目 swimlanes 为 NULL → 前端 normalize 预置默认三泳道 |
 | v5 → v6 | todos 补 `sort_order`（幂等保护）；存量按插入顺序（rowid）回填，拖拽排序落库后重载保留 |
 | v6 → v7 | todos 补 `created_by`/`ai_coordinated`、projects 补 `created_by`（幂等保护）；存量默认 human / 未协调，不回溯猜测 |
+| v7 → v8 | 建附件双表 `attachments` / `todo_attachments`（core 幂等建表，仅推进版本） |
+| v8 → v9 | 建 `resources` 资料库表（core 幂等建表，仅推进版本） |
+| v9 → v10 | 建 `workflow_state` / `change_history` / `change_proposals`（core 幂等建表，仅推进版本） |
+| v10 → v11 | todos 补 `custom_fields`（幂等保护）；存量行为空数组；字段定义与自动脚本存于 workflow_state 配置 |
 
 **版本判定与升级（ADR-011）**：数据版本 = `PRAGMA user_version`；软件内置 `CURRENT_VERSION`（=7）与 `MIN_SUPPORTED_VERSION`（=1），编译打包进 `todo-kanban-upgrade` 分包。启动时任一入口（app `db::open_and_init` / MCP `verify_startup` / `db_check_version`）判定：数据版本高于软件支持 → **拒绝**（提示升级软件）；低于最低支持 → **拒绝**（提示装中间版本）；在范围内且低于当前 → **兼容升级**：`wal_checkpoint(TRUNCATE)` 合并 WAL 后**硬备份 db 到程序运行目录 `backup/`**（`<stem>-v<from>-<时间戳>.db`，保留最近 10 份），再**事务化逐级迁移**（任一失败回滚、user_version 不变）。
 
@@ -144,7 +190,7 @@ git_repo_cache（v3）: repo_path PK, repo_exists, is_repo, current_branch,
 
 ## 5. 前端归一化（`lib/normalize.ts`，唯一入口）
 
-- `normalizeTodo`：补齐旧数据缺失字段——`tag`（缺省回填 `todoTag(id)` = `todo-<id前8位>` 兜底）、`seq`（?? 0）、`commits`（保证数组）、`startedAt/doneAt`（null）、`quadrant`（缺省 "schedule"，仅兼容保留）、`swimlaneId`（缺失/悬空 → 按 status 映射该项目该状态第一个泳道）、`sortOrder`（?? 0）、`startDate/endDate`（null）、`blocker`（""）、`archived`（false）、`createdBy`（空/缺失 → "human"）、`aiCoordinated`（?? false）
+- `normalizeTodo`：`customFields` 走 `canonicalizeCustomFields`（丢弃空值、去重、按 fieldId 升序，与后端 `canonicalize_custom_fields` 对称）；并补齐旧数据缺失字段——`tag`（缺省回填 `todoTag(id)` = `todo-<id前8位>` 兜底）、`seq`（?? 0）、`commits`（保证数组）、`startedAt/doneAt`（null）、`quadrant`（缺省 "schedule"，仅兼容保留）、`swimlaneId`（缺失/悬空 → 按 status 映射该项目该状态第一个泳道）、`sortOrder`（?? 0）、`startDate/endDate`（null）、`blocker`（""）、`archived`（false）、`createdBy`（空/缺失 → "human"）、`aiCoordinated`（?? false）
 - `normalizeProject`：补齐 `productionBranch` / `branchRule` / `frontendRepoToken` / `backendRepoToken` / `swimlanes`（缺失/为空 → 预置默认三泳道）/ `createdBy`（空/缺失 → "human"）
 - `normalizeTodos`：归一化后执行 `dedupeTodosCommits`（todo.ts）——**历史脏数据修正**，一条 hash 只保留在最先出现的待办
 - 运行时归属保护：`dedupeCommitsForTodo`（todo.ts）——给某待办合并提交前，先剔除已被其它待办占用的 hash

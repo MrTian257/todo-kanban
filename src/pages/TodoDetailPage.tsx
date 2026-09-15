@@ -29,8 +29,16 @@ import {
   invalidateGitInfo,
   peekGitInfo,
 } from "@/lib/git";
-import { GitInfo, STATUS_LABEL, Todo, TodoStatus } from "@/lib/types";
+import { CustomValue, GitInfo, STATUS_LABEL, Todo, TodoStatus } from "@/lib/types";
 import { normalizeTodo } from "@/lib/normalize";
+import {
+  applyFieldDefaults,
+  customFieldMap,
+  fromCustomFieldMap,
+  validateFieldValue,
+  visibleFieldDefs,
+} from "@/lib/customFields";
+import { CustomFieldsPanel } from "@/components/workflow/CustomFieldInputs";
 import { newId } from "@/lib/utils";
 
 // 分支名校验（与后端 validate_branch_name 同规则）：放宽为允许任意合法字符，
@@ -55,6 +63,8 @@ const schema = z
     startDate: z.string().nullable(),
     endDate: z.string().nullable(),
     blocker: z.string(),
+    // 自定义字段值：类型与词表由 lib/customFields.ts 校验（逐个字段给出中文提示）
+    customFields: z.record(z.union([z.string(), z.number(), z.boolean(), z.array(z.string()), z.null()])),
     // 提交标记：空串 = 系统自动生成 todo-<seq>；非空 = 用户手动设置（全局唯一）
     tag: z
       .string()
@@ -119,6 +129,8 @@ function TodoDetailForm() {
       startDate: editing?.startDate ?? null,
       endDate: editing?.endDate ?? null,
       blocker: editing?.blocker ?? "",
+      // 新建任务预填字段默认值（后端 save_state 对新建任务同样补默认值，前端只是让用户先看到）
+      customFields: editing ? customFieldMap(editing) : applyFieldDefaults(workflow.fieldDefs, projectId),
       tag: editing?.tag ?? "",
     };
 
@@ -187,6 +199,11 @@ function TodoDetailForm() {
 
   const [customRepo, setCustomRepo] = React.useState(false);
   const [saveError, setSaveError] = React.useState("");
+  const [fieldErrors, setFieldErrors] = React.useState<Record<string, string>>({});
+  const setCustomField = (fieldId: string, value: CustomValue) => {
+    setValue("customFields", { ...(getValues("customFields") ?? {}), [fieldId]: value }, { shouldDirty: true });
+    setFieldErrors((current) => (current[fieldId] ? { ...current, [fieldId]: "" } : current));
+  };
   const submitLock = React.useRef(false);
   const descriptionBusy = React.useRef(false);
   const [descriptionProcessing, setDescriptionProcessing] = React.useState(false);
@@ -261,6 +278,19 @@ function TodoDetailForm() {
     }
     if (!project || submitLock.current) return;
     submitLock.current=true; setSaveError("");
+    // 自定义字段先做类型 / 必填校验（后端仍会强转兜底，此处只为给出明确提示）
+    const customValues = getValues("customFields") ?? {};
+    const errors: Record<string, string> = {};
+    for (const def of visibleFieldDefs(workflow.fieldDefs, project.id)) {
+      const message = validateFieldValue(def, customValues[def.id] ?? null);
+      if (message) errors[def.id] = message;
+    }
+    setFieldErrors(errors);
+    if (Object.keys(errors).length > 0) {
+      setSaveError("请先修正自定义字段");
+      submitLock.current=false;
+      return;
+    }
     try {
     // 新建分支：同步进 branch 字段（纳 zod 校验已在 superRefine）
     let branch = values.branch;
@@ -309,6 +339,8 @@ function TodoDetailForm() {
         startDate: values.startDate,
         endDate: values.endDate,
         blocker: values.blocker.trim(),
+        // 自定义字段：手动值 + 只读字段的既有值（rule / builtin 字段不落库，后者不写回）
+        customFields: fromCustomFieldMap(values.customFields ?? {}),
         updatedAt: now,
       },
       project,
@@ -370,7 +402,7 @@ function TodoDetailForm() {
       {isNew && <label className="mb-4 flex items-center gap-3 text-sm">从模板开始<select className="rounded border bg-background p-2" defaultValue="" onChange={event=>{const template=workflow.templates.find(item=>item.id===event.target.value);if(template){setValue("title",template.title,{shouldDirty:true});setValue("note",template.note,{shouldDirty:true});setValue("repoPath",template.repoPath,{shouldDirty:true});setValue("branch",template.branch,{shouldDirty:true});}event.target.value="";}}><option value="">选择任务模板</option>{workflow.templates.filter(template=>!template.projectId||template.projectId===projectId).map(template=><option key={template.id} value={template.id}>{template.name}</option>)}</select>{searchParams.has("parent") && <span className="text-muted-foreground">正在添加子任务</span>}</label>}
       {draft && <div className="mb-3 flex flex-wrap items-center gap-2 rounded border bg-card p-3 text-sm"><span>发现本地未保存草稿</span><Button type="button" size="sm" onClick={() => { const values = { ...getValues(), ...draft }; for (const key of Object.keys(values) as (keyof FormValues)[]) setValue(key, values[key], { shouldDirty: true }); setDraft(null); }}>恢复草稿</Button><Button type="button" size="sm" variant="ghost" onClick={clearDraft}>丢弃草稿</Button></div>}
       {draftError && <p role="alert" className="mb-3 text-sm text-destructive">{draftError}</p>}
-      {externalChange && <div role="alert" className="mb-3 flex flex-wrap items-center gap-2 rounded border p-3 text-sm"><span>任务已被其他窗口或 MCP 修改；你的编辑仍保留。</span><Button type="button" size="sm" onClick={() => setResolution("remote")}>使用最新内容</Button>{editing && <Button type="button" size="sm" variant="outline" onClick={() => setResolution("local")}>保留我的编辑</Button>}</div>}
+      {externalChange && <div role="alert" className="mb-3 flex flex-wrap items-center gap-2 rounded border p-3 text-sm"><span>任务已被其他窗口、MCP 或自动脚本修改；你的编辑仍保留。</span><Button type="button" size="sm" onClick={() => setResolution("remote")}>使用最新内容</Button>{editing && <Button type="button" size="sm" variant="outline" onClick={() => setResolution("local")}>保留我的编辑</Button>}</div>}
       {saveError && <p role="alert" className="mb-3 text-sm text-destructive">{saveError}</p>}
       <form className="tk-editor-layout" onSubmit={handleSubmit(onSubmit)}>
         {/* 中间主体 */}
@@ -421,6 +453,23 @@ function TodoDetailForm() {
             <Label htmlFor="blocker">阻塞原因 <span className="text-xs text-muted-foreground">（可选）</span></Label>
             <Input id="blocker" placeholder="例如：等待接口联调" {...register("blocker")} />
           </div>
+
+          {/* 自定义字段：定义在「工作流 · 自定义字段」，manual 可编辑、builtin 实时求值、rule 由自动脚本写入 */}
+          {visibleFieldDefs(workflow.fieldDefs, project.id).length > 0 && (
+            <>
+              <h2 className="tk-section-title border-t pt-5"><ListTodo className="h-4 w-4 text-primary"/>自定义字段</h2>
+              <CustomFieldsPanel
+                defs={workflow.fieldDefs}
+                projectId={project.id}
+                project={project}
+                todo={editing ?? null}
+                values={watch("customFields") ?? {}}
+                errors={fieldErrors}
+                onChange={setCustomField}
+                disabled={isSubmitting}
+              />
+            </>
+          )}
           <h2 className="tk-section-title border-t pt-5"><GitBranch className="h-4 w-4 text-primary"/>代码关联</h2>
           <div className="space-y-2">
             <Label htmlFor="tag">提交标记 <span className="text-xs text-muted-foreground">（留空自动生成）</span></Label>
