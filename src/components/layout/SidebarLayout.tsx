@@ -270,7 +270,7 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
           {/* 项目上下文区（替换品牌区）：展开显示当前项目名 + 生产分支；收起保留图标入口 */}
           <ProjectContextSwitcher collapsed={collapsed} />
 
-          {isMacOS && !collapsed && <p className="px-5 pb-2 pt-3 text-[11px] font-medium text-muted-foreground">工作空间</p>}
+          {!collapsed && <p className="px-5 pb-2 pt-3 text-[11px] font-medium text-muted-foreground">工作空间</p>}
           <nav aria-label="主导航" className="flex-1 space-y-2 overflow-y-auto p-2">
             {NAV_ITEMS.map(({ to, label, icon: Icon }) => (
               <NavLink

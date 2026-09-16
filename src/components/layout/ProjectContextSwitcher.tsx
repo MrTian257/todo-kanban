@@ -2,7 +2,7 @@
 // 选择器仅列出活跃项目；选择后设置 activeProjectId 并跳转该项目看板。
 
 import { useNavigate } from "react-router-dom";
-import { Check, FolderKanban, GitBranch } from "lucide-react";
+import { Check, ChevronsUpDown, FolderKanban, GitBranch } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
@@ -28,7 +28,7 @@ export function ProjectContextSwitcher({ collapsed }: { collapsed: boolean }) {
           aria-label={active ? `当前项目：${active.name}` : "选择项目"}
           title={active ? `${active.name}${active.productionBranch ? ` · ${active.productionBranch}` : ""}` : "选择项目"}
           className={cn(
-            "flex h-12 shrink-0 w-full items-center gap-2.5 px-3 text-left transition-colors hover:bg-sidebar-accent/60",
+            "tk-project-switcher flex h-12 shrink-0 w-full items-center gap-2.5 px-3 text-left transition-colors hover:bg-sidebar-accent/60",
             collapsed && "justify-center px-0",
           )}
         >
@@ -46,6 +46,7 @@ export function ProjectContextSwitcher({ collapsed }: { collapsed: boolean }) {
               )}
             </span>
           )}
+          {!collapsed && <ChevronsUpDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" side="right" sideOffset={8} className="w-56">
