@@ -61,14 +61,15 @@ fn resolve_program(program: &str) -> (PathBuf, &'static str) {
     #[cfg(windows)]
     let filename = format!("{program}.exe");
     #[cfg(not(windows))]
-    let filename = program;
+    let filename = program.to_string();
     if let Some(paths) = std::env::var_os("PATH") {
         for dir in std::env::split_paths(&paths) {
             // 不从相对目录加载程序，避免工作目录改变后诊断与执行不一致。
             if !dir.is_absolute() {
                 continue;
             }
-            let candidate = dir.join(filename);
+            // 必须借用：filename 在 Windows 上是 String，按值传入会在循环第二轮被移动
+            let candidate = dir.join(&filename);
             if executable(&candidate) {
                 return (candidate, "PATH");
             }

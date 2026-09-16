@@ -164,13 +164,15 @@ export const TEMPLATE_TOKENS: string[] = [
   "datetime",
 ];
 
-/** 上限（与后端一致，后端为准） */
+/** 上限（与后端 fields.rs / automation.rs 一致，后端为准） */
 export const MAX_FIELD_DEFS = 200;
 export const MAX_AUTOMATIONS = 200;
 export const MAX_ACTIONS_PER_RULE = 10;
 export const MAX_OPTIONS = 100;
 export const MAX_MULTISELECT_ITEMS = 50;
 export const MAX_VALUE_CHARS = 2000;
+export const MAX_LABEL_CHARS = 50;
+export const MAX_DESCRIPTION_CHARS = 200;
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -579,8 +581,8 @@ export function normalizeRule(raw: unknown): AutomationRule | null {
 export function validateFieldDef(def: CustomFieldDef, others: CustomFieldDef[]): string {
   const label = def.label.trim();
   if (!label) return "请填写字段名称";
-  if (label.length > 50) return "字段名称最长 50 个字符";
-  if (def.description.length > 200) return "字段说明最长 200 个字符";
+  if (label.length > MAX_LABEL_CHARS) return "字段名称最长 " + MAX_LABEL_CHARS + " 个字符";
+  if (def.description.length > MAX_DESCRIPTION_CHARS) return "字段说明最长 " + MAX_DESCRIPTION_CHARS + " 个字符";
   const duplicated = others.some(
     (other) =>
       other.id !== def.id &&

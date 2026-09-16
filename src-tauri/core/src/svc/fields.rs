@@ -100,12 +100,12 @@ pub fn applies_to(def: &FieldDef, project_id: &str) -> bool {
 }
 
 /// 按 id 查定义
-pub fn find_def(defs: &[FieldDef], id: &str) -> Option<&FieldDef> {
+pub fn find_def<'a>(defs: &'a [FieldDef], id: &str) -> Option<&'a FieldDef> {
     defs.iter().find(|def| def.id == id)
 }
 
 /// 读取任务上的字段值
-pub fn value_of(todo: &DbTodo, field_id: &str) -> Option<&CustomValue> {
+pub fn value_of<'a>(todo: &'a DbTodo, field_id: &str) -> Option<&'a CustomValue> {
     todo.custom_fields
         .iter()
         .find(|item| item.field_id == field_id)
