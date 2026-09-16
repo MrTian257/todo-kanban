@@ -98,6 +98,8 @@ export interface Todo {
   createdBy: "human" | "ai";
   /** AI 协助标记：经 MCP 创建或修改过为 true */
   aiCoordinated: boolean;
+  /** 自定义字段值（v11）：fieldId 关联字段定义；规范化后按 fieldId 升序（与 Rust 侧一致） */
+  customFields: CustomFieldValue[];
   createdAt: number;
   updatedAt: number;
 }
@@ -193,6 +195,104 @@ export interface TodoFormValues {
   blocker: string;
   /** 提交标记：空串表示由系统自动生成 todo-<seq> */
   tag: string;
+}
+
+// ── 自定义字段与自动脚本（v11，ADR-014） ────────────────────
+/** 字段取值：与 Rust CustomValue 直通（null | 布尔 | 数字 | 文本 | 字符串数组） */
+export type CustomValue = string | number | boolean | string[] | null;
+
+/** 任务上的自定义字段值 */
+export interface CustomFieldValue {
+  fieldId: string;
+  value: CustomValue;
+}
+
+export type FieldType = "text" | "number" | "date" | "datetime" | "select" | "multiselect" | "checkbox";
+
+/** 值来源：manual=手动填写并落库；builtin=引用任务内置属性（只读派生，不落库）；rule=由自动脚本写入（只读） */
+export type FieldSource = "manual" | "builtin" | "rule";
+
+/**
+ * 自定义字段定义（存于工作流配置 Workflow.fieldDefs）。
+ * id 一经创建不可修改（任务的字段值按 id 关联）；label 可改。
+ */
+export interface CustomFieldDef {
+  id: string;
+  label: string;
+  type: FieldType;
+  source: FieldSource;
+  /** source=builtin 时的内置属性名（见 BUILTIN_ATTRIBUTES），其余为空串 */
+  builtin: string;
+  /** select / multiselect 的候选项 */
+  options: string[];
+  /** source=manual 的新建默认值（null=无） */
+  defaultValue: CustomValue;
+  /** 仅前端提示，后端不阻断 */
+  required: boolean;
+  showOnCard: boolean;
+  description: string;
+  /** null=所有项目；否则只作用于该项目 */
+  projectId: string | null;
+  sortOrder: number;
+}
+
+export type AutomationTriggerKind = "created" | "laneEntered" | "statusChanged" | "fieldChanged" | "commitAdded";
+
+export interface AutomationTrigger {
+  kind: AutomationTriggerKind;
+  /** laneEntered：目标泳道 id */
+  laneId: string;
+  /** statusChanged：目标状态（空串=任意状态变化） */
+  to: "" | TodoStatus;
+  /** fieldChanged：字段 id（空串=任意自定义字段变化） */
+  fieldId: string;
+}
+
+export type AutomationConditionKind = "project" | "lane" | "status" | "field";
+export type AutomationConditionOp = "equals" | "notEmpty" | "empty";
+
+export interface AutomationCondition {
+  kind: AutomationConditionKind;
+  projectId: string;
+  laneId: string;
+  status: "" | TodoStatus;
+  fieldId: string;
+  op: AutomationConditionOp;
+  value: CustomValue;
+}
+
+export type AutomationValueKind = "now" | "today" | "constant" | "attribute" | "field" | "template";
+
+/** 取值表达式：自动脚本写入的值从哪里来 */
+export interface AutomationValueExpr {
+  kind: AutomationValueKind;
+  /** constant：固定值 */
+  value: CustomValue;
+  /** attribute：内置属性名 */
+  name: string;
+  /** field：来源字段 id */
+  fieldId: string;
+  /** template：文本模板 */
+  text: string;
+}
+
+export type AutomationActionKind = "setField" | "clearField";
+
+export interface AutomationAction {
+  kind: AutomationActionKind;
+  /** 自定义字段 id 或 builtin:<内置属性名>（白名单见 BUILTIN_TARGETS） */
+  target: string;
+  value: AutomationValueExpr | null;
+}
+
+/** 自动脚本规则：触发（保存前后 diff）→ 条件（且）→ 动作 */
+export interface AutomationRule {
+  id: string;
+  name: string;
+  enabled: boolean;
+  trigger: AutomationTrigger;
+  conditions: AutomationCondition[];
+  actions: AutomationAction[];
 }
 
 export interface ProjectFormValues {

@@ -5,16 +5,16 @@
 pub const SOFTWARE_VERSION: &str = "v2.0.0";
 
 /// 软件支持的当前（最高）数据版本（schema user_version 目标值）
-pub const CURRENT_DATA_VERSION: i64 = 10;
+pub const CURRENT_DATA_VERSION: i64 = 11;
 
 /// 软件能兼容升级的最低数据版本（未来删除/改写某段迁移时提升；低于此 → TooOld 拒绝）
 pub const MIN_SUPPORTED_DATA_VERSION: i64 = 1;
 
 /// 数据版本支持范围（展示用）
-pub const DATA_VERSION_RANGE: &str = "v1 ~ v10";
+pub const DATA_VERSION_RANGE: &str = "v1 ~ v11";
 
 /// 迁移步骤描述（下标 j（0-based）对应 v{j+1}→v{j+2}；供升级报告/前端提示）
-pub const MIGRATION_STEPS: [(&str, &str); 9] = [
+pub const MIGRATION_STEPS: [(&str, &str); 10] = [
     ("v1→v2", "建 app_meta；存量数字标记清洗"),
     ("v2→v3", "建 git_repo_cache"),
     ("v3→v4", "projects 补 GitLab Token 两列"),
@@ -36,6 +36,7 @@ pub const MIGRATION_STEPS: [(&str, &str); 9] = [
         "v9→v10",
         "任务关系、模板与提醒配置、变更历史和 MCP 修改预览",
     ),
+    ("v10→v11", "待办自定义字段值：todos.custom_fields"),
 ];
 
 /// 更新日志（文本形式，逐版本摘要）
@@ -47,6 +48,8 @@ pub const CHANGELOG: &str = "2.0.0（当前）：
 - 附件文件化存储（ADR-013，v8）：任务图片落盘 attachments/<todoId>/，note 以 attachment:// 引用，自定义协议供图
 - 项目资料库（v9）：资料可归属项目，项目删除后保留为未归属资料
 - 工作流（v10）：子任务与依赖、任务模板、提醒、变更历史与恢复、本地备份与恢复、MCP 修改提案预览
+- 自定义字段与自动脚本（v11，ADR-014）：可全局（或按项目）定义新属性、配置值来源（手动 / 内置属性 / 自动脚本），
+  并用声明式规则在拖拽换道等事件上自动记录信息（todos.custom_fields）
 ";
 
 /// 依赖关系信息（数组形式）：workspace 分包职责

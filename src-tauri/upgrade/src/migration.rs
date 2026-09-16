@@ -114,6 +114,15 @@ pub fn migrate(conn: &Connection) -> UpgradeResult<MigrateOutcome> {
     }
 
     // v9 → v10：workflow_state / change_history / change_proposals 由 core 幂等建表。
+    if from < 11 {
+        // v10 → v11：todos 补 custom_fields（自定义字段值 JSON 数组；存量行为空数组）
+        if !column_exists(&tx, "todos", "custom_fields")? {
+            tx.execute_batch(
+                "ALTER TABLE todos ADD COLUMN custom_fields TEXT NOT NULL DEFAULT '[]'",
+            )?;
+        }
+    }
+
     tx.execute_batch(&format!("PRAGMA user_version = {CURRENT_VERSION};"))?;
     tx.commit().map_err(UpgradeError::from)?;
     // 同步写入 app_meta，便于外部诊断
@@ -195,6 +204,7 @@ mod tests {
         assert!(column_exists(&conn, "todos", "sort_order").unwrap());
         assert!(column_exists(&conn, "todos", "created_by").unwrap());
         assert!(column_exists(&conn, "todos", "ai_coordinated").unwrap());
+        assert!(column_exists(&conn, "todos", "custom_fields").unwrap());
         assert!(column_exists(&conn, "projects", "created_by").unwrap());
         // v5 泳道回填
         let lane: String = conn

@@ -66,6 +66,8 @@ import {
   invalidateGitInfo,
 } from "@/lib/git";
 import { MarkdownView } from "@/components/todo/MarkdownView";
+import { cardFieldDefs, formatCustomValue, resolveFieldValue } from "@/lib/customFields";
+import { useWorkflow } from "@/lib/workflow";
 import { StatusNode } from "./StatusNode";
 import { cn } from "@/lib/utils";
 import { openPath } from "@tauri-apps/plugin-opener";
@@ -104,6 +106,7 @@ interface Props {
 export const TodoRow = React.memo(function TodoRow({ todo, projectName, showProjectName, variant = "list" }: Props) {
   const navigate = useNavigate();
   const project = useAppStore(state => state.projects.find(p => p.id === todo.projectId));
+  const workflow = useWorkflow();
   const patchTodo = useAppStore(state => state.patchTodo);
   const moveTodo = useAppStore(state => state.moveTodo);
   const lanes = React.useMemo(() => [...(project?.swimlanes ?? [])].sort((a, b) => a.sortOrder - b.sortOrder), [project?.swimlanes]);
@@ -124,6 +127,12 @@ export const TodoRow = React.memo(function TodoRow({ todo, projectName, showProj
   const [branchMenu, setBranchMenu] = React.useState(false);
   const [branchList, setBranchList] = React.useState<string[]>([]);
   const [confirmDeleteOpen, setConfirmDeleteOpen] = React.useState(false);
+
+  // 卡片展示的自定义字段（工作流 · 自定义字段里勾选「在看板卡片上展示」）
+  const cardFields = React.useMemo(
+    () => cardFieldDefs(workflow.fieldDefs, todo.projectId),
+    [workflow.fieldDefs, todo.projectId],
+  );
 
   // 跨天刷新：长期驻留时「今天截止/剩余 N 天/已逾期」必须跟着日期走
   const today = useToday();
@@ -312,6 +321,20 @@ export const TodoRow = React.memo(function TodoRow({ todo, projectName, showProj
             {branchList.map(b=><DropdownMenuItem key={b} disabled={b===todo.branch || busy!==null} onClick={()=>void checkout(b)}>{b}</DropdownMenuItem>)}
           </DropdownMenuContent>
         </DropdownMenu>}
+        {cardFields.length > 0 && (
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            {cardFields.slice(0, 3).map((def) => {
+              const text = formatCustomValue(def, resolveFieldValue(def, todo, project));
+              if (!text) return null;
+              return (
+                <span key={def.id} title={def.label} className="max-w-full truncate rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
+                  {def.label}：{text}
+                </span>
+              );
+            })}
+            {cardFields.length > 3 && <span className="text-xs text-muted-foreground">+{cardFields.length - 3}</span>}
+          </div>
+        )}
         {todo.blocker && <div className="mt-3 flex items-start gap-1.5 rounded-md bg-amber-500/10 px-2 py-1.5 text-xs text-amber-700 dark:text-amber-300"><AlertTriangle className="mt-0.5 h-3 w-3 shrink-0"/><span className="break-words">阻塞：{todo.blocker}</span></div>}
         {/* 备注（展开） */}
         {expanded && (

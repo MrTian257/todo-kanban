@@ -2,6 +2,7 @@
 //! `GitInfo` 是唯一 snake_case 例外（serde rename_all = "snake_case"）。
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 /// 默认泳道（新项目预置 / normalize 兜底）：id、名称、绑定状态、排序
 pub const DEFAULT_SWIMLANES: [(&str, &str, &str, i64); 3] = [
@@ -158,6 +159,72 @@ pub struct DbProject {
     pub created_by: String,
 }
 
+/// 自定义字段值（v11）：fieldId 关联 Workflow.fieldDefs 中的字段定义。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DbCustomFieldValue {
+    pub field_id: String,
+    #[serde(default)]
+    pub value: CustomValue,
+}
+
+/// 自定义字段取值：与前端 JS 值直通（null | 布尔 | 数字 | 文本 | 字符串数组）。
+/// untagged 保证 JSON 形态就是原生标量，前端无需解包。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(untagged)]
+pub enum CustomValue {
+    #[default]
+    Null,
+    Bool(bool),
+    Number(f64),
+    Text(String),
+    List(Vec<String>),
+}
+
+/// 自定义字段值规范化（读 / 写 / 快照比较三处必须一致，否则会造出永远无法通过的 STATE_CONFLICT）：
+/// 丢弃空值（null / 空串 / 空数组）、文本去首尾空白、列表去空项与重复项、按 fieldId 升序排序；
+/// 同一 fieldId 重复出现时保留首个。
+pub fn canonicalize_custom_fields(values: &mut Vec<DbCustomFieldValue>) {
+    let mut seen = HashSet::new();
+    let mut result: Vec<DbCustomFieldValue> = Vec::with_capacity(values.len());
+    for mut item in values.drain(..) {
+        item.field_id = item.field_id.trim().to_string();
+        if item.field_id.is_empty() || !seen.insert(item.field_id.clone()) {
+            continue;
+        }
+        if normalize_custom_value(&mut item.value) {
+            continue;
+        }
+        result.push(item);
+    }
+    result.sort_by(|a, b| a.field_id.cmp(&b.field_id));
+    *values = result;
+}
+
+/// 归一单值；返回「是否为空值」（空值由调用方丢弃）
+fn normalize_custom_value(value: &mut CustomValue) -> bool {
+    match value {
+        CustomValue::Null => true,
+        CustomValue::Text(text) => {
+            *text = text.trim().to_string();
+            text.is_empty()
+        }
+        CustomValue::List(items) => {
+            let mut unique: Vec<String> = Vec::with_capacity(items.len());
+            for item in items.iter() {
+                let trimmed = item.trim();
+                if trimmed.is_empty() || unique.iter().any(|kept| kept == trimmed) {
+                    continue;
+                }
+                unique.push(trimmed.to_string());
+            }
+            *items = unique;
+            items.is_empty()
+        }
+        CustomValue::Bool(_) | CustomValue::Number(_) => false,
+    }
+}
+
 fn default_status() -> String {
     "todo".to_string()
 }
@@ -214,6 +281,9 @@ pub struct DbTodo {
     /// AI 协助标记（v7；经 MCP 创建或修改过为 true）
     #[serde(default)]
     pub ai_coordinated: bool,
+    /// 自定义字段值（v11）：fieldId + 值，规范化后以 JSON 数组存 todos.custom_fields
+    #[serde(default)]
+    pub custom_fields: Vec<DbCustomFieldValue>,
 }
 
 /// 项目资料：可绑定项目，也可在项目删除后保留为未归属资料。

@@ -8,6 +8,7 @@ import {
   Todo,
   TodoStatus,
 } from "./types";
+import { canonicalizeCustomFields } from "./customFields";
 
 /** 按状态取泳道：优先该状态第一个泳道，兜底默认 id */
 export function swimlaneForStatus(project: Project | undefined, status: TodoStatus): string {
@@ -59,6 +60,9 @@ export function normalizeTodo(raw: Partial<Todo>, project?: Project): Todo {
     sortOrder: raw.sortOrder ?? 0,
     createdBy: raw.createdBy || "human",
     aiCoordinated: raw.aiCoordinated ?? false,
+    // 与后端 canonicalize_custom_fields 对称：丢弃空值、去重、按 fieldId 升序，
+    // 否则「读出来原样写回」会被后端判成并发修改（STATE_CONFLICT）
+    customFields: canonicalizeCustomFields(raw.customFields),
     createdAt: raw.createdAt ?? Date.now(),
     updatedAt: raw.updatedAt ?? Date.now(),
   };

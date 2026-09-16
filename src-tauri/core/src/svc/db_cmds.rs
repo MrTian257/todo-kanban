@@ -101,6 +101,21 @@ pub fn save_state_checked(payload: DbState, expected: DbState) -> AppResult<DbSt
     Ok(saved)
 }
 
+/// 恢复历史版本：与 save_state_checked 同一写链，但停用自定义字段自动脚本——
+/// 还原必须忠实，否则恢复出来的旧值会被规则立刻改写。
+pub fn restore_state_checked(payload: DbState, expected: DbState) -> AppResult<DbState> {
+    let path = db_path()?;
+    let _guard = DB_RW_LOCK
+        .lock()
+        .map_err(|_| AppError::invalid("写锁获取失败"))?;
+    let (conn, _report) = db::open_and_init(&path, &backup_dir()?)?;
+    let (saved, trash) = db::save_state_restored(&conn, &payload, &expected)?;
+    if !trash.is_empty() {
+        attachments::move_to_trash_at(&attachments::attachments_root_at(&path), &trash);
+    }
+    Ok(saved)
+}
+
 /// 启动自举：使用平台数据目录 todo-kanban.db；
 /// 仅当「库完全空白且无种子标记」时写入演示数据。返回数据库路径。
 /// 已有数据（含用户清空后的库、只有资料或只有工作流配置的库）绝不覆盖——
@@ -495,6 +510,7 @@ fn demo_todo(spec: DemoTodoSpec, now: i64, day: i64) -> DbTodo {
         sort_order,
         created_by: "human".into(),
         ai_coordinated: false,
+        custom_fields: vec![],
         created_at: now - days_ago * day,
         updated_at: now - days_ago * day,
     }

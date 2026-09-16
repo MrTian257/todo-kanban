@@ -5,7 +5,8 @@ use rusqlite::Row;
 
 use crate::error::AppResult;
 use crate::models::{
-    DbBranchRule, DbCommitInfo, DbLibraryResource, DbProject, DbState, DbSwimlane, DbTodo,
+    DbBranchRule, DbCommitInfo, DbCustomFieldValue, DbLibraryResource, DbProject, DbState,
+    DbSwimlane, DbTodo,
 };
 
 fn parse_json_or<T: serde::de::DeserializeOwned>(raw: Option<String>, default: T) -> T {
@@ -15,15 +16,15 @@ fn parse_json_or<T: serde::de::DeserializeOwned>(raw: Option<String>, default: T
     }
 }
 
-/// todos 全字段 SELECT（23 列，列序勿动）
-pub const TODO_SELECT: &str = "SELECT id, project_id, title, note, repo_path, branch, status, swimlane_id, quadrant, seq, tag, start_date, end_date, blocker, archived, started_at, done_at, commits, sort_order, created_at, updated_at, created_by, ai_coordinated FROM todos";
+/// todos 全字段 SELECT（24 列，列序勿动）
+pub const TODO_SELECT: &str = "SELECT id, project_id, title, note, repo_path, branch, status, swimlane_id, quadrant, seq, tag, start_date, end_date, blocker, archived, started_at, done_at, commits, sort_order, created_at, updated_at, created_by, ai_coordinated, custom_fields FROM todos";
 
 pub fn row_to_todo(row: &Row) -> AppResult<DbTodo> {
     let status = row
         .get::<_, Option<String>>(6)?
         .unwrap_or_else(|| "todo".into());
     let lane = row.get::<_, Option<String>>(7)?.unwrap_or_default();
-    Ok(DbTodo {
+    let mut todo = DbTodo {
         id: row.get(0)?,
         project_id: row.get(1)?,
         title: row.get(2)?,
@@ -56,7 +57,11 @@ pub fn row_to_todo(row: &Row) -> AppResult<DbTodo> {
         // 与 todo_params 的落库规则一致：存量空串与 NULL 都归一为 human（v7 之前的行）
         created_by: creator_or_default(row.get::<_, Option<String>>(21)?),
         ai_coordinated: row.get::<_, Option<bool>>(22)?.unwrap_or(false),
-    })
+        custom_fields: parse_json_or::<Vec<DbCustomFieldValue>>(row.get(23)?, Vec::new()),
+    };
+    // 与 todo_params 的落库规则一致：读出来的快照必须已规范化，否则原样写回会被判成并发修改
+    crate::models::canonicalize_custom_fields(&mut todo.custom_fields);
+    Ok(todo)
 }
 
 /// 创建者归一：NULL 或空串 → human（与 `*_params` 写入规则一致，避免读写不对称）
@@ -100,18 +105,25 @@ pub fn todo_params(t: &DbTodo) -> Vec<Box<dyn rusqlite::ToSql>> {
             t.created_by.clone()
         }),
         Box::new(t.ai_coordinated),
+        Box::new({
+            // 落库前规范化：与 row_to_todo 对称，保证「读出来原样写回」不会产生差异
+            let mut values = t.custom_fields.clone();
+            crate::models::canonicalize_custom_fields(&mut values);
+            serde_json::to_string(&values).unwrap_or_else(|_| "[]".into())
+        }),
     ]
 }
 
-pub const TODO_UPSERT: &str = "INSERT INTO todos (id, project_id, title, note, repo_path, branch, status, swimlane_id, quadrant, seq, tag, start_date, end_date, blocker, archived, started_at, done_at, commits, sort_order, created_at, updated_at, created_by, ai_coordinated)
-  VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23)
+pub const TODO_UPSERT: &str = "INSERT INTO todos (id, project_id, title, note, repo_path, branch, status, swimlane_id, quadrant, seq, tag, start_date, end_date, blocker, archived, started_at, done_at, commits, sort_order, created_at, updated_at, created_by, ai_coordinated, custom_fields)
+  VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24)
   ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id, title=excluded.title, note=excluded.note, repo_path=excluded.repo_path,
     branch=excluded.branch, status=excluded.status, swimlane_id=excluded.swimlane_id,
     quadrant=excluded.quadrant, seq=excluded.seq, tag=excluded.tag,
     start_date=excluded.start_date, end_date=excluded.end_date, blocker=excluded.blocker,
     archived=excluded.archived, started_at=excluded.started_at, done_at=excluded.done_at,
     commits=excluded.commits, sort_order=excluded.sort_order, updated_at=excluded.updated_at,
-    created_by=excluded.created_by, ai_coordinated=excluded.ai_coordinated
+    created_by=excluded.created_by, ai_coordinated=excluded.ai_coordinated,
+    custom_fields=excluded.custom_fields
   WHERE excluded.updated_at >= todos.updated_at";
 
 /// projects 全字段 SELECT（16 列，列序勿动）
@@ -272,7 +284,7 @@ pub fn normalize_for_compare(state: &mut DbState) {
     }
 }
 
-/// 单条待办归一（空 created_by → human；空 swimlane_id → 按状态默认泳道）
+/// 单条待办归一（空 created_by → human；空 swimlane_id → 按状态默认泳道；自定义字段值规范化）
 pub fn normalize_todo_for_compare(todo: &mut DbTodo) {
     if todo.created_by.is_empty() {
         todo.created_by = "human".into();
@@ -280,6 +292,7 @@ pub fn normalize_todo_for_compare(todo: &mut DbTodo) {
     if todo.swimlane_id.is_empty() {
         todo.swimlane_id = crate::models::DbTodo::default_swimlane_for_status(&todo.status);
     }
+    crate::models::canonicalize_custom_fields(&mut todo.custom_fields);
 }
 
 /// UPSERT 待办（updated_at 较新者胜）

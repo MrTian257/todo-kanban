@@ -1,4 +1,4 @@
-//! MCP bridge：11 tools + 4 resources ↔ core::svc。
+//! MCP bridge：11 tools + 5 resources ↔ core::svc。
 //! 参数错误返回 JSON-RPC 错误；执行失败返回 MCP isError；只读模式隐藏并拒绝写工具。
 //! 数据源固定为程序运行目录 todo-kanban.db；--db-config 仍支持覆盖到指定目录。
 //! MCP 的 git_info 保持直读语义（不经 app 侧缓存）；git_info_refresh / git_info_remote 为 app 专属不暴露。
@@ -16,11 +16,15 @@ use todo_kanban_core::svc::{db_cmds, git_cmds};
 
 use crate::config;
 
-pub const RESOURCES: [(&str, &str); 4] = [
+pub const RESOURCES: [(&str, &str); 5] = [
     ("todo-kanban://state", "全部状态（项目 + 待办 + 资料）JSON"),
     ("todo-kanban://projects", "项目列表 JSON"),
     ("todo-kanban://todos", "待办列表 JSON"),
     ("todo-kanban://resources", "资料库列表 JSON"),
+    (
+        "todo-kanban://fields",
+        "自定义字段定义与自动脚本配置 JSON（值来源：manual/builtin/rule）",
+    ),
 ];
 
 /// 真正会改动仓库/数据的工具。git_sync_commits / git_commits_between / git_commit_info
@@ -271,6 +275,15 @@ fn read_resource(uri: &str) -> AppResult<Value> {
     let conn = db::open_existing(&path, false)?;
     let tx = conn.unchecked_transaction()?;
     let value = match uri {
+        // 自定义字段与自动脚本属于工作流配置（不在业务快照里）：AI 登记任务前可先读它，
+        // 以便给 payload.todos[].customFields 写入合法的字段标识与取值。
+        "todo-kanban://fields" => {
+            let workflow = todo_kanban_core::svc::workflow::read(&tx)?;
+            serde_json::to_value(json!({
+                "fieldDefs": workflow.field_defs,
+                "automations": workflow.automations,
+            }))?
+        }
         "todo-kanban://projects" => serde_json::to_value(db::row::load_projects_from_conn(&tx)?)?,
         "todo-kanban://todos" => serde_json::to_value(db::row::load_todos_from_conn(&tx)?)?,
         "todo-kanban://resources" => serde_json::to_value(db::row::load_resources_from_conn(&tx)?)?,

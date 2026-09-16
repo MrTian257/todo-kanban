@@ -56,7 +56,7 @@ mcp-server（独立 stdio 进程，复用同一个 core）
 
 ### 数据版本升级框架（ADR-011）
 
-- 版本常量集中在 `src-tauri/config/src/lib.rs`：`CURRENT_DATA_VERSION = 10`、`MIN_SUPPORTED_DATA_VERSION`、`MIGRATION_STEPS`（v1→v10 逐级）、`CHANGELOG`。
+- 版本常量集中在 `src-tauri/config/src/lib.rs`：`CURRENT_DATA_VERSION = 11`、`MIN_SUPPORTED_DATA_VERSION`、`MIGRATION_STEPS`（v1→v11 逐级）、`CHANGELOG`。
 - `todo-kanban-upgrade::upgrade::ensure()` 编排：版本判定 →（兼容升级时）硬备份到运行目录 `backup/` → 逐级迁移 → 报告。语义：v=0（新库）不备份直接迁到最新；TooNew / TooOld 拒绝；调用方负责开连接 + 幂等建表。
 - 前端启动门禁：`db_check_version` 命令 → `src/lib/version.ts` → 不兼容时全屏 `VersionBlockedPage`（`src/components/version/`），升级成功 toast 提示。
 - **新增数据版本时**：提升 config 常量 → upgrade 写迁移 → 更新 MIGRATION_STEPS / CHANGELOG → 前端 `PREVIEW_REPORT` 同步。schema 变更需同步 `schema.rs`（DDL）、`row.rs`（行映射）、`db/mod.rs`（SELECT/INSERT）三处——**SQLite 列序是硬契约**（见 schema.rs 头部注释）。
@@ -79,7 +79,7 @@ SQLite WAL，数据源固定为**程序运行目录** `todo-kanban.db`（ADR-012
 
 外部同步（MCP 侧改动经 `startExternalSync` 轮询）仅在无待保存变更时应用；`reloadRemoteState` 必须显式弃改。浏览器预览走 `sessionStorage` + demoState（`storage.ts` 的 `isTauri()` 双轨）。
 
-前端 lib 层职责速览：`normalize.ts`（数据归一化**唯一入口**，旧数据补字段 + 泳道回退 + 提交去重兜底）、`todo.ts`（紧急度/提交唯一归属）、`completeTodo.ts`（完成时自动补录 [createdAt~doneAt] 提交）、`deleteWithUndo.ts`（延迟真删 + 撤销）、`boardOrder.ts`（泳道内排序纯函数，有 node 测试）、`git.ts`（9 个 invoke 封装 + 60s TTL 单飞缓存）、`theme.ts`（明暗 × 5 套皮肤，localStorage `todo-git.skin.v1`）、`mcp.ts`（MCP 设置）、`attachments.ts`（图片引用协议）、`context-menu.ts` / `input-suggestions.ts`（全局接管，见下）、`version.ts`（版本门禁）。
+前端 lib 层职责速览：`normalize.ts`（数据归一化**唯一入口**，旧数据补字段 + 泳道回退 + 提交去重兜底）、`todo.ts`（紧急度/提交唯一归属）、`completeTodo.ts`（完成时自动补录 [createdAt~doneAt] 提交）、`deleteWithUndo.ts`（延迟真删 + 撤销）、`boardOrder.ts`（泳道内排序纯函数，有 node 测试）、`git.ts`（9 个 invoke 封装 + 60s TTL 单飞缓存）、`theme.ts`（明暗 × 5 套皮肤，localStorage `todo-git.skin.v1`）、`mcp.ts`（MCP 设置）、`customFields.ts`（v11 自定义字段与自动脚本词表：取值强转 / 格式化 / 内置属性求值 / 默认值 / 校验，与后端 fields.rs + automation.rs 同规则）、`attachments.ts`（图片引用协议）、`context-menu.ts` / `input-suggestions.ts`（全局接管，见下）、`version.ts`（版本门禁）。
 
 类型对齐契约：`src/lib/types.ts` camelCase 与 Rust `models.rs` 的 Db* 经 serde rename 强对齐；**`GitInfo` 是唯一 snake_case 例外**（models.rs 头部注释）。改字段必须两端 + normalize 同步。
 
@@ -98,7 +98,7 @@ note 持久化只存 `attachment://<todoId>/<file>` 短引用；展示/编辑时
 
 ### MCP server（`src-tauri/mcp-server/`）
 
-手写 stdio JSON-RPC（无框架，ADR-007）：11 tools + 4 resources（`todo-kanban://state|projects|todos|resources`），复用 core。配置解析（`config.rs`）：`--db-config` / `MCP_TODO_DB_CONFIG` 覆盖数据源目录（库文件固定为 `<dir>/todo-kanban.db`，不存在时不自动创建）→ 回退 app exe 目录；`--token` / `MCP_TODO_TOKEN`；`MCP_TODO_READONLY=1` 只读。启动校验（`bridge::verify_startup`，任一不满足即退出）：数据源可用 + 设置页「MCP 集成」启用 + Token 匹配（默认 `sk-GLOBAl_MCP_BY_ADMIN`，设置存 app_meta）。错误映射：AppError::Invalid→-32602、其余→-32603。写工具共 7 个（含 `db_save_state`，**唯一数据写入口**，必须携带修改前 `db_load_state` 返回值作 expected，禁止直接覆盖）；MCP 的 git_info 保持直读语义（不经 app 侧缓存），`git_info_refresh` / `git_info_remote` 为 app 专属不暴露。
+手写 stdio JSON-RPC（无框架，ADR-007）：11 tools + 5 resources（`todo-kanban://state|projects|todos|resources|fields`；fields = v11 自定义字段定义与自动脚本，AI 登记任务前可先读），复用 core。配置解析（`config.rs`）：`--db-config` / `MCP_TODO_DB_CONFIG` 覆盖数据源目录（库文件固定为 `<dir>/todo-kanban.db`，不存在时不自动创建）→ 回退 app exe 目录；`--token` / `MCP_TODO_TOKEN`；`MCP_TODO_READONLY=1` 只读。启动校验（`bridge::verify_startup`，任一不满足即退出）：数据源可用 + 设置页「MCP 集成」启用 + Token 匹配（默认 `sk-GLOBAl_MCP_BY_ADMIN`，设置存 app_meta）。错误映射：AppError::Invalid→-32602、其余→-32603。写工具共 7 个（含 `db_save_state`，**唯一数据写入口**，必须携带修改前 `db_load_state` 返回值作 expected，禁止直接覆盖）；MCP 的 git_info 保持直读语义（不经 app 侧缓存），`git_info_refresh` / `git_info_remote` 为 app 专属不暴露。
 
 ### 项目 skill
 
@@ -116,6 +116,7 @@ note 持久化只存 `attachment://<todoId>/<file>` 短引用；展示/编辑时
 | 改看板拖拽/泳道管理 | components/board/SwimlaneBoard.tsx（排序纯逻辑在 lib/boardOrder.ts，有测试） |
 | 改 Markdown 备注 | components/todo/MarkdownEditor.tsx（WYSIWYG，markdown-it + turndown）+ MarkdownRenderer/View |
 | 改主题皮肤 | src/lib/theme.ts（SKINS）+ src/index.css（[data-theme] 变量） |
+| 自定义字段 / 自动脚本 | 词表与纯逻辑：`src/lib/customFields.ts` ↔ `core/src/svc/fields.rs` + `svc/automation.rs`（同规则，后端为准）；定义与规则存 workflow_state（`core/src/svc/workflow.rs` 的 fieldDefs / automations）；值存 `todos.custom_fields`（schema v11）；执行点 `db::save_state_inner`；UI 在 `src/components/workflow/` 的 FieldDefsPanel / AutomationsPanel / CustomFieldInputs（ADR-014） |
 | 新增/改 MCP 工具 | mcp-server/src/bridge.rs（映射）+ protocol.rs（tools 表/inputSchema），业务仍走 core/svc |
 
 ## 代码规范

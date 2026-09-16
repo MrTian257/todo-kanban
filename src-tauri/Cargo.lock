@@ -4714,6 +4714,7 @@ name = "todo-kanban-core"
 version = "2.0.0"
 dependencies = [
  "base64 0.22.1",
+ "chrono",
  "keyring",
  "log",
  "rusqlite",

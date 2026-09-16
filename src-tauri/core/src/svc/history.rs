@@ -172,6 +172,7 @@ pub fn restore(id: &str, expected: DbState) -> AppResult<DbState> {
         _ => return Err(AppError::invalid("未知历史类型")),
     }
     with_actor("restore", || {
-        super::db_cmds::save_state_checked(payload, expected)
+        // 恢复旧版本不执行自动脚本：还原结果必须与用户选中的版本一致
+        super::db_cmds::restore_state_checked(payload, expected)
     })
 }

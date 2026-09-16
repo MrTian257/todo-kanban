@@ -144,6 +144,7 @@ function demoState(): AppState {
     sortOrder: 0,
     createdBy: "human",
     aiCoordinated: false,
+    customFields: [],
     createdAt: now - daysAgo * day,
     updatedAt: now - daysAgo * day,
   });
