@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
+import { isTauri } from "@/lib/storage";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -33,6 +35,7 @@ export function WorkflowPage() {
   useEditingGuard(template !== null);
   const refresh = async () => {
     setError(""); await loadWorkflow();
+    if (!isTauri()) return;
     setDesktopStatus(await desktopAction("desktop_status"));
     const results = await Promise.allSettled([desktopAction<BackupInfo[]>("backup_list"),desktopAction<Proposal[]>("proposal_list")]);
     if (results[0].status === "fulfilled") setBackups(results[0].value); else setError(String(results[0].reason));
@@ -45,10 +48,11 @@ export function WorkflowPage() {
     if (checked) await desktopAction("desktop_enable_notifications");
     await saveWorkflow({ ...live(), remindersEnabled: checked });
   });
-  return <div className="tk-page w-full space-y-6 overflow-auto pb-10"><div className="flex items-center justify-between"><h1 className="tk-page-heading">工作流</h1><div className="flex gap-2"><Button variant="outline" onClick={()=>setHistory(true)}>全部变更历史</Button><Button variant="outline" disabled={busy} onClick={()=>void run(refresh)}>刷新</Button></div></div>
+  return <div className="tk-page w-full space-y-6 overflow-auto pb-10"><Link to="/settings" className="inline-flex text-sm text-muted-foreground hover:text-primary">返回设置</Link><div className="flex flex-wrap items-center justify-between gap-3"><h1 className="tk-page-heading">工作流</h1><div className="flex gap-2"><Button variant="outline" onClick={()=>setHistory(true)}>全部变更历史</Button><Button variant="outline" disabled={busy} onClick={()=>void run(refresh)}>刷新</Button></div></div>
     {(desktopStatus.shortcutError || desktopStatus.trayError || desktopStatus.backgroundError) && <p role="alert" className="text-sm text-destructive">{desktopStatus.shortcutError} {desktopStatus.trayError} {desktopStatus.backgroundError}</p>}
     {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
     <section className="tk-panel space-y-3 p-5"><div className="flex justify-between"><h2 className="font-semibold">任务模板</h2><Button size="sm" onClick={()=>{setTemplateBase(workflow);setTemplate(blankTemplate());}}>新建模板</Button></div><p className="text-sm text-muted-foreground">在新建待办时选择模板，自动填入标题、描述、目录和分支。</p>{workflow.templates.map(item=><div key={item.id} className="flex items-center justify-between border-t py-2"><span>{item.name} <small className="text-muted-foreground">{projects.find(p=>p.id===item.projectId)?.name ?? "所有项目"}</small></span><div><Button size="sm" variant="ghost" onClick={()=>{setTemplateBase(workflow);setTemplate({...item});}}>编辑</Button><Button size="sm" variant="ghost" disabled={busy} onClick={()=>void run(()=>saveWorkflow({...live(),templates:live().templates.filter(t=>t.id!==item.id)}))}>删除</Button></div></div>)}</section>
+    {!isTauri() && <p className="rounded-lg border bg-muted/40 p-3 text-sm text-muted-foreground">浏览器可编辑和预览配置；自动脚本执行、系统通知和备份需要桌面应用。</p>}
     <FieldDefsPanel/>
     <AutomationsPanel/>
     <section className="tk-panel space-y-3 p-5"><h2 className="font-semibold">本地提醒</h2><label className="flex gap-2 text-sm"><input type="checkbox" checked={workflow.remindersEnabled} disabled={busy} onChange={event=>toggleReminders(event.target.checked)}/>启用系统通知（应用运行时）</label><p className="text-xs text-muted-foreground">在任务详情设置提醒时间。完成或归档的任务不再提醒；未运行期间到期的提醒会在下次启动后补发，超过 7 天未处理的提醒会被自动清理。</p>{workflow.reminders.map(reminder=><div key={reminder.id} className="flex flex-wrap items-center gap-2 border-t py-2 text-sm"><span className="flex-1">{todos.find(todo=>todo.id===reminder.todoId)?.title ?? "任务已删除"} · {new Date(reminder.at).toLocaleString()} · {reminder.deliveredAt ? "已提醒" : "待提醒"}</span><Button size="sm" variant="outline" disabled={busy} onClick={()=>void run(()=>saveWorkflow({...live(),reminders:live().reminders.map(r=>r.id===reminder.id ? {...r,at:Date.now()+15*60_000,deliveredAt:null}:r)}))}>15 分钟后提醒</Button><Button size="sm" variant="ghost" disabled={busy} onClick={()=>void run(()=>saveWorkflow({...live(),reminders:live().reminders.filter(r=>r.id!==reminder.id)}))}>移除</Button></div>)}</section>

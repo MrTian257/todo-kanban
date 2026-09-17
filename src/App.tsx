@@ -97,7 +97,8 @@ function Application() {
             <div className="min-h-0 flex-1 overflow-auto"><Suspense fallback={<div className="p-6 text-muted-foreground">正在加载页面…</div>}>
             {loaded ? <Routes>
               <Route path="/" element={<RootRedirect />} />
-              <Route path="/workflow" element={<WorkflowPage />} />
+              <Route path="/workflow" element={<Navigate to="/settings/workflow" replace />} />
+              <Route path="/settings/workflow" element={<WorkflowPage />} />
               <Route path="/focus" element={<FocusPage />} />
               <Route path="/todos" element={<TodoListPage />} />
               <Route path="/projects" element={<ProjectListPage />} />

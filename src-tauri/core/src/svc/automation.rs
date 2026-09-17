@@ -287,10 +287,12 @@ pub fn run(
     if active.is_empty() {
         return outcome;
     }
-    // 求值顺序稳定：数组顺序 + id 升序（前端保存顺序可能变化，靠 id 保证确定性）
+    // 求值顺序稳定：按 id 升序。
     active.sort_by(|a, b| a.id.cmp(&b.id));
-    let existing_by_id: HashMap<&str, &DbTodo> =
-        existing.iter().map(|todo| (todo.id.as_str(), todo)).collect();
+    let existing_by_id: HashMap<&str, &DbTodo> = existing
+        .iter()
+        .map(|todo| (todo.id.as_str(), todo))
+        .collect();
     let project_by_id: HashMap<&str, &DbProject> = projects
         .iter()
         .map(|project| (project.id.as_str(), project))
@@ -309,16 +311,21 @@ pub fn run(
         let mut fired: HashSet<&str> = HashSet::new();
         let mut touched = false;
         for _pass in 0..AUTOMATION_PASSES {
-            // 本轮起点：动作改完之后，后续规则按「轮起点 → 当前」判断字段变化，支持一轮内级联
-            let base = todo.clone();
+            // 始终以保存前快照对比当前值，覆盖用户变更与跨轮级联。
+            let base = before.cloned().unwrap_or_else(|| todo.clone());
             let mut progress = false;
             for rule in &active {
                 if budget == 0 || fired.contains(rule.id.as_str()) {
                     continue;
                 }
-                if !trigger_matches(rule, before, &base, todo) || !conditions_match(rule, todo) {
+                if !references_valid(rule, todo, &project_by_id, defs)
+                    || !trigger_matches(rule, before, &base, todo)
+                    || !conditions_match(rule, todo, &project_by_id, defs)
+                {
                     continue;
                 }
+                // 命中即标记，空操作或失败动作也不会在下一轮重复执行。
+                fired.insert(rule.id.as_str());
                 let mut applied = false;
                 for action in &rule.actions {
                     if budget == 0 {
@@ -338,7 +345,6 @@ pub fn run(
                     }
                 }
                 if applied {
-                    fired.insert(rule.id.as_str());
                     progress = true;
                     touched = true;
                     // 保证通过 upsert 的 updated_at 守卫，并让前端 rebase 采用后端权威值
@@ -354,6 +360,64 @@ pub fn run(
         }
     }
     outcome
+}
+
+/// 删除字段或泳道后整条规则停用，避免部分动作仍写入；项目字段只作用于所属项目。
+fn references_valid(
+    rule: &AutomationRule,
+    todo: &DbTodo,
+    projects: &HashMap<&str, &DbProject>,
+    defs: &[FieldDef],
+) -> bool {
+    let field_exists = |id: &str| {
+        defs.iter()
+            .any(|def| def.id == id && fields::applies_to(def, &todo.project_id))
+    };
+    let lane_exists = |id: &str| {
+        projects.values().any(|project| {
+            project
+                .swimlanes
+                .as_ref()
+                .is_some_and(|lanes| lanes.iter().any(|lane| lane.id == id))
+        })
+    };
+    if rule.trigger.kind == "laneEntered" && !lane_exists(&rule.trigger.lane_id) {
+        return false;
+    }
+    if rule.trigger.kind == "fieldChanged"
+        && !rule.trigger.field_id.is_empty()
+        && !field_exists(&rule.trigger.field_id)
+    {
+        return false;
+    }
+    if rule
+        .conditions
+        .iter()
+        .any(|condition| match condition.kind.as_str() {
+            "field" => !field_exists(&condition.field_id),
+            "project" => {
+                !condition.project_id.is_empty()
+                    && !projects.contains_key(condition.project_id.as_str())
+            }
+            "lane" => !condition.lane_id.is_empty() && !lane_exists(&condition.lane_id),
+            _ => false,
+        })
+    {
+        return false;
+    }
+    rule.actions.iter().all(|action| {
+        let target_valid = action.target.starts_with("builtin:")
+            || defs.iter().any(|def| {
+                def.id == action.target
+                    && def.source != "builtin"
+                    && fields::applies_to(def, &todo.project_id)
+            });
+        target_valid
+            && action
+                .value
+                .as_ref()
+                .is_none_or(|expr| expr.kind != "field" || field_exists(&expr.field_id))
+    })
 }
 
 /// 触发器命中判断：base 为本轮起点状态，current 为当前状态
@@ -388,7 +452,12 @@ fn trigger_matches(
                     .iter()
                     .map(|item| item.field_id.as_str())
                     .collect();
-                ids.extend(current.custom_fields.iter().map(|item| item.field_id.as_str()));
+                ids.extend(
+                    current
+                        .custom_fields
+                        .iter()
+                        .map(|item| item.field_id.as_str()),
+                );
                 ids.into_iter()
                     .any(|id| fields::value_of(base, id) != fields::value_of(current, id))
             } else {
@@ -408,25 +477,60 @@ fn trigger_matches(
 }
 
 /// 条件全部为「且」；空数组恒真
-fn conditions_match(rule: &AutomationRule, todo: &DbTodo) -> bool {
+fn resolved_field(
+    id: &str,
+    todo: &DbTodo,
+    projects: &HashMap<&str, &DbProject>,
+    defs: &[FieldDef],
+) -> Option<CustomValue> {
+    let def = fields::find_def(defs, id)?;
+    if !fields::applies_to(def, &todo.project_id) {
+        return None;
+    }
+    if def.source == "builtin" {
+        fields::attribute_value(
+            &def.builtin,
+            todo,
+            projects.get(todo.project_id.as_str()).copied(),
+        )
+    } else {
+        fields::value_of(todo, id).cloned()
+    }
+}
+
+fn conditions_match(
+    rule: &AutomationRule,
+    todo: &DbTodo,
+    projects: &HashMap<&str, &DbProject>,
+    defs: &[FieldDef],
+) -> bool {
     rule.conditions
         .iter()
         .all(|condition| match condition.kind.as_str() {
             "project" => condition.project_id.is_empty() || todo.project_id == condition.project_id,
             "lane" => condition.lane_id.is_empty() || todo.swimlane_id == condition.lane_id,
             "status" => condition.status.is_empty() || todo.status == condition.status,
-            "field" => match condition.op.as_str() {
-                "notEmpty" => fields::value_of(todo, &condition.field_id)
-                    .and_then(fields::text_of)
-                    .is_some_and(|text| !text.is_empty()),
-                "empty" => fields::value_of(todo, &condition.field_id).is_none(),
-                // equals：未给比较值时按「有值」判定，避免配置遗漏变成恒真
-                _ => match (condition.value.as_ref(), fields::value_of(todo, &condition.field_id)) {
-                    (Some(expected), Some(actual)) => expected == actual,
-                    (Some(_), None) => false,
-                    (None, actual) => actual.is_some(),
-                },
-            },
+            "field" => {
+                let actual = resolved_field(&condition.field_id, todo, projects, defs);
+                match condition.op.as_str() {
+                    "notEmpty" => actual
+                        .as_ref()
+                        .and_then(fields::text_of)
+                        .is_some_and(|text| !text.is_empty()),
+                    "empty" => actual.is_none(),
+                    "equals" => {
+                        let expected =
+                            fields::find_def(defs, &condition.field_id).and_then(|def| {
+                                condition
+                                    .value
+                                    .as_ref()
+                                    .and_then(|value| fields::coerce(def, value))
+                            });
+                        expected.is_some() && expected == actual
+                    }
+                    _ => false,
+                }
+            }
             _ => true,
         })
 }
@@ -439,13 +543,20 @@ fn apply_action(
     defs: &[FieldDef],
     now: i64,
 ) -> Result<bool, String> {
+    if !action.target.starts_with("builtin:") {
+        let def =
+            fields::find_def(defs, &action.target).ok_or_else(|| "目标字段不存在".to_string())?;
+        if def.source == "builtin" || !fields::applies_to(def, &todo.project_id) {
+            return Err("目标字段只读或不适用于当前项目".to_string());
+        }
+    }
     match action.kind.as_str() {
         "setField" => {
             let expression = action
                 .value
                 .as_ref()
                 .ok_or_else(|| "缺少取值方式".to_string())?;
-            let raw = resolve_expression(expression, todo, projects, now)
+            let raw = resolve_expression(expression, todo, projects, defs, now)
                 .ok_or_else(|| "取值方式无法求值".to_string())?;
             if let Some(name) = action.target.strip_prefix("builtin:") {
                 return set_builtin(todo, name, &raw);
@@ -475,6 +586,7 @@ fn resolve_expression(
     expression: &AutomationValueExpr,
     todo: &DbTodo,
     projects: &HashMap<&str, &DbProject>,
+    defs: &[FieldDef],
     now: i64,
 ) -> Option<CustomValue> {
     let project = projects.get(todo.project_id.as_str()).copied();
@@ -483,7 +595,7 @@ fn resolve_expression(
         "today" => Some(CustomValue::Text(fields::local_date(now))),
         "constant" => expression.value.clone(),
         "attribute" => fields::attribute_value(&expression.name, todo, project),
-        "field" => fields::value_of(todo, &expression.field_id).cloned(),
+        "field" => resolved_field(&expression.field_id, todo, projects, defs),
         "template" => Some(CustomValue::Text(fields::format_template(
             &expression.text,
             todo,
@@ -517,9 +629,9 @@ fn set_builtin(todo: &mut DbTodo, name: &str, raw: &CustomValue) -> Result<bool,
         "startDate" | "endDate" => {
             let value = match raw {
                 CustomValue::Null => None,
-                CustomValue::Text(text) => Some(
-                    fields::coerce_date_text(text).ok_or_else(|| "需要日期取值".to_string())?,
-                ),
+                CustomValue::Text(text) => {
+                    Some(fields::coerce_date_text(text).ok_or_else(|| "需要日期取值".to_string())?)
+                }
                 CustomValue::Number(number) => Some(fields::local_date(*number as i64)),
                 _ => return Err("需要日期取值".to_string()),
             };
@@ -707,10 +819,17 @@ mod tests {
         }];
         let defs = vec![field("f-env", "text", "rule")];
         let existing = vec![todo("t1", "swim-todo", "todo")];
-        let mut todos = vec![todo("t1", "swim-todo", "todo"), todo("t2", "swim-todo", "todo")];
+        let mut todos = vec![
+            todo("t1", "swim-todo", "todo"),
+            todo("t2", "swim-todo", "todo"),
+        ];
         let outcome = run(&existing, &mut todos, &[project()], &defs, &rules, 8_000);
         assert_eq!(outcome.todos, 1);
-        assert_eq!(fields::value_of(&todos[0], "f-env"), None, "存量任务不触发 created");
+        assert_eq!(
+            fields::value_of(&todos[0], "f-env"),
+            None,
+            "存量任务不触发 created"
+        );
         assert_eq!(
             fields::value_of(&todos[1], "f-env"),
             Some(&CustomValue::Text("本地".into()))
@@ -782,7 +901,10 @@ mod tests {
                 }),
             }],
         });
-        let defs = vec![field("f-a", "datetime", "rule"), field("f-b", "text", "rule")];
+        let defs = vec![
+            field("f-a", "datetime", "rule"),
+            field("f-b", "text", "rule"),
+        ];
         let existing = vec![todo("t1", "swim-todo", "todo")];
         let mut todos = vec![todo("t1", "swim-doing", "doing")];
         let outcome = run(&existing, &mut todos, &[project()], &defs, &rules, 11_000);
@@ -848,7 +970,10 @@ mod tests {
         rule.enabled = false;
         let existing = vec![todo("t1", "swim-todo", "todo")];
         let mut todos = vec![todo("t1", "swim-doing", "doing")];
-        assert_eq!(run(&existing, &mut todos, &[project()], &defs, &[rule], 1).actions, 0);
+        assert_eq!(
+            run(&existing, &mut todos, &[project()], &defs, &[rule], 1).actions,
+            0
+        );
 
         // 条件不满足（限定另一个项目）
         let mut conditioned = lane_rule("a2", "swim-doing", "f-time");
@@ -859,7 +984,15 @@ mod tests {
         }];
         let mut todos = vec![todo("t1", "swim-doing", "doing")];
         assert_eq!(
-            run(&existing, &mut todos, &[project()], &defs, &[conditioned], 1).actions,
+            run(
+                &existing,
+                &mut todos,
+                &[project()],
+                &defs,
+                &[conditioned],
+                1
+            )
+            .actions,
             0
         );
     }
@@ -936,6 +1069,129 @@ mod tests {
     }
 
     #[test]
+    fn user_field_and_status_changes_trigger_rules() {
+        let defs = vec![
+            field("input", "number", "manual"),
+            field("output", "datetime", "rule"),
+        ];
+        let before = todo("t", "swim-todo", "todo");
+        let mut after = before.clone();
+        fields::set_value(&mut after, "input", CustomValue::Number(3.0));
+        let mut rule = lane_rule("r", "swim-todo", "output");
+        rule.trigger.kind = "fieldChanged".into();
+        rule.trigger.field_id = "input".into();
+        rule.conditions = vec![AutomationCondition {
+            kind: "field".into(),
+            field_id: "input".into(),
+            op: "equals".into(),
+            value: Some(CustomValue::Text("3".into())),
+            ..Default::default()
+        }];
+        let mut todos = vec![after];
+        assert_eq!(
+            run(
+                &[before.clone()],
+                &mut todos,
+                &[project()],
+                &defs,
+                &[rule.clone()],
+                5000
+            )
+            .actions,
+            1
+        );
+        rule.trigger.kind = "statusChanged".into();
+        rule.trigger.to = "doing".into();
+        rule.conditions.clear();
+        let mut after = before.clone();
+        after.status = "doing".into();
+        assert_eq!(
+            run(&[before], &mut [after], &[project()], &defs, &[rule], 5000).actions,
+            1
+        );
+    }
+
+    #[test]
+    fn reverse_order_cascade_and_invalid_references() {
+        let defs = vec![
+            field("first", "datetime", "rule"),
+            field("second", "datetime", "rule"),
+        ];
+        let producer = lane_rule("z", "swim-doing", "first");
+        let mut consumer = lane_rule("a", "swim-doing", "second");
+        consumer.trigger.kind = "fieldChanged".into();
+        consumer.trigger.field_id = "first".into();
+        let old = vec![todo("t", "swim-todo", "todo")];
+        let mut next = vec![todo("t", "swim-doing", "doing")];
+        assert_eq!(
+            run(
+                &old,
+                &mut next,
+                &[project()],
+                &defs,
+                &[producer.clone(), consumer],
+                5000
+            )
+            .actions,
+            2
+        );
+        let mut invalid = producer.clone();
+        invalid.actions.push(AutomationAction {
+            kind: "clearField".into(),
+            target: "deleted".into(),
+            value: None,
+        });
+        let mut next = vec![todo("t", "swim-doing", "doing")];
+        assert_eq!(
+            run(&old, &mut next, &[project()], &defs, &[invalid], 5000).actions,
+            0
+        );
+        let mut scoped = defs.clone();
+        scoped[0].project_id = Some("other-project".into());
+        assert_eq!(
+            run(&old, &mut next, &[project()], &scoped, &[producer], 5000).actions,
+            0
+        );
+    }
+
+    #[test]
+    fn derived_field_can_be_condition_and_source() {
+        let mut derived = field("derived", "text", "builtin");
+        derived.builtin = "tag".into();
+        let defs = vec![derived, field("output", "text", "rule")];
+        let mut rule = lane_rule("r", "swim-doing", "output");
+        rule.conditions = vec![AutomationCondition {
+            kind: "field".into(),
+            field_id: "derived".into(),
+            op: "equals".into(),
+            value: Some(CustomValue::Text("todo-t".into())),
+            ..Default::default()
+        }];
+        rule.actions[0].value = Some(AutomationValueExpr {
+            kind: "field".into(),
+            field_id: "derived".into(),
+            ..Default::default()
+        });
+        let mut next = vec![todo("t", "swim-doing", "doing")];
+        assert_eq!(
+            run(
+                &[todo("t", "swim-todo", "todo")],
+                &mut next,
+                &[project()],
+                &defs,
+                &[rule],
+                5000
+            )
+            .actions,
+            1
+        );
+        assert_eq!(
+            fields::value_of(&next[0], "output"),
+            Some(&CustomValue::Text("todo-t".into()))
+        );
+    }
+
+    #[test]
     fn validate_rejects_bad_rules() {
         let ok = lane_rule("a1", "swim-doing", "f1");
         assert!(validate(&[ok.clone()]).is_ok());
@@ -971,15 +1227,18 @@ mod tests {
             ..ok.clone()
         }])
         .is_err());
-        assert!(validate(&[AutomationRule {
-            actions: vec![AutomationAction {
-                kind: "setField".into(),
-                target: "builtin:status".into(),
-                value: Some(now_expr()),
-            }],
-            ..ok.clone()
-        }])
-        .is_err(), "内置目标白名单外不允许写入");
+        assert!(
+            validate(&[AutomationRule {
+                actions: vec![AutomationAction {
+                    kind: "setField".into(),
+                    target: "builtin:status".into(),
+                    value: Some(now_expr()),
+                }],
+                ..ok.clone()
+            }])
+            .is_err(),
+            "内置目标白名单外不允许写入"
+        );
         assert!(validate(&[AutomationRule {
             conditions: vec![AutomationCondition {
                 kind: "field".into(),

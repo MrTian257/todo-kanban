@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { CustomFieldDef, FieldSource, FieldType, Project } from "@/lib/types";
 import {
+  builtinFieldType,
   BUILTIN_ATTRIBUTES,
   BUILTIN_ATTRIBUTE_LABEL,
   FIELD_SOURCES,
@@ -20,6 +21,7 @@ import {
   emptyFieldDef,
   validateFieldDef,
 } from "@/lib/customFields";
+import { useEditingGuard } from "@/lib/editingGuard";
 import { CustomFieldControl } from "./CustomFieldInputs";
 
 const SELECT_CLASS = "h-10 w-full rounded-lg border bg-background/50 px-3 text-sm";
@@ -38,6 +40,7 @@ interface Props {
 export function FieldDefDialog({ open, initial, defs, projects, busy, onCancel, onSubmit }: Props) {
   const [draft, setDraft] = React.useState<CustomFieldDef>(() => initial ?? emptyFieldDef(defs.length));
   const [error, setError] = React.useState("");
+  useEditingGuard(open);
   const wasOpen = React.useRef(false);
 
   // 仅在「刚打开」时重置草稿：initial 由父组件内联构造，不能进依赖触发的循环
@@ -54,6 +57,7 @@ export function FieldDefDialog({ open, initial, defs, projects, busy, onCancel, 
   const changeSource = (source: FieldSource) => {
     patch({
       source,
+      ...(source === "builtin" ? { type: builtinFieldType(draft.builtin || "createdAt"), options: [], required: false } : {}),
       builtin: source === "builtin" ? draft.builtin || "createdAt" : "",
       defaultValue: source === "manual" ? draft.defaultValue : null,
     });
@@ -95,16 +99,16 @@ export function FieldDefDialog({ open, initial, defs, projects, busy, onCancel, 
         <DialogDescription>
           字段标识创建后不可修改（任务上的值按标识关联）。值来源决定值从哪来：手动填写、引用任务内置属性，或由自动脚本写入。
         </DialogDescription>
-        <form className="max-h-[65vh] space-y-3 overflow-auto" onSubmit={submit}>
+        <form className="max-h-[65vh] space-y-3 overflow-auto" onSubmit={submit}><fieldset disabled={busy} className="space-y-3 min-w-0">
           <label className="block space-y-1 text-sm">
             字段名称
             <Input autoFocus required value={draft.label} onChange={(event) => patch({ label: event.target.value })} placeholder="例如：进入开发时间" />
           </label>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <label className="block space-y-1 text-sm">
               字段类型
-              <select className={SELECT_CLASS} value={draft.type} onChange={(event) => changeType(event.target.value as FieldType)}>
+              <select className={SELECT_CLASS} value={draft.type} disabled={draft.source === "builtin"} onChange={(event) => changeType(event.target.value as FieldType)}>
                 {FIELD_TYPES.map((type) => <option key={type} value={type}>{FIELD_TYPE_LABEL[type]}</option>)}
               </select>
             </label>
@@ -120,7 +124,7 @@ export function FieldDefDialog({ open, initial, defs, projects, busy, onCancel, 
           {draft.source === "builtin" && (
             <label className="block space-y-1 text-sm">
               内置属性
-              <select className={SELECT_CLASS} value={draft.builtin} onChange={(event) => patch({ builtin: event.target.value })}>
+              <select className={SELECT_CLASS} value={draft.builtin} onChange={(event) => patch({ builtin: event.target.value, type: builtinFieldType(event.target.value) })}>
                 {BUILTIN_ATTRIBUTES.map((name) => <option key={name} value={name}>{BUILTIN_ATTRIBUTE_LABEL[name] ?? name}</option>)}
               </select>
             </label>
@@ -173,7 +177,7 @@ export function FieldDefDialog({ open, initial, defs, projects, busy, onCancel, 
             <Input value={draft.description} maxLength={MAX_DESCRIPTION_CHARS} onChange={(event) => patch({ description: event.target.value })} placeholder="可选" />
           </label>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <label className="block space-y-1 text-sm">
               作用范围
               <select className={SELECT_CLASS} value={draft.projectId ?? ""} onChange={(event) => patch({ projectId: event.target.value || null })}>
@@ -204,12 +208,13 @@ export function FieldDefDialog({ open, initial, defs, projects, busy, onCancel, 
             )}
           </div>
 
+          {initial && <p className="text-xs text-muted-foreground">修改类型或候选项不会清除已有值；不兼容的旧值需要在任务详情中调整。</p>}
           {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
           <div className="flex justify-end gap-2 pt-1">
             <Button type="button" variant="outline" disabled={busy} onClick={onCancel}>取消</Button>
             <Button type="submit" disabled={busy}>{busy ? "保存中…" : "保存字段"}</Button>
           </div>
-        </form>
+        </fieldset></form>
       </DialogContent>
     </Dialog>
   );

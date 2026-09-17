@@ -94,18 +94,16 @@ pub struct FieldDef {
 
 /// 定义是否作用于该项目
 pub fn applies_to(def: &FieldDef, project_id: &str) -> bool {
-    def.project_id
-        .as_deref()
-        .is_none_or(|id| id == project_id)
+    def.project_id.as_deref().is_none_or(|id| id == project_id)
 }
 
 /// 按 id 查定义
-pub fn find_def(defs: &[FieldDef], id: &str) -> Option<&FieldDef> {
+pub fn find_def<'a>(defs: &'a [FieldDef], id: &str) -> Option<&'a FieldDef> {
     defs.iter().find(|def| def.id == id)
 }
 
 /// 读取任务上的字段值
-pub fn value_of(todo: &DbTodo, field_id: &str) -> Option<&CustomValue> {
+pub fn value_of<'a>(todo: &'a DbTodo, field_id: &str) -> Option<&'a CustomValue> {
     todo.custom_fields
         .iter()
         .find(|item| item.field_id == field_id)
@@ -193,7 +191,9 @@ pub fn validate_defs(defs: &[FieldDef]) -> AppResult<()> {
             )));
         }
         if !FIELD_TYPES.contains(&def.kind.as_str()) {
-            return Err(AppError::invalid(format!("自定义字段「{label}」的类型无效")));
+            return Err(AppError::invalid(format!(
+                "自定义字段「{label}」的类型无效"
+            )));
         }
         if !FIELD_SOURCES.contains(&def.source.as_str()) {
             return Err(AppError::invalid(format!(
@@ -321,12 +321,15 @@ pub fn coerce_date_text(text: &str) -> Option<String> {
     let trimmed = text.trim();
     chrono::NaiveDate::parse_from_str(trimmed, "%Y-%m-%d")
         .ok()
+        .filter(|date| date.format("%Y-%m-%d").to_string() == trimmed)
         .map(|date| date.format("%Y-%m-%d").to_string())
 }
 
 fn coerce_date(value: &CustomValue) -> Option<String> {
     match value {
-        CustomValue::Text(text) => coerce_date_text(text).or_else(|| coerce_ms(value).map(local_date)),
+        CustomValue::Text(text) => {
+            coerce_date_text(text).or_else(|| coerce_ms(value).map(local_date))
+        }
         CustomValue::Number(number) if number.is_finite() && *number > 0.0 => {
             Some(local_date(*number as i64))
         }
@@ -359,7 +362,7 @@ fn coerce_options(def: &FieldDef, value: &CustomValue) -> Option<Vec<String>> {
     };
     let mut result: Vec<String> = Vec::new();
     for item in raw {
-        for part in item.split(|c: char| matches!(c, ',' | '，' | '、' | ';' | '；')) {
+        for part in item.split([',', '，', '、', ';', '；']) {
             let trimmed = part.trim();
             if trimmed.is_empty() {
                 continue;
@@ -407,6 +410,7 @@ fn local(ms: i64) -> Option<chrono::DateTime<chrono::Local>> {
 
 /// 解析本地日期时间文本
 pub fn parse_datetime(text: &str) -> Option<i64> {
+    coerce_date_text(text.trim().get(..10)?)?;
     let trimmed = text.trim();
     if let Ok(date) = chrono::NaiveDate::parse_from_str(trimmed, "%Y-%m-%d") {
         return date.and_hms_opt(0, 0, 0).and_then(naive_to_ms);
@@ -434,11 +438,17 @@ fn naive_to_ms(naive: chrono::NaiveDateTime) -> Option<i64> {
 }
 
 /// 内置属性求值（builtin 字段展示 + 自动脚本 attribute 表达式共用）
-pub fn attribute_value(name: &str, todo: &DbTodo, project: Option<&DbProject>) -> Option<CustomValue> {
+pub fn attribute_value(
+    name: &str,
+    todo: &DbTodo,
+    project: Option<&DbProject>,
+) -> Option<CustomValue> {
     match name {
         "createdAt" => Some(CustomValue::Number(todo.created_at as f64)),
         "updatedAt" => Some(CustomValue::Number(todo.updated_at as f64)),
-        "startedAt" => todo.started_at.map(|value| CustomValue::Number(value as f64)),
+        "startedAt" => todo
+            .started_at
+            .map(|value| CustomValue::Number(value as f64)),
         "doneAt" => todo.done_at.map(|value| CustomValue::Number(value as f64)),
         "startDate" => todo.start_date.clone().map(CustomValue::Text),
         "endDate" => todo.end_date.clone().map(CustomValue::Text),
@@ -714,17 +724,25 @@ mod tests {
         let mut manual_again = def("f1", "text", "manual");
         manual_again.default_value = Some(CustomValue::Text("默认".into()));
         apply_defaults(&mut other, &[manual_again]);
-        assert_eq!(value_of(&other, "f1"), Some(&CustomValue::Text("手填".into())));
+        assert_eq!(
+            value_of(&other, "f1"),
+            Some(&CustomValue::Text("手填".into()))
+        );
     }
 
     #[test]
     fn validate_defs_rejects_bad_config() {
         assert!(validate_defs(&[def("f1", "text", "manual")]).is_ok());
         assert!(validate_defs(&[def("", "text", "manual")]).is_err());
-        assert!(validate_defs(&[def("f1", "text", "manual"), def("f1", "text", "manual")]).is_err());
+        assert!(
+            validate_defs(&[def("f1", "text", "manual"), def("f1", "text", "manual")]).is_err()
+        );
         assert!(validate_defs(&[def("f1", "unknown", "manual")]).is_err());
         assert!(validate_defs(&[def("f1", "text", "unknown")]).is_err());
-        assert!(validate_defs(&[def("f1", "select", "manual")]).is_err(), "选择类字段需要候选项");
+        assert!(
+            validate_defs(&[def("f1", "select", "manual")]).is_err(),
+            "选择类字段需要候选项"
+        );
         let mut builtin = def("f1", "text", "builtin");
         builtin.builtin = "分支".into();
         assert!(validate_defs(&[builtin]).is_err());

@@ -18,7 +18,6 @@ import {
   PanelLeftOpen,
   Settings,
   Square,
-  SquareKanban,
   Sun,
   FolderKanban,
   BookOpen,
@@ -33,7 +32,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { ProjectContextSwitcher } from "@/components/layout/ProjectContextSwitcher";
 
 const NAV_ITEMS = [
-  { to: "/workflow", label: "工作流", icon: SquareKanban },
   { to: "/focus", label: "今日焦点", icon: CalendarDays },
   { to: "/todos", label: "全部待办", icon: ListTodo },
   { to: "/projects", label: "项目资料", icon: FolderKanban },
@@ -161,7 +159,7 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
     let stop: (() => void) | undefined;
     void listen<string>("app-menu", ({ payload }) => {
       if (!alive) return;
-      if (["focus", "todos", "projects", "settings", "workflow"].includes(payload)) navigate(`/${payload}`);
+      if (["focus", "todos", "projects", "settings", "workflow"].includes(payload)) navigate(payload === "workflow" ? "/settings/workflow" : `/${payload}`);
       else if (payload === "search") { searchRef.current?.focus(); searchRef.current?.select(); }
       else if (payload === "sidebar") {
         if (narrow) setMobileExpanded(value => !value);
@@ -195,7 +193,7 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
         </Tooltip>
 
         {isMacOS && <div data-tauri-drag-region className="tk-toolbar-title h-full min-w-0 flex-1 flex items-center truncate px-3 text-sm font-semibold">
-          {location.pathname.startsWith("/project/") ? "项目工作台" : location.pathname === "/settings" ? "设置" : NAV_ITEMS.find(item => location.pathname.startsWith(item.to))?.label ?? "工作台"}
+          {location.pathname.startsWith("/project/") ? "项目工作台" : location.pathname === "/settings/workflow" ? "设置 / 工作流" : location.pathname === "/settings" ? "设置" : NAV_ITEMS.find(item => location.pathname.startsWith(item.to))?.label ?? "工作台"}
         </div>}
         <form className="tk-toolbar-search mx-2 flex w-full min-w-0 max-w-sm items-center gap-1" onSubmit={event => { event.preventDefault(); navigate(`/todos?q=${encodeURIComponent(search)}`); }}>
           <Input ref={searchRef} aria-label="全局搜索" value={search} onChange={event => setSearch(event.target.value)} placeholder={`搜索任务 · ${(isMacOS ? "⌘⇧F" : shortcutLabel("K"))}`} className="h-7 min-w-0 text-xs" />

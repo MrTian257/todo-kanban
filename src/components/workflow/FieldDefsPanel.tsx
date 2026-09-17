@@ -7,14 +7,15 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { flushPersistence, useAppStore } from "@/lib/store";
 import { CustomFieldDef } from "@/lib/types";
-import { FIELD_SOURCE_LABEL, FIELD_TYPE_LABEL, sortFieldDefs } from "@/lib/customFields";
-import { getWorkflow, patchWorkflow, useWorkflow } from "@/lib/workflow";
+import { BUILTIN_ATTRIBUTE_LABEL, MAX_FIELD_DEFS, FIELD_SOURCE_LABEL, FIELD_TYPE_LABEL, sortFieldDefs } from "@/lib/customFields";
+import { getWorkflow, saveWorkflow, useWorkflow } from "@/lib/workflow";
 import { FieldDefDialog } from "./FieldDefDialog";
 
 export function FieldDefsPanel() {
   const workflow = useWorkflow();
   const projects = useAppStore((state) => state.projects);
   const todos = useAppStore((state) => state.todos);
+  const [editBase, setEditBase] = React.useState(workflow);
   const [open, setOpen] = React.useState(false);
   const [editing, setEditing] = React.useState<CustomFieldDef | null>(null);
   const [removing, setRemoving] = React.useState<CustomFieldDef | null>(null);
@@ -29,10 +30,10 @@ export function FieldDefsPanel() {
     0,
   );
 
-  const saveDefs = async (next: CustomFieldDef[]): Promise<boolean> => {
+  const saveDefs = async (next: CustomFieldDef[], base = workflow): Promise<boolean> => {
     setBusy(true);
     try {
-      await patchWorkflow({ fieldDefs: next });
+      await saveWorkflow({ ...base, fieldDefs: next });
       toast.success("字段设置已保存");
       return true;
     } catch (error) {
@@ -80,7 +81,7 @@ export function FieldDefsPanel() {
               清理未定义字段值（{orphanValues}）
             </Button>
           )}
-          <Button size="sm" disabled={busy} onClick={() => { setEditing(null); setOpen(true); }}>新建字段</Button>
+          <Button size="sm" disabled={busy || defs.length >= MAX_FIELD_DEFS} onClick={() => { setEditBase(workflow); setEditing(null); setOpen(true); }}>新建字段</Button>
         </div>
       </div>
       <p className="text-sm text-muted-foreground">
@@ -88,18 +89,26 @@ export function FieldDefsPanel() {
         值随任务保存并参与变更历史与 MCP 读写；自动脚本见下方「自动脚本」。
       </p>
       {!defs.length && <p className="text-sm text-muted-foreground">还没有自定义字段。</p>}
-      {defs.map((def) => (
+      {defs.map((def, index) => (
         <div key={def.id} className="flex flex-wrap items-center justify-between gap-2 border-t py-2 text-sm">
           <span className="flex flex-wrap items-center gap-2">
             <span className="font-medium">{def.label}</span>
             <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">{FIELD_TYPE_LABEL[def.type]}</span>
             <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">{FIELD_SOURCE_LABEL[def.source]}</span>
-            {def.source === "builtin" && <span className="text-xs text-muted-foreground">{def.builtin}</span>}
+            {def.source === "builtin" && <span className="text-xs text-muted-foreground">{BUILTIN_ATTRIBUTE_LABEL[def.builtin] ?? def.builtin}</span>}
             <span className="text-xs text-muted-foreground">{scopeLabel(def)}</span>
             {def.showOnCard && <span className="text-xs text-muted-foreground">卡片展示</span>}
           </span>
           <span className="flex gap-2">
-            <Button size="sm" variant="ghost" disabled={busy} onClick={() => { setEditing(def); setOpen(true); }}>编辑</Button>
+            <Button size="sm" variant="ghost" aria-label={`上移字段 ${def.label}`} disabled={busy || index === 0} onClick={() => {
+              const next = [...defs]; [next[index - 1], next[index]] = [next[index], next[index - 1]];
+              void saveDefs(next.map((item, sortOrder) => ({...item, sortOrder})));
+            }}>上移</Button>
+            <Button size="sm" variant="ghost" aria-label={`下移字段 ${def.label}`} disabled={busy || index === defs.length - 1} onClick={() => {
+              const next = [...defs]; [next[index + 1], next[index]] = [next[index], next[index + 1]];
+              void saveDefs(next.map((item, sortOrder) => ({...item, sortOrder})));
+            }}>下移</Button>
+            <Button size="sm" variant="ghost" disabled={busy} onClick={() => { setEditBase(workflow); setEditing(def); setOpen(true); }}>编辑</Button>
             <Button size="sm" variant="ghost" disabled={busy} onClick={() => setRemoving(def)}>删除</Button>
           </span>
         </div>
@@ -112,7 +121,7 @@ export function FieldDefsPanel() {
         projects={projects}
         busy={busy}
         onCancel={() => setOpen(false)}
-        onSubmit={(def) => { void saveDefs([...defs.filter((item) => item.id !== def.id), def]).then((saved) => { if (saved) setOpen(false); }); }}
+        onSubmit={(def) => { void saveDefs(editBase.fieldDefs.some(item => item.id === def.id) ? editBase.fieldDefs.map(item => item.id === def.id ? def : item) : [...editBase.fieldDefs, def], editBase).then((saved) => { if (saved) setOpen(false); }); }}
       />
 
       <Dialog open={!!removing} onOpenChange={(next) => { if (!next && !busy) setRemoving(null); }}>
@@ -128,8 +137,7 @@ export function FieldDefsPanel() {
               disabled={busy}
               onClick={() => {
                 const target = removing;
-                setRemoving(null);
-                if (target) void saveDefs(defs.filter((def) => def.id !== target.id));
+                if (target) void saveDefs(defs.filter((def) => def.id !== target.id)).then(saved => { if (saved) setRemoving(null); });
               }}
             >
               删除
