@@ -147,7 +147,7 @@ export function ResourceLibraryPage() {
                   ownerName={ownerOf(resource)?.name ?? "未归属"}
                   showOwner={showOwner}
                   backlinks={backlinks.get(resource.id) ?? []}
-                  onRead={() => setReadingId(resource.id)}
+                  onRead={() => navigate(`/library/${resource.id}`)} // 编辑与阅读都进入到编辑页面去。
                   onEdit={() => navigate(`/library/${resource.id}`)}
                   onDelete={() => setDeleteTarget(resource)}
                 />
