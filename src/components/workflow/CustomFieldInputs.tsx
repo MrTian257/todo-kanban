@@ -36,9 +36,10 @@ export function toLocalInputValue(ms: number): string {
   );
 }
 
-/** 数字输入：保留用户输入过程（允许 1. / -），非法内容不写回 */
+/** 数字输入：保留输入过程（允许 1. / -），无效文本交给表单校验，避免误存旧值。 */
 function NumberInput({ id, value, disabled, onChange }: { id: string; value: CustomValue; disabled?: boolean; onChange: (value: CustomValue) => void }) {
   const [text, setText] = React.useState(typeof value === "number" ? String(value) : "");
+  React.useEffect(() => { setText(value === null ? "" : String(value)); }, [value]);
   return (
     <Input
       id={id}
@@ -54,7 +55,7 @@ function NumberInput({ id, value, disabled, onChange }: { id: string; value: Cus
           return;
         }
         const parsed = Number(trimmed);
-        if (Number.isFinite(parsed)) onChange(parsed);
+        onChange(Number.isFinite(parsed) ? parsed : next);
       }}
     />
   );

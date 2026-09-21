@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
-import { CustomFieldDef, Project, AutomationAction, AutomationCondition, AutomationRule, AutomationValueExpr, AutomationValueKind, CustomValue } from "@/lib/types";
+import { CustomFieldDef, Project, AutomationAction, AutomationCondition, AutomationRule, AutomationValueExpr, AutomationValueKind } from "@/lib/types";
 import {
   ACTION_LABEL,
   BUILTIN_ATTRIBUTE_LABEL,
@@ -22,9 +22,12 @@ import {
   VALUE_KINDS,
   VALUE_LABEL,
   emptyRule,
-  textOf,
-  validateRule,
+  actionTargetDef,
+  validateRuleConfig,
 } from "@/lib/customFields";
+
+import { CustomFieldControl } from "./CustomFieldInputs";
+import { useEditingGuard } from "@/lib/editingGuard";
 
 const SELECT_CLASS = "h-9 w-full rounded-lg border bg-background/50 px-3 text-sm";
 
@@ -41,14 +44,15 @@ interface Props {
   onSubmit: (rule: AutomationRule) => void;
 }
 
-function ExpressionEditor({ expression, defs, target, onChange }: {
+function ExpressionEditor({ expression, defs, target, index, onChange }: {
   expression: AutomationValueExpr;
+  index: number;
   defs: CustomFieldDef[];
   /** 目标字段（builtin:xxx 时为空）：用于提示取值类型是否匹配 */
   target: string;
   onChange: (expression: AutomationValueExpr) => void;
 }) {
-  const targetDef = defs.find((def) => def.id === target);
+  const targetDef = actionTargetDef(target, defs);
   const tokenHint = "可用占位符 " + TEMPLATE_TOKENS.map((token) => "{{" + token + "}}").join(" ") + "，以及 {{field:<字段 id>}}";
   return (
     <div className="space-y-2">
@@ -58,12 +62,9 @@ function ExpressionEditor({ expression, defs, target, onChange }: {
           {VALUE_KINDS.map((kind) => <option key={kind} value={kind}>{VALUE_LABEL[kind]}</option>)}
         </select>
       </label>
-      {expression.kind === "constant" && (
-        <Input
-          value={textOf(expression.value) ?? ""}
-          placeholder={targetDef ? "按字段类型填写（" + targetDef.label + "）" : "固定值"}
-          onChange={(event) => onChange({ ...expression, value: event.target.value === "" ? null : event.target.value })}
-        />
+      {expression.kind === "constant" && targetDef && (
+        <CustomFieldControl key={target} def={{...targetDef, source: "manual", label: "固定值", description: ""}}
+          value={expression.value} idPrefix={`rule-constant-${index}`} onChange={value => onChange({...expression, value})} />
       )}
       {expression.kind === "attribute" && (
         <select className={SELECT_CLASS} value={expression.name} onChange={(event) => onChange({ ...expression, name: event.target.value })}>
@@ -90,6 +91,7 @@ function ExpressionEditor({ expression, defs, target, onChange }: {
 export function AutomationRuleDialog({ open, initial, defs, projects, lanes, busy, onCancel, onSubmit }: Props) {
   const [draft, setDraft] = React.useState<AutomationRule>(() => initial ?? emptyRule(lanes[0]?.id ?? ""));
   const [error, setError] = React.useState("");
+  useEditingGuard(open);
   const wasOpen = React.useRef(false);
 
   React.useEffect(() => {
@@ -106,7 +108,7 @@ export function AutomationRuleDialog({ open, initial, defs, projects, lanes, bus
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
     const next: AutomationRule = { ...draft, name: draft.name.trim() };
-    const message = validateRule(next);
+    const message = validateRuleConfig(next, defs, projects);
     if (message) {
       setError(message);
       return;
@@ -121,7 +123,7 @@ export function AutomationRuleDialog({ open, initial, defs, projects, lanes, bus
         {BUILTIN_TARGETS.map((name) => <option key={name} value={"builtin:" + name}>{BUILTIN_ATTRIBUTE_LABEL[name] ?? name}</option>)}
       </optgroup>
       <optgroup label="自定义字段">
-        {defs.map((def) => <option key={def.id} value={def.id}>{def.label}</option>)}
+        {defs.filter(def => def.source !== "builtin").map((def) => <option key={def.id} value={def.id}>{def.label}</option>)}
       </optgroup>
     </>
   );
@@ -134,7 +136,7 @@ export function AutomationRuleDialog({ open, initial, defs, projects, lanes, bus
           规则由后端在保存事务内执行（看板拖拽、右键移动泳道、详情页改泳道、MCP 写入都会触发），
           每条规则对每个任务每次保存最多触发一次；恢复备份 / 恢复历史版本不执行规则。
         </DialogDescription>
-        <form className="max-h-[65vh] space-y-4 overflow-auto" onSubmit={submit}>
+        <form className="max-h-[65vh] space-y-4 overflow-auto" onSubmit={submit}><fieldset disabled={busy} className="min-w-0 space-y-4">
           <div className="flex items-end gap-3">
             <label className="block flex-1 space-y-1 text-sm">
               规则名称
@@ -148,17 +150,17 @@ export function AutomationRuleDialog({ open, initial, defs, projects, lanes, bus
 
           <fieldset className="space-y-2 rounded-lg border p-3">
             <legend className="px-1 text-sm font-medium">触发条件</legend>
-            <select className={SELECT_CLASS} value={draft.trigger.kind} onChange={(event) => patchTrigger({ kind: event.target.value as AutomationRule["trigger"]["kind"] })}>
+            <select className={SELECT_CLASS} aria-label="触发时机" value={draft.trigger.kind} onChange={(event) => patchTrigger({ kind: event.target.value as AutomationRule["trigger"]["kind"] })}>
               {TRIGGER_KINDS.map((kind) => <option key={kind} value={kind}>{TRIGGER_LABEL[kind]}</option>)}
             </select>
             {draft.trigger.kind === "laneEntered" && (
-              <select className={SELECT_CLASS} value={draft.trigger.laneId} onChange={(event) => patchTrigger({ laneId: event.target.value })}>
+              <select className={SELECT_CLASS} aria-label="触发泳道" value={draft.trigger.laneId} onChange={(event) => patchTrigger({ laneId: event.target.value })}>
                 <option value="">选择泳道</option>
                 {lanes.map((lane) => <option key={lane.id} value={lane.id}>{lane.label}</option>)}
               </select>
             )}
             {draft.trigger.kind === "statusChanged" && (
-              <select className={SELECT_CLASS} value={draft.trigger.to} onChange={(event) => patchTrigger({ to: event.target.value as AutomationRule["trigger"]["to"] })}>
+              <select className={SELECT_CLASS} aria-label="目标状态" value={draft.trigger.to} onChange={(event) => patchTrigger({ to: event.target.value as AutomationRule["trigger"]["to"] })}>
                 <option value="">任意状态变化</option>
                 <option value="todo">待办</option>
                 <option value="doing">进行中</option>
@@ -168,7 +170,7 @@ export function AutomationRuleDialog({ open, initial, defs, projects, lanes, bus
             {draft.trigger.kind === "fieldChanged" && (
               <select className={SELECT_CLASS} value={draft.trigger.fieldId} onChange={(event) => patchTrigger({ fieldId: event.target.value })}>
                 <option value="">任意自定义字段</option>
-                {defs.map((def) => <option key={def.id} value={def.id}>{def.label}</option>)}
+                {defs.filter(def => def.source !== "builtin").map((def) => <option key={def.id} value={def.id}>{def.label}</option>)}
               </select>
             )}
           </fieldset>
@@ -246,7 +248,7 @@ export function AutomationRuleDialog({ open, initial, defs, projects, lanes, bus
                   </select>
                 )}
                 {condition.kind === "field" && (
-                  <div className="flex gap-2">
+                  <div className="grid gap-2">
                     <select
                       className={SELECT_CLASS}
                       value={condition.fieldId}
@@ -270,16 +272,11 @@ export function AutomationRuleDialog({ open, initial, defs, projects, lanes, bus
                     >
                       {CONDITION_OPS.map((op) => <option key={op} value={op}>{CONDITION_OP_LABEL[op]}</option>)}
                     </select>
-                    {condition.op === "equals" && (
-                      <Input
-                        value={textOf(condition.value) ?? ""}
-                        placeholder="比较值"
-                        onChange={(event) => {
-                          const conditions = [...draft.conditions];
-                          conditions[index] = { ...condition, value: (event.target.value === "" ? null : event.target.value) as CustomValue };
-                          patch({ conditions });
-                        }}
-                      />
+                    {condition.op === "equals" && defs.find(def => def.id === condition.fieldId) && (
+                      <CustomFieldControl key={condition.fieldId}
+                        def={{...defs.find(def => def.id === condition.fieldId)!, source: "manual", label: "比较值", description: ""}}
+                        value={condition.value} idPrefix={`rule-condition-${index}`}
+                        onChange={value => { const conditions = [...draft.conditions]; conditions[index] = {...condition, value}; patch({conditions}); }} />
                     )}
                   </div>
                 )}
@@ -309,7 +306,7 @@ export function AutomationRuleDialog({ open, initial, defs, projects, lanes, bus
                 <div className="flex gap-2">
                   <select
                     className={SELECT_CLASS}
-                    value={action.kind}
+                    aria-label={`动作 ${index + 1} 的类型`} value={action.kind}
                     onChange={(event) => {
                       const actions = [...draft.actions];
                       const kind = event.target.value as AutomationAction["kind"];
@@ -337,7 +334,7 @@ export function AutomationRuleDialog({ open, initial, defs, projects, lanes, bus
                 </div>
                 <select
                   className={SELECT_CLASS}
-                  value={action.target}
+                  aria-label={`动作 ${index + 1} 的目标`} value={action.target}
                   onChange={(event) => {
                     const actions = [...draft.actions];
                     actions[index] = { ...action, target: event.target.value };
@@ -349,6 +346,7 @@ export function AutomationRuleDialog({ open, initial, defs, projects, lanes, bus
                 </select>
                 {action.kind === "setField" && action.value && (
                   <ExpressionEditor
+                    index={index}
                     expression={action.value}
                     defs={defs}
                     target={action.target}
@@ -384,7 +382,7 @@ export function AutomationRuleDialog({ open, initial, defs, projects, lanes, bus
             <Button type="button" variant="outline" disabled={busy} onClick={onCancel}>取消</Button>
             <Button type="submit" disabled={busy}>{busy ? "保存中…" : "保存规则"}</Button>
           </div>
-        </form>
+        </fieldset></form>
       </DialogContent>
     </Dialog>
   );

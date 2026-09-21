@@ -1,6 +1,7 @@
 // 设置：明暗、主题皮肤（5 套）、MCP 集成、附件维护、数据说明
 
 import * as React from "react";
+import { Link } from "react-router-dom";
 import { useTheme } from "next-themes";
 import {
   Select,
@@ -16,7 +17,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Bot, Eye, EyeOff, Paperclip } from "lucide-react";
+import { ArrowRight, Bot, Eye, EyeOff, Paperclip, SquareKanban } from "lucide-react";
 import { toast } from "sonner";
 import { gcOrphanAttachments, migrateInlineImages } from "@/lib/attachments";
 import { DEFAULT_MCP_TOKEN, mcpGetConfig, mcpSetConfig } from "@/lib/mcp";
@@ -122,7 +123,13 @@ export function SettingsPage() {
   return (
     <div className="h-full w-full overflow-y-auto bg-background p-6">
       <h1 className="mb-4 text-xl font-semibold">设置</h1>
-      <div className="w-full flex flex-wrap space-y-4">
+      <div className="grid w-full gap-5">
+        <Card>
+          <CardHeader><CardTitle className="flex items-center gap-2"><SquareKanban className="h-4 w-4 text-primary" />工作流</CardTitle>
+            <CardDescription>管理任务模板、自定义字段、自动脚本、提醒与备份。</CardDescription>
+          </CardHeader>
+          <CardContent><Button asChild variant="outline"><Link to="/settings/workflow">管理工作流<ArrowRight className="h-4 w-4" /></Link></Button></CardContent>
+        </Card>
         <Card>
           <CardHeader>
             <CardTitle>外观</CardTitle>

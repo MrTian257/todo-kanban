@@ -341,7 +341,7 @@ export function coerceMs(value: CustomValue): number | null {
   if (typeof value === "number") return Number.isFinite(value) && value > 0 ? value : null;
   if (typeof value !== "string") return null;
   const text = value.trim();
-  if (!text) return null;
+  if (!text || !coerceDateText(text.slice(0, 10))) return null;
   const normalized = text.length <= 10 ? text + "T00:00:00" : text.replace(" ", "T");
   const parsed = Date.parse(normalized);
   return Number.isFinite(parsed) ? parsed : null;
@@ -638,7 +638,7 @@ export function validateRule(rule: AutomationRule): string {
 }
 
 /** 失效引用提示（不影响保存，后端也不阻断） */
-export function ruleIssues(rule: AutomationRule, defs: CustomFieldDef[], laneIds: string[]): string[] {
+export function ruleIssues(rule: AutomationRule, defs: CustomFieldDef[], laneIds: string[], projectIds?: string[]): string[] {
   const issues: string[] = [];
   if (rule.trigger.kind === "laneEntered" && rule.trigger.laneId && !laneIds.includes(rule.trigger.laneId)) {
     issues.push("触发泳道已不存在");
@@ -656,6 +656,11 @@ export function ruleIssues(rule: AutomationRule, defs: CustomFieldDef[], laneIds
   if (rule.actions.some((action) => !action.target.startsWith("builtin:") && !defs.some((def) => def.id === action.target))) {
     issues.push("目标字段已不存在");
   }
+  if (rule.trigger.kind === "fieldChanged" && defs.some(def => def.id === rule.trigger.fieldId && def.source === "builtin")) issues.push("派生字段不支持字段变化触发，请选择状态或提交触发器");
+  if (rule.actions.some(action => defs.some(def => def.id === action.target && def.source === "builtin"))) issues.push("目标字段为只读内置属性");
+  if (rule.actions.some(action => action.value?.kind === "field" && !defs.some(def => def.id === action.value?.fieldId))) issues.push("来源字段已不存在");
+  if (rule.conditions.some(condition => condition.kind === "lane" && condition.laneId && !laneIds.includes(condition.laneId))) issues.push("条件泳道已不存在");
+  if (projectIds && rule.conditions.some(condition => condition.kind === "project" && condition.projectId && !projectIds.includes(condition.projectId))) issues.push("条件项目已不存在");
   return issues;
 }
 
@@ -727,4 +732,44 @@ export function describeConditions(rule: AutomationRule, defs: CustomFieldDef[],
       }
     })
     .join(" 且 ");
+}
+
+/** 内置属性的真实类型，避免时间戳按文本或勾选显示。 */
+export function builtinFieldType(name: string): FieldType {
+  if (["createdAt", "updatedAt", "startedAt", "doneAt"].includes(name)) return "datetime";
+  if (["startDate", "endDate"].includes(name)) return "date";
+  if (["seq", "commitCount"].includes(name)) return "number";
+  return "text";
+}
+
+/** 复用字段控件编辑规则常量，内置目标也遵循同样的类型约束。 */
+export function actionTargetDef(target: string, defs: CustomFieldDef[]): CustomFieldDef | undefined {
+  if (!target.startsWith("builtin:")) return defs.find(def => def.id === target);
+  const name = target.slice(8);
+  if (!BUILTIN_TARGETS.includes(name)) return undefined;
+  return { id: target, label: BUILTIN_ATTRIBUTE_LABEL[name], type: builtinFieldType(name), source: "manual", builtin: "", options: [], defaultValue: null, required: false, showOnCard: false, description: "", projectId: null, sortOrder: 0 };
+}
+
+/** 在编辑器保存前检查静态可判定的错误，避免运行时静默跳过。 */
+export function validateRuleConfig(rule: AutomationRule, defs: CustomFieldDef[], projects: Project[]): string {
+  const message = validateRule(rule);
+  if (message) return message;
+  const issues = ruleIssues(rule, defs, projects.flatMap(project => (project.swimlanes ?? []).map(lane => lane.id)), projects.map(project => project.id));
+  if (issues.length) return issues.join("；");
+  for (const condition of rule.conditions) {
+    if (condition.kind !== "field" || condition.op !== "equals") continue;
+    const def = defs.find(item => item.id === condition.fieldId);
+    if (def && coerceFieldValue(def, condition.value) === null) return "条件比较值与「" + def.label + "」的类型不匹配";
+  }
+  for (const action of rule.actions) {
+    if (action.kind !== "setField" || !action.value) continue;
+    const def = actionTargetDef(action.target, defs);
+    if (!def) continue;
+    const expr = action.value;
+    if (expr.kind === "constant" && validateFieldValue({...def, required: true}, expr.value)) return "固定值与「" + def.label + "」的类型不匹配";
+    if (expr.kind === "today" && !["date", "datetime", "text"].includes(def.type)) return "今天的日期不能写入「" + def.label + "」";
+    if (expr.kind === "now" && !["datetime", "date", "number", "text"].includes(def.type)) return "当前时间不能写入「" + def.label + "」";
+    if (expr.kind === "template" && def.type !== "text") return "文本模板请选择文本类型的目标字段";
+  }
+  return "";
 }

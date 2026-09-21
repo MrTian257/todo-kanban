@@ -85,7 +85,7 @@ try {
   assert.equal(cf.resolveFieldValue(field({ id: 'f-a' }), todo, project), '存值');
 
   // 6. 作用范围与卡片字段
-  const defs = [field({ id: 'f2', label: '乙', sortOrder: 2, showOnCard: true }), field({ id: 'f1', label: '甲', sortOrder: 1, showOnCard: true }), field({ id: 'f3', label: '丙', projectId: 'p2' })];
+  const defs = [field({ id: 'f2', label: '乙', sortOrder: 2, showOnCard: true }), field({ id: 'f1', label: '甲', sortOrder: 1, showOnCard: true }), field({ id: 'f3', label: '丙', projectId: 'p2', sortOrder: 3 })];
   assert.deepEqual(cf.visibleFieldDefs(defs, 'p1').map((def) => def.id), ['f1', 'f2']);
   assert.deepEqual(cf.cardFieldDefs(defs, 'p1').map((def) => def.id), ['f1', 'f2']);
   assert.deepEqual(cf.visibleFieldDefs(defs, 'p2').map((def) => def.id), ['f1', 'f2', 'f3']);
@@ -135,6 +135,18 @@ try {
   assert.equal(cf.describeTrigger(rule, () => '进行中'), '拖入「进行中」');
   assert.equal(cf.describeAction(rule.actions[0], [field({ id: 'f1', label: '进入时间' })]), '设置 「进入时间」 = 当前时间');
   assert.equal(cf.describeAction({ kind: 'clearField', target: 'builtin:startedAt', value: null }, []), '清空 开始时间');
+
+  // 类型化规则输入与失效引用，防止保存了配置但运行时静默跳过。
+  const numeric = field({id: 'f1', type: 'number'});
+  const constantRule = {...rule, actions: [{kind: 'setField', target: 'f1', value: {kind: 'constant', value: 'abc', name: '', fieldId: '', text: ''}}]};
+  assert.match(cf.validateRuleConfig(constantRule, [numeric], [project]), /类型不匹配/);
+  constantRule.actions[0].value.value = 0;
+  assert.equal(cf.validateRuleConfig(constantRule, [numeric], [project]), '');
+  assert.match(cf.validateRuleConfig(rule, [field({source:'builtin', builtin:'createdAt'})], [project]), /只读/);
+  assert.match(cf.validateRuleConfig({...rule, actions:[{kind:'setField', target:'f1', value:{kind:'field',fieldId:'missing'}}]}, [numeric], [project]), /来源字段/);
+  assert.equal(cf.builtinFieldType('createdAt'), 'datetime');
+  assert.equal(cf.actionTargetDef('builtin:endDate', []).type, 'date');
+  assert.equal(cf.coerceMs('2026-02-30 09:30'), null);
 
   console.log('PASS: 规范化 / 强转 / 校验 / 内置属性求值 / 作用范围 / 默认值 / 规则校验与失效提示。');
 } finally {
