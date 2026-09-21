@@ -1,8 +1,8 @@
-//! DDL + 迁移。USER_VERSION = 12。
+//! DDL + 迁移。USER_VERSION = 13。
 //! 注意：SQLite 列序是硬契约——schema ↔ row ↔ mod 的 SELECT/INSERT 三处同步。
 //! 版本号必须与 config::CURRENT_DATA_VERSION 一致：open_existing 用它做跨进程版本门禁。
 
-pub const USER_VERSION: i64 = 12;
+pub const USER_VERSION: i64 = 13;
 
 /// 建表（新库直接完整 v6 形态；旧库缺列由 migrate 补）
 pub fn create_tables(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS projects (
   frontend_repo_token TEXT NOT NULL DEFAULT '',
   backend_repo_token TEXT NOT NULL DEFAULT '',
   swimlanes TEXT,
-  created_by TEXT NOT NULL DEFAULT 'human'  -- v7：创建者（human | ai）
+  created_by TEXT NOT NULL DEFAULT 'human',  -- v7：创建者（human | ai）
+  sort_order INTEGER NOT NULL DEFAULT 0      -- v13：项目列表手工排序（升序展示，新在前）
 );
 CREATE TABLE IF NOT EXISTS todos (
   id TEXT PRIMARY KEY,
@@ -219,6 +220,18 @@ pub fn migrate(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
                 "ALTER TABLE resources ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
                  UPDATE resources SET sort_order =
                    (SELECT COUNT(*) FROM resources AS r WHERE r.rowid > resources.rowid);",
+            )?;
+        }
+    }
+
+    if version < 13 {
+        // v12 → v13：projects 补 sort_order（项目列表手工排序）；
+        // 存量按插入顺序回填（与迁移前列表顺序一致）
+        if table_exists(conn, "projects")? && !column_exists(conn, "projects", "sort_order")? {
+            conn.execute_batch(
+                "ALTER TABLE projects ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
+                 UPDATE projects SET sort_order =
+                   (SELECT COUNT(*) FROM projects AS p WHERE p.rowid < projects.rowid);",
             )?;
         }
     }
@@ -499,6 +512,53 @@ mod tests {
             .map(|item| item.unwrap())
             .collect();
         assert_eq!(ids, vec!["r3", "r2", "r1"]);
+        let v: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, USER_VERSION);
+    }
+
+    #[test]
+    fn migrate_v12_db_adds_project_sort_order() {
+        let conn = open_in_memory().unwrap();
+        // 模拟 v12 库：projects 无 sort_order，三条项目按插入顺序
+        conn.execute_batch(
+            "CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL,
+               project_dir TEXT NOT NULL DEFAULT '', frontend_dir TEXT, backend_dir TEXT,
+               frontend_repo_url TEXT, backend_repo_url TEXT, production_branch TEXT,
+               branch_rule TEXT, archived INTEGER, created_at INTEGER, updated_at INTEGER,
+               frontend_repo_token TEXT, backend_repo_token TEXT, swimlanes TEXT,
+               created_by TEXT NOT NULL DEFAULT 'human');
+             CREATE TABLE todos (id TEXT PRIMARY KEY, project_id TEXT, title TEXT,
+               note TEXT, repo_path TEXT, branch TEXT, status TEXT, swimlane_id TEXT,
+               quadrant TEXT, seq INTEGER, tag TEXT, start_date TEXT, end_date TEXT,
+               blocker TEXT, archived INTEGER, started_at INTEGER, done_at INTEGER,
+               commits TEXT, sort_order INTEGER, created_at INTEGER, updated_at INTEGER,
+               created_by TEXT NOT NULL DEFAULT 'human', ai_coordinated INTEGER NOT NULL DEFAULT 0,
+               custom_fields TEXT NOT NULL DEFAULT '[]');
+             CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE resources (id TEXT PRIMARY KEY, project_id TEXT, title TEXT NOT NULL,
+               url TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '',
+               tags TEXT NOT NULL DEFAULT '[]', created_at INTEGER NOT NULL,
+               updated_at INTEGER NOT NULL, sort_order INTEGER NOT NULL DEFAULT 0);
+             INSERT INTO projects (id, name, created_at, updated_at) VALUES ('p1','甲',1,1);
+             INSERT INTO projects (id, name, created_at, updated_at) VALUES ('p2','乙',2,2);
+             INSERT INTO projects (id, name, created_at, updated_at) VALUES ('p3','丙',3,3);
+             PRAGMA user_version = 12;",
+        )
+        .unwrap();
+        crate::db::init(&conn).unwrap();
+        assert!(column_exists(&conn, "projects", "sort_order").unwrap());
+        // 回填保持原有插入顺序（升序 0..n）
+        let mut stmt = conn
+            .prepare("SELECT id FROM projects ORDER BY sort_order ASC")
+            .unwrap();
+        let ids: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .map(|item| item.unwrap())
+            .collect();
+        assert_eq!(ids, vec!["p1", "p2", "p3"]);
         let v: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();

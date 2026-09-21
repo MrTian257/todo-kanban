@@ -9,6 +9,7 @@ import {
   TodoStatus,
 } from "./types";
 import { canonicalizeCustomFields } from "./customFields";
+import { compareManualOrder } from "./manualOrder";
 
 /** 按状态取泳道：优先该状态第一个泳道，兜底默认 id */
 export function swimlaneForStatus(project: Project | undefined, status: TodoStatus): string {
@@ -92,6 +93,8 @@ export function normalizeProject(raw: Partial<Project>): Project {
     createdBy: raw.createdBy || "human",
     createdAt: raw.createdAt ?? Date.now(),
     updatedAt: raw.updatedAt ?? Date.now(),
+    // 旧数据（v12 及以前）没有手工序号：统一 0，由展示层按更新时间兜底排序
+    sortOrder: typeof raw.sortOrder === "number" && Number.isFinite(raw.sortOrder) ? raw.sortOrder : 0,
   };
 }
 
@@ -125,7 +128,8 @@ export function normalizeResource(raw: Partial<LibraryResource>): LibraryResourc
 /** 全量归一化（含提交全局去重兜底） */
 export function normalizeState(state: AppState | null | undefined): AppState {
   if (!state) return { projects: [], todos: [], resources: [] };
-  const projects = state.projects.map(normalizeProject);
+  // 项目按手工排序归一：侧栏切换器与项目列表共用同一份展示顺序
+  const projects = state.projects.map(normalizeProject).sort(compareManualOrder);
   const projectById = new Map(projects.map((p) => [p.id, p]));
   const todos = state.todos.map((t) => normalizeTodo(t, projectById.get(t.projectId)));
   return {

@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import { ResourceDetailDialog } from "@/components/workflow/ResourceDetailDialog";
 import { resourceBacklinkIndex, resourceSearchText, resourceSummary } from "@/lib/listPerformance";
-import { compareResources } from "@/lib/resourceOrder";
+import { compareManualOrder } from "@/lib/manualOrder";
 import { useWorkflow } from "@/lib/workflow";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -76,7 +76,7 @@ export function ResourceLibraryPage() {
   }), [resources, projectFilter, projectById]);
 
   const tags = useMemo(() => [...new Set(scoped.flatMap(resource => resource.tags))].sort((a, b) => a.localeCompare(b, "zh-CN")), [scoped]);
-  const ordered = useMemo(() => [...scoped].sort(compareResources), [scoped]);
+  const ordered = useMemo(() => [...scoped].sort(compareManualOrder), [scoped]);
   const visible = useMemo(() => ordered.filter(resource =>
     (tag === "all" || resource.tags.includes(tag)) && (!deferredQuery || resourceSearchText(resource).includes(deferredQuery))),
     [ordered, deferredQuery, tag]);

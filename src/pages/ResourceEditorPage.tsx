@@ -13,7 +13,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useEditingGuard } from "@/lib/editingGuard";
 import { normalizeResourceTags } from "@/lib/normalize";
-import { frontSortOrder } from "@/lib/resourceOrder";
+import { frontSortOrder } from "@/lib/manualOrder";
 import { flushPersistence, useAppStore } from "@/lib/store";
 import type { LibraryResource } from "@/lib/types";
 import { newId } from "@/lib/utils";

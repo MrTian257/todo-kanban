@@ -38,6 +38,7 @@ import {
   Project,
 } from "@/lib/types";
 import { flushPersistence, useAppStore } from "@/lib/store";
+import { frontSortOrder } from "@/lib/manualOrder";
 import { newId } from "@/lib/utils";
 
 const schema = z.object({
@@ -91,6 +92,7 @@ const tokenPlaceholder = (value: string) => value.startsWith("session://")
 
 export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
   const upsertProject = useAppStore(state => state.upsertProject);
+  const projects = useAppStore(state => state.projects);
   const isEdit = !!project;
   const submittedProject = React.useRef<Project | null>(null);
   React.useEffect(() => { submittedProject.current = null; }, [open, project]);
@@ -270,6 +272,8 @@ export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
       createdBy: project?.createdBy ?? "human",
       createdAt: project?.createdAt ?? now,
       updatedAt: now,
+      // 新建项目排在最前：取当前最小序号 - 1；编辑保持原位置
+      sortOrder: project?.sortOrder ?? frontSortOrder(projects),
     };
     upsertProject(p);
     submittedProject.current = useAppStore.getState().projects.find(item => item.id === p.id) ?? p;

@@ -56,7 +56,7 @@ mcp-server（独立 stdio 进程，复用同一个 core）
 
 ### 数据版本升级框架（ADR-011）
 
-- 版本常量集中在 `src-tauri/config/src/lib.rs`：`CURRENT_DATA_VERSION = 12`、`MIN_SUPPORTED_DATA_VERSION`、`MIGRATION_STEPS`（v1→v12 逐级）、`CHANGELOG`。
+- 版本常量集中在 `src-tauri/config/src/lib.rs`：`CURRENT_DATA_VERSION = 13`、`MIN_SUPPORTED_DATA_VERSION`、`MIGRATION_STEPS`（v1→v13 逐级）、`CHANGELOG`。
 - `todo-kanban-upgrade::upgrade::ensure()` 编排：版本判定 →（兼容升级时）硬备份到运行目录 `backup/` → 逐级迁移 → 报告。语义：v=0（新库）不备份直接迁到最新；TooNew / TooOld 拒绝；调用方负责开连接 + 幂等建表。
 - 前端启动门禁：`db_check_version` 命令 → `src/lib/version.ts` → 不兼容时全屏 `VersionBlockedPage`（`src/components/version/`），升级成功 toast 提示。
 - **新增数据版本时**：提升 config 常量 → upgrade 写迁移 → 更新 MIGRATION_STEPS / CHANGELOG → 前端 `PREVIEW_REPORT` 同步。schema 变更需同步 `schema.rs`（DDL）、`row.rs`（行映射）、`db/mod.rs`（SELECT/INSERT）三处——**SQLite 列序是硬契约**（见 schema.rs 头部注释）。

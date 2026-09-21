@@ -3,7 +3,7 @@
 // 外部同步仅在无待保存变更时应用；读取失败不会创建或保存空状态。
 
 import { moveTask } from "./boardOrder";
-import { reorderResources } from "./resourceOrder";
+import { compareManualOrder, reorderManual } from "./manualOrder";
 import { rebaseRecords, reconcileRecords } from "./stateReconcile";
 import { collectWarmRepos, warmRepos } from "./repoWarm";
 import { create } from "zustand";
@@ -114,6 +114,7 @@ function demoState(): AppState {
     createdBy: "human",
     createdAt: now - 30 * day,
     updatedAt: now - day,
+    sortOrder: 0,
   };
   const mk = (
     id: string,
@@ -198,6 +199,8 @@ interface AppStore extends AppState {
   removeResource: (id: string) => void;
   /** 资料库拖拽排序：按可见项的新顺序在原槽位间重排（未显示的项不动） */
   commitResourceOrder: (orderedVisibleIds: string[]) => void;
+  /** 项目列表拖拽排序（同语义：只重排可见项占用的槽位） */
+  commitProjectOrder: (orderedVisibleIds: string[]) => void;
 }
 
 const ACTIVE_PROJECT_KEY = "todo-kanban.active-project-id.v1";
@@ -259,7 +262,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
   upsertProject: (p) => {
     // normalize 兜底：新建项目 swimlanes=null → 默认三泳道，避免看板/待办页空列
     const norm = normalizeProject(p);
-    const projects = [...get().projects.filter((x) => x.id !== p.id), norm];
+    // 保持手工排序：插入后按 sortOrder 重排（新项目由表单取最小值 - 1 → 落在最前）
+    const projects = [...get().projects.filter((x) => x.id !== p.id), norm].sort(compareManualOrder);
     const activeProjectId = norm.archived && get().activeProjectId === norm.id ? null : get().activeProjectId;
     if (activeProjectId !== get().activeProjectId) writeActiveProjectId(null);
     set({ projects, activeProjectId });
@@ -407,7 +411,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
 
   commitResourceOrder: (orderedVisibleIds) => {
-    set({ resources: reorderResources(get().resources, orderedVisibleIds) });
+    set({ resources: reorderManual(get().resources, orderedVisibleIds) });
+  },
+
+  commitProjectOrder: (orderedVisibleIds) => {
+    set({ projects: reorderManual(get().projects, orderedVisibleIds) });
   },
 
   removeResource: (id) => {

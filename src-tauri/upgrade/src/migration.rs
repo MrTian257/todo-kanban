@@ -145,6 +145,18 @@ pub fn migrate(conn: &Connection) -> UpgradeResult<MigrateOutcome> {
         }
     }
 
+    if from < 13 {
+        // v12 → v13：projects 补 sort_order（项目列表手工排序）；
+        // 存量按插入顺序回填。projects 由 core 建表，缺表时跳过。
+        if table_exists(&tx, "projects")? && !column_exists(&tx, "projects", "sort_order")? {
+            tx.execute_batch(
+                "ALTER TABLE projects ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
+                 UPDATE projects SET sort_order =
+                   (SELECT COUNT(*) FROM projects AS p WHERE p.rowid < projects.rowid);",
+            )?;
+        }
+    }
+
     tx.execute_batch(&format!("PRAGMA user_version = {CURRENT_VERSION};"))?;
     tx.commit().map_err(UpgradeError::from)?;
     // 同步写入 app_meta，便于外部诊断
@@ -275,6 +287,33 @@ mod tests {
             .map(|item| item.unwrap())
             .collect();
         assert_eq!(ids, vec!["r3", "r2", "r1"], "最后插入的资料应排最前");
+    }
+
+    /// v12 → v13：projects 补 sort_order，并按插入顺序回填
+    #[test]
+    fn migrate_v12_db_adds_project_sort_order() {
+        let conn = open_mem();
+        conn.execute_batch(
+            "CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL,
+               created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+             INSERT INTO projects (id, name, created_at, updated_at) VALUES ('p1','甲',1,1);
+             INSERT INTO projects (id, name, created_at, updated_at) VALUES ('p2','乙',2,2);
+             PRAGMA user_version = 12;",
+        )
+        .unwrap();
+        let out = migrate(&conn).unwrap();
+        assert_eq!(out.to, CURRENT_VERSION);
+        assert!(column_exists(&conn, "projects", "sort_order").unwrap());
+        let mut stmt = conn
+            .prepare("SELECT id FROM projects ORDER BY sort_order ASC")
+            .unwrap();
+        let ids: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .map(|item| item.unwrap())
+            .collect();
+        assert_eq!(ids, vec!["p1", "p2"], "存量按插入顺序回填");
     }
 
     #[test]

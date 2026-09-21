@@ -71,6 +71,8 @@ export interface Project {
   createdBy: "human" | "ai";
   createdAt: number;
   updatedAt: number;
+  /** 手工排序（v13）：升序展示；新建项目取最小值 - 1 排在最前 */
+  sortOrder: number;
 }
 
 export interface Todo {

@@ -150,6 +150,9 @@ pub struct DbProject {
     pub branch_rule: Option<DbBranchRule>,
     /// NULL → 前端 normalize 预置默认三泳道
     pub swimlanes: Option<Vec<DbSwimlane>>,
+    /// 手工排序（v13）：升序展示；新建项目取最小值 - 1 排在最前
+    #[serde(default)]
+    pub sort_order: i64,
     #[serde(default)]
     pub archived: bool,
     pub created_at: i64,

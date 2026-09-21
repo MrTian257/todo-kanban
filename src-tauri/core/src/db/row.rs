@@ -126,8 +126,8 @@ pub const TODO_UPSERT: &str = "INSERT INTO todos (id, project_id, title, note, r
     custom_fields=excluded.custom_fields
   WHERE excluded.updated_at >= todos.updated_at";
 
-/// projects 全字段 SELECT（16 列，列序勿动）
-pub const PROJECT_SELECT: &str = "SELECT id, name, project_dir, frontend_dir, backend_dir, frontend_repo_url, backend_repo_url, production_branch, branch_rule, archived, created_at, updated_at, frontend_repo_token, backend_repo_token, swimlanes, created_by FROM projects";
+/// projects 全字段 SELECT（17 列，列序勿动）
+pub const PROJECT_SELECT: &str = "SELECT id, name, project_dir, frontend_dir, backend_dir, frontend_repo_url, backend_repo_url, production_branch, branch_rule, archived, created_at, updated_at, frontend_repo_token, backend_repo_token, swimlanes, created_by, sort_order FROM projects";
 
 pub fn row_to_project(row: &Row) -> AppResult<DbProject> {
     Ok(DbProject {
@@ -148,6 +148,7 @@ pub fn row_to_project(row: &Row) -> AppResult<DbProject> {
         swimlanes: parse_json_or::<Option<Vec<DbSwimlane>>>(row.get(14)?, None),
         // 与 project_params 的落库规则一致：存量空串与 NULL 都归一为 human（v7 之前的行）
         created_by: creator_or_default(row.get::<_, Option<String>>(15)?),
+        sort_order: row.get(16)?,
     })
 }
 
@@ -181,18 +182,20 @@ pub fn project_params(p: &DbProject) -> Vec<Box<dyn rusqlite::ToSql>> {
         } else {
             p.created_by.clone()
         }),
+        Box::new(p.sort_order),
     ]
 }
 
-pub const PROJECT_UPSERT: &str = "INSERT INTO projects (id, name, project_dir, frontend_dir, backend_dir, frontend_repo_url, backend_repo_url, production_branch, branch_rule, archived, created_at, updated_at, frontend_repo_token, backend_repo_token, swimlanes, created_by)
-  VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)
+pub const PROJECT_UPSERT: &str = "INSERT INTO projects (id, name, project_dir, frontend_dir, backend_dir, frontend_repo_url, backend_repo_url, production_branch, branch_rule, archived, created_at, updated_at, frontend_repo_token, backend_repo_token, swimlanes, created_by, sort_order)
+  VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)
   ON CONFLICT(id) DO UPDATE SET name=excluded.name, project_dir=excluded.project_dir,
     frontend_dir=excluded.frontend_dir, backend_dir=excluded.backend_dir,
     frontend_repo_url=excluded.frontend_repo_url, backend_repo_url=excluded.backend_repo_url,
     production_branch=excluded.production_branch, branch_rule=excluded.branch_rule,
     archived=excluded.archived, updated_at=excluded.updated_at,
     frontend_repo_token=excluded.frontend_repo_token, backend_repo_token=excluded.backend_repo_token,
-    swimlanes=excluded.swimlanes, created_by=excluded.created_by
+    swimlanes=excluded.swimlanes, created_by=excluded.created_by,
+    sort_order=excluded.sort_order
   WHERE excluded.updated_at >= projects.updated_at";
 
 // pub fn load_projects_from_conn(conn: &rusqlite::Connection) -> AppResult<Vec<DbProject>> {
