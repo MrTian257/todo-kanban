@@ -42,8 +42,6 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { to: "/focus", label: "今日焦点", icon: CalendarDays },
-  { to: "/todos", label: "全部待办", icon: ListTodo },
   // 项目看板 = 当前活跃项目的看板：/board 只是稳定入口，真实路由是 /project/:id，两者都算选中
   {
     to: "/board",
@@ -51,9 +49,11 @@ const NAV_ITEMS: NavItem[] = [
     icon: Kanban,
     match: (pathname) => pathname.startsWith("/board") || pathname.startsWith("/project/"),
   },
+  { to: "/focus", label: "今日焦点", icon: CalendarDays },
+  { to: "/todos", label: "全部待办", icon: ListTodo },
+  { to: "/library", label: "资料库", icon: BookOpen },
   // 项目资料只负责项目列表本身（看板已由「项目看板」承担）
   { to: "/projects", label: "项目资料", icon: FolderKanban },
-  { to: "/library", label: "资料库", icon: BookOpen },
 ];
 
 /** 侧栏宽度持久化（localStorage，浏览器/Tauri 通用） */
