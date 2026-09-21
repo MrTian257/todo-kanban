@@ -52,7 +52,16 @@ function ResourceEditorForm({ resourceId }: { resourceId: string }) {
   const projects = useAppStore(state => state.projects);
   const activeProjectId = useAppStore(state => state.activeProjectId);
   const upsertResource = useAppStore(state => state.upsertResource);
-  const project = projects.find(item => item.id === activeProjectId && !item.archived) ?? null;
+  const activeProjects = React.useMemo(() => projects.filter(item => !item.archived), [projects]);
+  const projectById = React.useMemo(() => new Map(projects.map(item => [item.id, item])), [projects]);
+  // 所属项目可改（资料库已跨项目展示）：编辑保留原归属，新建默认当前项目、其次第一个活跃项目
+  const [ownerId, setOwnerId] = React.useState(() => {
+    if (resource?.projectId) return resource.projectId;
+    const preferred = projects.find(item => item.id === activeProjectId && !item.archived);
+    return preferred?.id ?? activeProjects[0]?.id ?? "";
+  });
+  const initialOwnerId = React.useRef(ownerId).current;
+  const owner = projects.find(item => item.id === ownerId);
 
   const initial = React.useMemo(() => ({
     title: resource?.title ?? "",
@@ -66,7 +75,8 @@ function ResourceEditorForm({ resourceId }: { resourceId: string }) {
   const [saving, setSaving] = React.useState(false);
   const saved = React.useRef(false);
   const dirty =
-    form.title !== initial.title || form.url !== initial.url || form.tags !== initial.tags || form.note !== initial.note;
+    form.title !== initial.title || form.url !== initial.url || form.tags !== initial.tags ||
+    form.note !== initial.note || ownerId !== initialOwnerId;
   // 未保存时拦截路由跳转（菜单、返回按钮、历史返回）
   useEditingGuard(dirty && !saved.current);
 
@@ -87,8 +97,8 @@ function ResourceEditorForm({ resourceId }: { resourceId: string }) {
     try {
       const next: LibraryResource = {
         id: resource?.id ?? newId(),
-        // 保留原归属：未归属资料或非当前项目的资料不会被本次编辑悄悄改挂到当前项目
-        projectId: resource?.projectId ?? project?.id ?? null,
+        // 归属以表单为准；选择「未归属资料」时存 null（资料仍可在资料库的未归属筛选项下看到）
+        projectId: ownerId || null,
         title,
         url,
         note: form.note,
@@ -126,16 +136,14 @@ function ResourceEditorForm({ resourceId }: { resourceId: string }) {
     );
   }
 
-  if (isNew && !project) {
+  if (isNew && !activeProjects.length) {
     return (
       <div className="tk-page h-full overflow-y-auto">
         <div className="flex w-full flex-col items-center gap-4 py-28 text-center">
           <BookOpen className="h-10 w-10 text-primary/60" />
           <h1 className="tk-page-heading">新建资料</h1>
-          <p className="text-sm text-muted-foreground">请先从左侧顶部选择一个活跃项目，再添加它的资料。</p>
-          <Button variant="outline" className="gap-2" onClick={leave}>
-            <ArrowLeft className="h-4 w-4" />返回资料库
-          </Button>
+          <p className="text-sm text-muted-foreground">还没有活跃项目。资料需要归属一个项目，先去项目资料创建或恢复项目。</p>
+          <Button variant="outline" onClick={() => navigate("/projects")}>前往项目资料</Button>
         </div>
       </div>
     );
@@ -143,7 +151,7 @@ function ResourceEditorForm({ resourceId }: { resourceId: string }) {
 
   return (
     <div className="tk-page flex h-full w-full flex-col">
-      <div className="tk-eyebrow">{project ? `${project.name} / 项目资料库` : "资料库"}</div>
+      <div className="tk-eyebrow">{owner ? `${owner.name} / 资料库` : "未归属资料 / 资料库"}</div>
       <div className="mb-6 flex flex-wrap items-center gap-3">
         <Button variant="ghost" size="icon" aria-label="返回资料库" onClick={leave}>
           <ArrowLeft className="h-4 w-4" />
@@ -245,9 +253,21 @@ function ResourceEditorForm({ resourceId }: { resourceId: string }) {
             )}
           </div>
 
-          <div className="space-y-1 border-t pt-5 text-sm">
-            <p className="text-xs text-muted-foreground">所属项目</p>
-            <p>{project ? project.name : "未归属"}</p>
+          <div className="space-y-2 border-t pt-5 text-sm">
+            <Label htmlFor="resource-project">所属项目</Label>
+            <select
+              id="resource-project"
+              value={ownerId}
+              onChange={event => setOwnerId(event.target.value)}
+              className="h-9 w-full rounded-[8px] border border-input bg-background/50 px-3 text-sm"
+            >
+              {/* 未归属 / 已归档项目补选项：打开编辑不会被静默改挂到其他项目 */}
+              {!ownerId && <option value="">未归属资料</option>}
+              {ownerId && !activeProjects.some(item => item.id === ownerId) && (
+                <option value={ownerId}>{projectById.get(ownerId)?.name ?? "已归档项目"}</option>
+              )}
+              {activeProjects.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+            </select>
             {resource && (
               <p className="pt-2 text-xs text-muted-foreground">
                 创建于 {new Date(resource.createdAt).toLocaleString()}
