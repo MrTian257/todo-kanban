@@ -10,7 +10,8 @@
 
 | 路由 | 页面 | 职责 |
 | --- | --- | --- |
-| `/` | 重定向 | 无项目 → `/projects`（引导创建第一个项目）；有项目 → `/focus` |
+| `/` | 重定向 | 无项目 → `/projects`（引导创建第一个项目）；有项目 → 上次打开项目的看板；无记忆 → `/focus` |
+| `/board` | 重定向 | 「项目看板」菜单入口：解析为当前活跃项目的 `/project/:id`；无活跃项目 → `/projects` |
 | `/focus` | FocusPage 今日焦点 | 进行中或今天创建、且项目未归档的待办 |
 | `/todos` | TodoListPage Todo List | 全部待办一览（状态/项目筛选，支持快捷创建） |
 | `/projects` | ProjectListPage 项目资料 | 项目列表与维护（新增占位卡片） |
@@ -24,8 +25,8 @@
 ## 2. 侧边导航（shadcn sidebar）
 
 - 基于 `SidebarProvider` + `SidebarInset` 标准布局（`components/layout/SidebarLayout.tsx`）
-- 内容：SidebarHeader（品牌）→ SidebarContent（「工作台」分组 + 3 个导航项：今日焦点 / Todo List / 项目资料，`SidebarMenuButton asChild` + `NavLink` + tooltip）→ SidebarFooter（明暗切换按钮 + 设置入口）→ SidebarRail
-- 当前路由自动高亮；始终常驻展开；侧栏配色随主题皮肤联动
+- 内容：项目上下文区（当前项目切换）→ 导航（工作空间分组 + 5 个导航项：今日焦点 / 全部待办 / 项目看板 / 项目资料 / 资料库）→ 明暗切换按钮 + 设置入口
+- 当前路由自动高亮：**项目看板**同时覆盖 `/board` 与 `/project/:id`（自定义 `match`），项目资料只覆盖 `/projects`；侧栏配色随主题皮肤联动
 
 ## 3. 泳道看板（BoardPage / SwimlaneBoard）
 

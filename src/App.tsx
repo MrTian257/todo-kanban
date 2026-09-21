@@ -30,14 +30,28 @@ import { PersistenceStatus } from "@/components/layout/PersistenceStatus";
 
 let startupVersionCheck: ReturnType<typeof dbCheckVersion> | undefined;
 
+/** 当前活跃项目的看板路径；没有活跃项目时回退到项目列表去选一个。 */
+function activeBoardPath(activeProjectId: string | null) {
+  return activeProjectId ? `/project/${activeProjectId}` : "/projects";
+}
+
 function RootRedirect() {
   const projects = useAppStore(state => state.projects);
+  const activeProjectId = useAppStore(state => state.activeProjectId);
   const loaded = useAppStore(state => state.loaded);
   if (!loaded) {
     return <div className="flex h-full items-center justify-center text-muted-foreground">加载中…</div>;
   }
   if (projects.length === 0) return <Navigate to="/projects" replace />;
+  // 启动落点 = 上次退出时打开的项目看板（activeProjectId 存 localStorage，切换项目时同步更新）
+  if (activeProjectId) return <Navigate to={activeBoardPath(activeProjectId)} replace />;
   return <Navigate to="/focus" replace />;
+}
+
+/** 「项目看板」菜单落点：始终解析到当前活跃项目；项目被归档/删除后回项目列表重选。 */
+function ActiveBoardRedirect() {
+  const activeProjectId = useAppStore(state => state.activeProjectId);
+  return <Navigate to={activeBoardPath(activeProjectId)} replace />;
 }
 
 function Application() {
@@ -103,6 +117,8 @@ function Application() {
               <Route path="/focus" element={<FocusPage />} />
               <Route path="/todos" element={<TodoListPage />} />
               <Route path="/projects" element={<ProjectListPage />} />
+              {/* 项目看板：菜单落在稳定路径 /board，再解析到当前活跃项目的看板 */}
+              <Route path="/board" element={<ActiveBoardRedirect />} />
               <Route path="/project/:projectId" element={<BoardPage />} />
               <Route path="/project/:projectId/todo/:todoId" element={<TodoDetailPage />} />
               <Route path="/library" element={<ResourceLibraryPage />} />

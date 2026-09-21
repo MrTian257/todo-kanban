@@ -20,7 +20,7 @@ pub fn quiet_command(program: &str) -> Command {
         use std::os::windows::process::CommandExt;
         let mut cmd = cmd;
         cmd.creation_flags(CREATE_NO_WINDOW);
-        return cmd;
+        cmd
     }
     #[cfg(not(windows))]
     cmd

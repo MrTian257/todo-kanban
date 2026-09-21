@@ -27,6 +27,8 @@ pub fn install(app: &tauri::App) -> tauri::Result<()> {
         .item(&action("focus", "今日焦点", "Cmd+1")?)
         .item(&action("todos", "全部待办", "Cmd+2")?)
         .item(&action("projects", "项目资料", "Cmd+3")?)
+        // 项目看板 = 当前活跃项目的看板（前端 /board 解析）；沿用既有 ⌘1/⌘2/⌘3 不改号
+        .item(&action("board", "项目看板", "Cmd+4")?)
         .separator()
         .item(&action("search", "搜索任务…", "Cmd+Shift+F")?)
         .build()?;
@@ -69,7 +71,7 @@ pub fn install(app: &tauri::App) -> tauri::Result<()> {
                 }
             } else if matches!(
                 id,
-                "settings" | "focus" | "todos" | "projects" | "search" | "sidebar" | "theme"
+                "settings" | "focus" | "todos" | "board" | "projects" | "search" | "sidebar" | "theme"
             ) {
                 if let Err(error) = window.emit("app-menu", id) {
                     log::error!("菜单操作发送失败：{error}");

@@ -27,7 +27,7 @@ todo-kanban/
 
 | 想改什么 | 位置 |
 | --- | --- |
-| 前端路由/页面 | `src/pages/` + `src/App.tsx`（HashRouter 9 路由） |
+| 前端路由/页面 | `src/pages/` + `src/App.tsx`（HashRouter 12 路由；启动落点 = 上次打开项目的看板 `/project/:id`，「项目看板」菜单入口 `/board`） |
 | 前端状态/数据流 | `src/lib/store.ts`（唯一 zustand store，ADR-008 写链） |
 | 前端类型（与后端对齐） | `src/lib/types.ts` ↔ `src-tauri/core/src/models.rs`（改字段必须两端同步） |
 | 拖拽/泳道 | `src/components/board/SwimlaneBoard.tsx` + `src/lib/boardOrder.ts`（有 node 测试） |

@@ -11,6 +11,7 @@ import {
   Search,
   CalendarDays,
   Copy,
+  Kanban,
   ListTodo,
   Minus,
   Moon,
@@ -22,6 +23,7 @@ import {
   FolderKanban,
   BookOpen,
   X,
+  type LucideIcon,
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isTauri } from "@/lib/storage";
@@ -31,9 +33,25 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ProjectContextSwitcher } from "@/components/layout/ProjectContextSwitcher";
 
-const NAV_ITEMS = [
+interface NavItem {
+  to: string;
+  label: string;
+  icon: LucideIcon;
+  /** 自定义选中判定（默认按路径前缀匹配） */
+  match?: (pathname: string) => boolean;
+}
+
+const NAV_ITEMS: NavItem[] = [
   { to: "/focus", label: "今日焦点", icon: CalendarDays },
   { to: "/todos", label: "全部待办", icon: ListTodo },
+  // 项目看板 = 当前活跃项目的看板：/board 只是稳定入口，真实路由是 /project/:id，两者都算选中
+  {
+    to: "/board",
+    label: "项目看板",
+    icon: Kanban,
+    match: (pathname) => pathname.startsWith("/board") || pathname.startsWith("/project/"),
+  },
+  // 项目资料只负责项目列表本身（看板已由「项目看板」承担）
   { to: "/projects", label: "项目资料", icon: FolderKanban },
   { to: "/library", label: "资料库", icon: BookOpen },
 ];
@@ -159,7 +177,8 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
     let stop: (() => void) | undefined;
     void listen<string>("app-menu", ({ payload }) => {
       if (!alive) return;
-      if (["focus", "todos", "projects", "settings", "workflow"].includes(payload)) navigate(payload === "workflow" ? "/settings/workflow" : `/${payload}`);
+      // board 走稳定入口 /board（解析到当前活跃项目的看板），其余按同名路径跳转
+      if (["focus", "todos", "board", "projects", "settings", "workflow"].includes(payload)) navigate(payload === "workflow" ? "/settings/workflow" : `/${payload}`);
       else if (payload === "search") { searchRef.current?.focus(); searchRef.current?.select(); }
       else if (payload === "sidebar") {
         if (narrow) setMobileExpanded(value => !value);
@@ -193,7 +212,7 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
         </Tooltip>
 
         {isMacOS && <div data-tauri-drag-region className="tk-toolbar-title h-full min-w-0 flex-1 flex items-center truncate px-3 text-sm font-semibold">
-          {location.pathname.startsWith("/project/") ? "项目工作台" : location.pathname === "/settings/workflow" ? "设置 / 工作流" : location.pathname === "/settings" ? "设置" : NAV_ITEMS.find(item => location.pathname.startsWith(item.to))?.label ?? "工作台"}
+          {location.pathname.startsWith("/project/") ? "项目看板" : location.pathname === "/settings/workflow" ? "设置 / 工作流" : location.pathname === "/settings" ? "设置" : NAV_ITEMS.find(item => location.pathname.startsWith(item.to))?.label ?? "工作台"}
         </div>}
         <form className="tk-toolbar-search mx-2 flex w-full min-w-0 max-w-sm items-center gap-1" onSubmit={event => { event.preventDefault(); navigate(`/todos?q=${encodeURIComponent(search)}`); }}>
           <Input ref={searchRef} aria-label="全局搜索" value={search} onChange={event => setSearch(event.target.value)} placeholder={`搜索任务 · ${(isMacOS ? "⌘⇧F" : shortcutLabel("K"))}`} className="h-7 min-w-0 text-xs" />
@@ -270,27 +289,29 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
 
           {!collapsed && <p className="px-5 pb-2 pt-3 text-[11px] font-medium text-muted-foreground">工作空间</p>}
           <nav aria-label="主导航" className="flex-1 space-y-2 overflow-y-auto p-2">
-            {NAV_ITEMS.map(({ to, label, icon: Icon }) => (
-              <NavLink
-                key={to}
-                to={to}
-                title={label}
-                aria-label={label}
-                data-selected={location.pathname.startsWith(to) || (to === "/projects" && location.pathname.startsWith("/project/"))}
-                className={({ isActive }) =>
-                  cn(
-                    "flex items-center gap-2.5 rounded-md px-3 py-3 text-sm transition-colors",
-                    collapsed && "justify-center px-0",
-                    (isActive || (to === "/projects" && location.pathname.startsWith("/project/")))
-                      ? "bg-primary/8 font-semibold text-primary"
-                      : "hover:bg-sidebar-accent/60",
-                  )
-                }
-              >
-                <Icon className="h-4 w-4 shrink-0" />
-                {!collapsed && <span className="truncate">{label}</span>}
-              </NavLink>
-            ))}
+            {NAV_ITEMS.map(({ to, label, icon: Icon, match }) => {
+              // 选中态统一走 match/前缀判定：项目看板要覆盖 /project/:id，不能用 NavLink 自带的 isActive
+              const selected = match ? match(location.pathname) : location.pathname.startsWith(to);
+              return (
+                <NavLink
+                  key={to}
+                  to={to}
+                  title={label}
+                  aria-label={label}
+                  data-selected={selected}
+                  className={() =>
+                    cn(
+                      "flex items-center gap-2.5 rounded-md px-3 py-3 text-sm transition-colors",
+                      collapsed && "justify-center px-0",
+                      selected ? "bg-primary/8 font-semibold text-primary" : "hover:bg-sidebar-accent/60",
+                    )
+                  }
+                >
+                  <Icon className="h-4 w-4 shrink-0" />
+                  {!collapsed && <span className="truncate">{label}</span>}
+                </NavLink>
+              );
+            })}
           </nav>
 
           {!collapsed && !isTauri() && <p className="px-5 pb-3 text-[11px] text-muted-foreground">浏览器预览 · 示例数据</p>}
