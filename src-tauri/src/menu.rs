@@ -71,7 +71,14 @@ pub fn install(app: &tauri::App) -> tauri::Result<()> {
                 }
             } else if matches!(
                 id,
-                "settings" | "focus" | "todos" | "board" | "projects" | "search" | "sidebar" | "theme"
+                "settings"
+                    | "focus"
+                    | "todos"
+                    | "board"
+                    | "projects"
+                    | "search"
+                    | "sidebar"
+                    | "theme"
             ) {
                 if let Err(error) = window.emit("app-menu", id) {
                     log::error!("菜单操作发送失败：{error}");

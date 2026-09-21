@@ -3,6 +3,7 @@
 // 外部同步仅在无待保存变更时应用；读取失败不会创建或保存空状态。
 
 import { moveTask } from "./boardOrder";
+import { reorderResources } from "./resourceOrder";
 import { rebaseRecords, reconcileRecords } from "./stateReconcile";
 import { collectWarmRepos, warmRepos } from "./repoWarm";
 import { create } from "zustand";
@@ -195,6 +196,8 @@ interface AppStore extends AppState {
   deleteSwimlane: (projectId: string, laneId: string) => void;
   upsertResource: (resource: LibraryResource) => void;
   removeResource: (id: string) => void;
+  /** 资料库拖拽排序：按可见项的新顺序在原槽位间重排（未显示的项不动） */
+  commitResourceOrder: (orderedVisibleIds: string[]) => void;
 }
 
 const ACTIVE_PROJECT_KEY = "todo-kanban.active-project-id.v1";
@@ -401,6 +404,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
   upsertResource: (resource) => {
     set({ resources: [...get().resources.filter(item => item.id !== resource.id), resource] });
+  },
+
+  commitResourceOrder: (orderedVisibleIds) => {
+    set({ resources: reorderResources(get().resources, orderedVisibleIds) });
   },
 
   removeResource: (id) => {

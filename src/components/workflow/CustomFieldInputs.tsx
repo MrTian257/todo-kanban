@@ -70,7 +70,7 @@ export function CustomFieldControl({ def, value, onChange, disabled, idPrefix = 
     const sourceHint =
       def.source === "builtin"
         ? "内置属性实时取值（" + (BUILTIN_ATTRIBUTE_LABEL[def.builtin] ?? def.builtin) + "）"
-        : "由自动脚本写入；如需修改请在「工作流 · 自动脚本」调整规则";
+        : "由自动脚本写入；如需修改或补写存量任务，请在「设置 · 自定义字段」的自动脚本里调整";
     return (
       <div className="space-y-1">
         <Label htmlFor={controlId}>{def.label}</Label>

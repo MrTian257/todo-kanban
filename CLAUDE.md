@@ -56,7 +56,7 @@ mcp-server（独立 stdio 进程，复用同一个 core）
 
 ### 数据版本升级框架（ADR-011）
 
-- 版本常量集中在 `src-tauri/config/src/lib.rs`：`CURRENT_DATA_VERSION = 11`、`MIN_SUPPORTED_DATA_VERSION`、`MIGRATION_STEPS`（v1→v11 逐级）、`CHANGELOG`。
+- 版本常量集中在 `src-tauri/config/src/lib.rs`：`CURRENT_DATA_VERSION = 12`、`MIN_SUPPORTED_DATA_VERSION`、`MIGRATION_STEPS`（v1→v12 逐级）、`CHANGELOG`。
 - `todo-kanban-upgrade::upgrade::ensure()` 编排：版本判定 →（兼容升级时）硬备份到运行目录 `backup/` → 逐级迁移 → 报告。语义：v=0（新库）不备份直接迁到最新；TooNew / TooOld 拒绝；调用方负责开连接 + 幂等建表。
 - 前端启动门禁：`db_check_version` 命令 → `src/lib/version.ts` → 不兼容时全屏 `VersionBlockedPage`（`src/components/version/`），升级成功 toast 提示。
 - **新增数据版本时**：提升 config 常量 → upgrade 写迁移 → 更新 MIGRATION_STEPS / CHANGELOG → 前端 `PREVIEW_REPORT` 同步。schema 变更需同步 `schema.rs`（DDL）、`row.rs`（行映射）、`db/mod.rs`（SELECT/INSERT）三处——**SQLite 列序是硬契约**（见 schema.rs 头部注释）。
@@ -116,7 +116,7 @@ note 持久化只存 `attachment://<todoId>/<file>` 短引用；展示/编辑时
 | 改看板拖拽/泳道管理 | components/board/SwimlaneBoard.tsx（排序纯逻辑在 lib/boardOrder.ts，有测试） |
 | 改 Markdown 备注 | components/todo/MarkdownEditor.tsx（WYSIWYG，markdown-it + turndown）+ MarkdownRenderer/View |
 | 改主题皮肤 | src/lib/theme.ts（SKINS）+ src/index.css（[data-theme] 变量） |
-| 自定义字段 / 自动脚本 | 词表与纯逻辑：`src/lib/customFields.ts` ↔ `core/src/svc/fields.rs` + `svc/automation.rs`（同规则，后端为准）；定义与规则存 workflow_state（`core/src/svc/workflow.rs` 的 fieldDefs / automations）；值存 `todos.custom_fields`（schema v11）；执行点 `db::save_state_inner`；UI 在 `src/components/workflow/` 的 FieldDefsPanel / AutomationsPanel / CustomFieldInputs（ADR-014） |
+| 自定义字段 / 自动脚本 | 词表与纯逻辑：`src/lib/customFields.ts` ↔ `core/src/svc/fields.rs` + `svc/automation.rs`（同规则，后端为准）；定义与规则存 workflow_state（`core/src/svc/workflow.rs` 的 fieldDefs / automations）；值存 `todos.custom_fields`（schema v11）；执行点 `db::save_state_inner`；UI 在设置页 `/settings/fields`（`src/pages/FieldSettingsPage.tsx` + `src/components/workflow/` 的 FieldDefsPanel / AutomationsPanel / CustomFieldInputs，ADR-014）；存量任务补写命令 `automation_backfill` |
 | 新增/改 MCP 工具 | mcp-server/src/bridge.rs（映射）+ protocol.rs（tools 表/inputSchema），业务仍走 core/svc |
 
 ## 代码规范

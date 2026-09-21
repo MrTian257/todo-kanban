@@ -5,10 +5,10 @@ import * as React from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
-import { useAppStore } from "@/lib/store";
-import { AutomationRule } from "@/lib/types";
+import { flushPersistence, reloadRemoteState, useAppStore } from "@/lib/store";
+import { AutomationRule, STATUS_LABEL } from "@/lib/types";
 import { MAX_AUTOMATIONS, describeAction, describeConditions, describeTrigger, ruleIssues } from "@/lib/customFields";
-import { saveWorkflow, useWorkflow } from "@/lib/workflow";
+import { automationBackfill, saveWorkflow, useWorkflow } from "@/lib/workflow";
 import { AutomationRuleDialog, type LaneOption } from "./AutomationRuleDialog";
 
 export function AutomationsPanel() {
@@ -19,6 +19,7 @@ export function AutomationsPanel() {
   const [editing, setEditing] = React.useState<AutomationRule | null>(null);
   const [removing, setRemoving] = React.useState<AutomationRule | null>(null);
   const [busy, setBusy] = React.useState(false);
+  const [backfilling, setBackfilling] = React.useState<AutomationRule | null>(null);
 
   const lanes: LaneOption[] = React.useMemo(
     () =>
@@ -29,6 +30,32 @@ export function AutomationsPanel() {
   );
   const laneName = (laneId: string) => lanes.find((lane) => lane.id === laneId)?.label ?? "已删除的泳道";
   const projectName = (projectId: string) => projects.find((project) => project.id === projectId)?.name ?? "";
+
+  /** 补写目标描述：泳道 / 状态触发才有「当前已处于」的语义；事件型触发返回空串（不可补写） */
+  const backfillTarget = (rule: AutomationRule): string =>
+    rule.trigger.kind === "laneEntered"
+      ? "「" + laneName(rule.trigger.laneId) + "」泳道"
+      : rule.trigger.kind === "statusChanged" && rule.trigger.to
+        ? "「" + (STATUS_LABEL[rule.trigger.to] ?? rule.trigger.to) + "」状态"
+        : "";
+
+  const runBackfill = async () => {
+    const target = backfilling;
+    if (!target) return;
+    setBusy(true);
+    try {
+      // 先落本地待写数据，再用后端权威快照覆盖（补写走 save_state 同一条写链）
+      await flushPersistence();
+      const [todos, actions] = await automationBackfill(target.id);
+      await reloadRemoteState();
+      setBackfilling(null);
+      toast.success(actions ? "已补写 " + todos + " 个任务（" + actions + " 条动作）" : "没有需要补写的任务");
+    } catch (error) {
+      toast.error(String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const saveRules = async (next: AutomationRule[], base = workflow): Promise<boolean> => {
     setBusy(true);
@@ -55,6 +82,10 @@ export function AutomationsPanel() {
         典型用法：拖入「进行中」时自动记录进入时间并写入开始时间。规则写值只能落在自定义字段与
         开始 / 完成时间、计划日期、阻塞原因上。字段变化可以串联规则；每次保存最多执行三轮，每条规则最多触发一次。
       </p>
+      <p className="text-sm text-muted-foreground">
+        规则只在事件发生的那一刻触发：在规则创建之前就已处于目标泳道 / 状态的任务不会自动拿到值，
+        用对应行的「补写」可把规则应用到这些存量任务。
+      </p>
       {!workflow.automations.length && <p className="text-sm text-muted-foreground">还没有自动脚本。</p>}
       {workflow.automations.map((rule) => {
         const issues = ruleIssues(rule, workflow.fieldDefs, lanes.map((lane) => lane.id), projects.map(project => project.id));
@@ -76,6 +107,17 @@ export function AutomationsPanel() {
               </span>
             </span>
             <span className="flex gap-2">
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={busy || !rule.enabled || !backfillTarget(rule)}
+                title={backfillTarget(rule)
+                  ? "对当前已在" + backfillTarget(rule) + "的存量任务立即执行本规则"
+                  : "只有「拖入指定泳道」与「状态变为指定值」的规则可以补写"}
+                onClick={() => setBackfilling(rule)}
+              >
+                补写
+              </Button>
               <Button
                 size="sm"
                 variant="ghost"
@@ -109,6 +151,20 @@ export function AutomationsPanel() {
           });
         }}
       />
+
+      <Dialog open={!!backfilling} onOpenChange={(next) => { if (!next && !busy) setBackfilling(null); }}>
+        <DialogContent>
+          <DialogTitle>补写存量任务</DialogTitle>
+          <DialogDescription>
+            对当前已处于{backfilling ? backfillTarget(backfilling) : ""}的任务执行「{backfilling?.name}」的动作。
+            只执行这一条规则、不级联其它规则；取值本来就相同的任务会跳过，改动可在任务变更历史中回滚。
+          </DialogDescription>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" disabled={busy} onClick={() => setBackfilling(null)}>取消</Button>
+            <Button disabled={busy} onClick={() => void runBackfill()}>{busy ? "补写中…" : "开始补写"}</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={!!removing} onOpenChange={(next) => { if (!next && !busy) setRemoving(null); }}>
         <DialogContent>

@@ -273,3 +273,8 @@ pub async fn proposal_apply(id: String) -> Result<todo_kanban_core::models::DbSt
 pub async fn proposal_reject(id: String) -> Result<(), String> {
     blocking(move || todo_kanban_core::svc::proposals::reject(&id).map_err(err_str)).await
 }
+/// 自动脚本补写：对当前已处于触发状态的存量任务应用规则动作（设置 · 自定义字段）
+#[tauri::command]
+pub async fn automation_backfill(rule_id: String) -> Result<(usize, usize), String> {
+    blocking(move || db_cmds::automation_backfill(rule_id).map_err(err_str)).await
+}

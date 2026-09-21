@@ -302,6 +302,9 @@ pub struct DbLibraryResource {
     pub tags: Vec<String>,
     pub created_at: i64,
     pub updated_at: i64,
+    /// 手工排序（v12）：升序展示；新建资料取当前最小值 - 1，默认排在最前
+    #[serde(default)]
+    pub sort_order: i64,
 }
 
 /// 前端 store 顶层状态 ↔ 数据库全量快照

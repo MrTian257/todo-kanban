@@ -603,6 +603,117 @@ mod tests {
         }
     }
 
+    /// 复刻线上配置的端到端用例：字段「上线时间」（text / rule / 限定项目），
+    /// 规则「拖入已完成泳道 → 写今天的日期」，经真实 save_state_checked 链路验证赋值。
+    #[test]
+    fn automation_writes_rule_field_on_lane_entry() {
+        use crate::svc::automation::{
+            AutomationAction, AutomationRule, AutomationTrigger, AutomationValueExpr,
+        };
+        use crate::svc::fields::FieldDef;
+        let conn = test_conn();
+        let field = FieldDef {
+            id: "f-online".into(),
+            label: "上线时间".into(),
+            kind: "text".into(),
+            source: "rule".into(),
+            builtin: String::new(),
+            options: vec![],
+            default_value: None,
+            required: false,
+            show_on_card: true,
+            description: String::new(),
+            project_id: Some("p1".into()),
+            sort_order: 0,
+        };
+        let rule = AutomationRule {
+            id: "a-online".into(),
+            name: "上线完成时间".into(),
+            enabled: true,
+            trigger: AutomationTrigger {
+                kind: "laneEntered".into(),
+                lane_id: "swim-done".into(),
+                ..Default::default()
+            },
+            conditions: vec![],
+            actions: vec![AutomationAction {
+                kind: "setField".into(),
+                target: "f-online".into(),
+                value: Some(AutomationValueExpr {
+                    kind: "today".into(),
+                    ..Default::default()
+                }),
+            }],
+        };
+        crate::svc::workflow::write(
+            &conn,
+            &crate::svc::workflow::Workflow {
+                revision: 1,
+                field_defs: vec![field],
+                automations: vec![rule],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let mut p = project("p1");
+        p.swimlanes = Some(vec![
+            crate::models::DbSwimlane {
+                id: "swim-todo".into(),
+                name: "待处理".into(),
+                status: "todo".into(),
+                sort_order: 0,
+            },
+            crate::models::DbSwimlane {
+                id: "swim-doing".into(),
+                name: "进行中".into(),
+                status: "doing".into(),
+                sort_order: 1,
+            },
+            crate::models::DbSwimlane {
+                id: "lane-test".into(),
+                name: "测试中".into(),
+                status: "doing".into(),
+                sort_order: 2,
+            },
+            crate::models::DbSwimlane {
+                id: "swim-done".into(),
+                name: "已完成".into(),
+                status: "done".into(),
+                sort_order: 3,
+            },
+        ]);
+        let mut t = todo("t1", 1, "todo-1");
+        t.swimlane_id = "lane-test".into();
+        t.status = "doing".into();
+        save_state(
+            &conn,
+            &DbState {
+                projects: vec![p],
+                resources: vec![],
+                todos: vec![t],
+            },
+        )
+        .unwrap();
+
+        // 拖入「已完成」泳道：自动脚本应写入「上线时间 = 今天」
+        let existing = load_state(&conn).unwrap();
+        let mut moved = existing.clone();
+        moved.todos[0].swimlane_id = "swim-done".into();
+        moved.todos[0].status = "done".into();
+        moved.todos[0].updated_at = 200;
+        let (saved, _) = save_state_checked(&conn, &moved, &existing).unwrap();
+        let value = crate::svc::fields::value_of(&saved.todos[0], "f-online").cloned();
+        assert!(
+            value.is_some(),
+            "拖入已完成应写入上线时间，实际 custom_fields = {:?}",
+            saved.todos[0].custom_fields
+        );
+        // 落库后重新读取也应带值
+        let reloaded = load_state(&conn).unwrap();
+        assert!(crate::svc::fields::value_of(&reloaded.todos[0], "f-online").is_some());
+    }
+
     #[test]
     fn save_and_load_roundtrip() {
         let conn = test_conn();
@@ -875,6 +986,7 @@ mod tests {
             tags: vec!["设计".into(), "参考".into()],
             created_at: 1,
             updated_at: 1,
+            sort_order: 0,
         }
     }
 

@@ -35,7 +35,7 @@ todo-kanban/
 | Rust 业务逻辑 | `src-tauri/core/src/`（svc/ 编排、db/ 存储、tool/ git CLI） |
 | 数据版本升级 | `src-tauri/config/src/lib.rs` + `upgrade/` + schema.rs/row.rs/db 三处（ADR-011） |
 | MCP 工具 | `src-tauri/mcp-server/src/bridge.rs` + `protocol.rs`，业务走 core/svc |
-| 自定义字段 / 自动脚本 | 定义与规则 `core/src/svc/workflow.rs`（fieldDefs / automations）+ `svc/fields.rs` + `svc/automation.rs`；值 `todos.custom_fields`（v11）；执行点 `db/mod.rs::save_state_inner`；前端词表 `src/lib/customFields.ts` + `src/components/workflow/*Panel.tsx` |
+| 自定义字段 / 自动脚本 | 定义与规则 `core/src/svc/workflow.rs`（fieldDefs / automations）+ `svc/fields.rs` + `svc/automation.rs`；值 `todos.custom_fields`（v11）；执行点 `db/mod.rs::save_state_inner`；前端词表 `src/lib/customFields.ts` + `src/components/workflow/*Panel.tsx`；UI 入口为设置页 `/settings/fields`（`src/pages/FieldSettingsPage.tsx`），存量任务补写走 `automation_backfill` |
 | 主题/皮肤 | `src/lib/theme.ts` + `src/index.css` |
 
 ## CODE MAP

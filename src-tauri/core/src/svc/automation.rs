@@ -362,6 +362,66 @@ pub fn run(
     outcome
 }
 
+/// 补跑规则（人工触发）：对「当前已处于触发器所指状态」的存量任务应用动作。
+/// 与事件触发的差异：不看保存前后 diff，只看当前状态是否落在触发器目标上；
+/// 不级联其它规则（补写引起的字段变化不再触发 fieldChanged 链）。
+/// 仅支持状态型触发器：laneEntered（目标泳道）与 statusChanged（目标状态非空）；
+/// created / fieldChanged / commitAdded 是「变化时刻」语义，无法确定补写范围，返回 None。
+pub fn backfill_apply(
+    todos: &mut [DbTodo],
+    projects: &[DbProject],
+    defs: &[FieldDef],
+    rule: &AutomationRule,
+    now: i64,
+) -> Option<AutomationOutcome> {
+    if !rule.enabled {
+        return None;
+    }
+    let by_lane = rule.trigger.kind == "laneEntered";
+    let target: &str = if by_lane {
+        if rule.trigger.lane_id.is_empty() {
+            return None;
+        }
+        &rule.trigger.lane_id
+    } else if rule.trigger.kind == "statusChanged" && !rule.trigger.to.is_empty() {
+        &rule.trigger.to
+    } else {
+        return None;
+    };
+    let project_by_id: HashMap<&str, &DbProject> =
+        projects.iter().map(|p| (p.id.as_str(), p)).collect();
+    let mut outcome = AutomationOutcome::default();
+    for todo in todos.iter_mut() {
+        let hit = if by_lane {
+            todo.swimlane_id == target
+        } else {
+            todo.status == target
+        };
+        if !hit
+            || !references_valid(rule, todo, &project_by_id, defs)
+            || !conditions_match(rule, todo, &project_by_id, defs)
+        {
+            continue;
+        }
+        let mut applied = false;
+        for action in &rule.actions {
+            match apply_action(action, todo, &project_by_id, defs, now) {
+                Ok(true) => {
+                    applied = true;
+                    outcome.actions += 1;
+                }
+                Ok(false) => {}
+                Err(reason) => log::warn!("自动脚本「{}」补写时跳过动作：{}", rule.name, reason),
+            }
+        }
+        if applied {
+            outcome.todos += 1;
+            todo.updated_at = now.max(todo.updated_at.saturating_add(1));
+        }
+    }
+    Some(outcome)
+}
+
 /// 删除字段或泳道后整条规则停用，避免部分动作仍写入；项目字段只作用于所属项目。
 fn references_valid(
     rule: &AutomationRule,
@@ -1189,6 +1249,86 @@ mod tests {
             fields::value_of(&next[0], "output"),
             Some(&CustomValue::Text("todo-t".into()))
         );
+    }
+
+    #[test]
+    fn backfill_applies_to_current_lane_residents_only() {
+        let defs = vec![field("f-online", "text", "rule")];
+        let mut done_project = project();
+        done_project.swimlanes = Some(vec![
+            DbSwimlane {
+                id: "swim-todo".into(),
+                name: "待办".into(),
+                status: "todo".into(),
+                sort_order: 0,
+            },
+            DbSwimlane {
+                id: "swim-doing".into(),
+                name: "进行中".into(),
+                status: "doing".into(),
+                sort_order: 1,
+            },
+            DbSwimlane {
+                id: "swim-done".into(),
+                name: "已完成".into(),
+                status: "done".into(),
+                sort_order: 2,
+            },
+        ]);
+        let projects = vec![done_project];
+        // 已在目标泳道 / 其他泳道 / 待办泳道
+        let mut todos = vec![
+            todo("a", "swim-done", "done"),
+            todo("b", "swim-doing", "doing"),
+            todo("c", "swim-todo", "todo"),
+        ];
+        // 与线上一致的取值方式：文本字段 + 「今天的日期」
+        let mut rules = lane_rule("r1", "swim-done", "f-online");
+        rules.actions = vec![AutomationAction {
+            kind: "setField".into(),
+            target: "f-online".into(),
+            value: Some(AutomationValueExpr {
+                kind: "today".into(),
+                ..Default::default()
+            }),
+        }];
+        let outcome = backfill_apply(&mut todos, &projects, &defs, &rules, 500).unwrap();
+        assert_eq!(outcome.todos, 1);
+        assert_eq!(outcome.actions, 1);
+        assert_eq!(
+            crate::svc::fields::value_of(&todos[0], "f-online").cloned(),
+            Some(CustomValue::Text(fields::local_date(500)))
+        );
+        assert!(crate::svc::fields::value_of(&todos[1], "f-online").is_none());
+        // 幂等：再次补写不产生动作
+        let again = backfill_apply(&mut todos, &projects, &defs, &rules, 600).unwrap();
+        assert_eq!(again.actions, 0);
+        // created / fieldChanged 触发器不支持补写
+        let mut created = rules.clone();
+        created.trigger = AutomationTrigger {
+            kind: "created".into(),
+            ..Default::default()
+        };
+        assert!(backfill_apply(&mut todos, &projects, &defs, &created, 500).is_none());
+    }
+
+    #[test]
+    fn backfill_status_trigger_targets_current_status() {
+        let defs = vec![field("f-online", "text", "rule")];
+        let mut todos = vec![
+            todo("a", "swim-done", "done"),
+            todo("b", "swim-doing", "doing"),
+        ];
+        let mut rule = lane_rule("r1", "swim-done", "f-online");
+        rule.trigger = AutomationTrigger {
+            kind: "statusChanged".into(),
+            to: "done".into(),
+            ..Default::default()
+        };
+        let outcome = backfill_apply(&mut todos, &[], &defs, &rule, 700).unwrap();
+        assert_eq!(outcome.todos, 1);
+        assert!(crate::svc::fields::value_of(&todos[0], "f-online").is_some());
+        assert!(crate::svc::fields::value_of(&todos[1], "f-online").is_none());
     }
 
     #[test]

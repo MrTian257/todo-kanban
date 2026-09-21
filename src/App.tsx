@@ -25,6 +25,7 @@ const TodoDetailPage = lazy(() => import("@/pages/TodoDetailPage").then(module =
 const TodoListPage = lazy(() => import("@/pages/TodoListPage").then(module => ({ default: module.TodoListPage })));
 const ResourceLibraryPage = lazy(() => import("@/pages/ResourceLibraryPage").then(module => ({ default: module.ResourceLibraryPage })));
 const ResourceEditorPage = lazy(() => import("@/pages/ResourceEditorPage").then(module => ({ default: module.ResourceEditorPage })));
+const FieldSettingsPage = lazy(() => import("@/pages/FieldSettingsPage").then(module => ({ default: module.FieldSettingsPage })));
 
 import { PersistenceStatus } from "@/components/layout/PersistenceStatus";
 
@@ -114,6 +115,8 @@ function Application() {
               <Route path="/" element={<RootRedirect />} />
               <Route path="/workflow" element={<Navigate to="/settings/workflow" replace />} />
               <Route path="/settings/workflow" element={<WorkflowPage />} />
+              {/* 自定义字段与自动脚本：从「工作流」拆出的独立设置项 */}
+              <Route path="/settings/fields" element={<FieldSettingsPage />} />
               <Route path="/focus" element={<FocusPage />} />
               <Route path="/todos" element={<TodoListPage />} />
               <Route path="/projects" element={<ProjectListPage />} />

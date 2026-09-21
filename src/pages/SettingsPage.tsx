@@ -17,7 +17,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { ArrowRight, Bot, Eye, EyeOff, Paperclip, SquareKanban } from "lucide-react";
+import { ArrowRight, Bot, Braces, Eye, EyeOff, Paperclip, SquareKanban } from "lucide-react";
 import { toast } from "sonner";
 import { gcOrphanAttachments, migrateInlineImages } from "@/lib/attachments";
 import { DEFAULT_MCP_TOKEN, mcpGetConfig, mcpSetConfig } from "@/lib/mcp";
@@ -126,9 +126,15 @@ export function SettingsPage() {
       <div className="grid w-full gap-5">
         <Card>
           <CardHeader><CardTitle className="flex items-center gap-2"><SquareKanban className="h-4 w-4 text-primary" />工作流</CardTitle>
-            <CardDescription>管理任务模板、自定义字段、自动脚本、提醒与备份。</CardDescription>
+            <CardDescription>管理任务模板、本地提醒、备份恢复与 AI 待确认变更。</CardDescription>
           </CardHeader>
           <CardContent><Button asChild variant="outline"><Link to="/settings/workflow">管理工作流<ArrowRight className="h-4 w-4" /></Link></Button></CardContent>
+        </Card>
+        <Card>
+          <CardHeader><CardTitle className="flex items-center gap-2"><Braces className="h-4 w-4 text-primary" />自定义字段</CardTitle>
+            <CardDescription>定义自定义字段（类型 / 值来源 / 卡片展示）与自动脚本（事件触发 → 写值），并可对存量任务补写取值。</CardDescription>
+          </CardHeader>
+          <CardContent><Button asChild variant="outline"><Link to="/settings/fields">管理字段与自动脚本<ArrowRight className="h-4 w-4" /></Link></Button></CardContent>
         </Card>
         <Card>
           <CardHeader>

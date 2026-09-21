@@ -30,6 +30,16 @@ fn column_exists(conn: &Connection, table: &str, column: &str) -> rusqlite::Resu
     Ok(false)
 }
 
+/// 表存在性检查：建表由 core 承担，历史合成库可能缺表（对应步骤跳过而不是报错）
+fn table_exists(conn: &Connection, table: &str) -> rusqlite::Result<bool> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+        [table],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
+}
+
 /// 逐级迁移到 CURRENT_VERSION（需在建表之后调用；版本判定由 upgrade::ensure 负责）
 pub fn migrate(conn: &Connection) -> UpgradeResult<MigrateOutcome> {
     let from = read_version(conn)?;
@@ -119,6 +129,18 @@ pub fn migrate(conn: &Connection) -> UpgradeResult<MigrateOutcome> {
         if !column_exists(&tx, "todos", "custom_fields")? {
             tx.execute_batch(
                 "ALTER TABLE todos ADD COLUMN custom_fields TEXT NOT NULL DEFAULT '[]'",
+            )?;
+        }
+    }
+
+    if from < 12 {
+        // v11 → v12：resources 补 sort_order（资料库手工排序）；
+        // 存量按插入顺序倒序回填（新在前）。resources 由 core 建表，缺表时跳过。
+        if table_exists(&tx, "resources")? && !column_exists(&tx, "resources", "sort_order")? {
+            tx.execute_batch(
+                "ALTER TABLE resources ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
+                 UPDATE resources SET sort_order =
+                   (SELECT COUNT(*) FROM resources AS r WHERE r.rowid > resources.rowid);",
             )?;
         }
     }
@@ -223,6 +245,36 @@ mod tests {
         let out = migrate(&conn).unwrap();
         assert!(!out.migrated);
         assert_eq!(read_version(&conn).unwrap(), CURRENT_VERSION);
+    }
+
+    /// v11 → v12：resources 补 sort_order，并按插入顺序倒序回填（新在前）
+    #[test]
+    fn migrate_v11_db_adds_resource_sort_order() {
+        let conn = open_mem();
+        conn.execute_batch(
+            "CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE resources (id TEXT PRIMARY KEY, project_id TEXT, title TEXT NOT NULL,
+               url TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '',
+               tags TEXT NOT NULL DEFAULT '[]', created_at INTEGER NOT NULL,
+               updated_at INTEGER NOT NULL);
+             INSERT INTO resources (id, title, created_at, updated_at) VALUES ('r1','一',1,1);
+             INSERT INTO resources (id, title, created_at, updated_at) VALUES ('r2','二',2,2);
+             INSERT INTO resources (id, title, created_at, updated_at) VALUES ('r3','三',3,3);
+             PRAGMA user_version = 11;",
+        )
+        .unwrap();
+        let out = migrate(&conn).unwrap();
+        assert_eq!(out.to, CURRENT_VERSION);
+        assert!(column_exists(&conn, "resources", "sort_order").unwrap());
+        let mut stmt = conn
+            .prepare("SELECT id FROM resources ORDER BY sort_order ASC")
+            .unwrap();
+        let ids: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .map(|item| item.unwrap())
+            .collect();
+        assert_eq!(ids, vec!["r3", "r2", "r1"], "最后插入的资料应排最前");
     }
 
     #[test]

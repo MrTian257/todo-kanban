@@ -197,7 +197,7 @@ pub const PROJECT_UPSERT: &str = "INSERT INTO projects (id, name, project_dir, f
 
 // pub fn load_projects_from_conn(conn: &rusqlite::Connection) -> AppResult<Vec<DbProject>> {
 pub const RESOURCE_SELECT: &str =
-    "SELECT id, project_id, title, url, note, tags, created_at, updated_at FROM resources";
+    "SELECT id, project_id, title, url, note, tags, created_at, updated_at, sort_order FROM resources";
 
 pub fn row_to_resource(row: &Row) -> AppResult<DbLibraryResource> {
     Ok(DbLibraryResource {
@@ -209,6 +209,7 @@ pub fn row_to_resource(row: &Row) -> AppResult<DbLibraryResource> {
         tags: parse_json_or::<Vec<String>>(row.get(5)?, Vec::new()),
         created_at: row.get(6)?,
         updated_at: row.get(7)?,
+        sort_order: row.get(8)?,
     })
 }
 
@@ -222,14 +223,16 @@ fn resource_params(resource: &DbLibraryResource) -> Vec<Box<dyn rusqlite::ToSql>
         Box::new(serde_json::to_string(&resource.tags).unwrap_or_else(|_| "[]".into())),
         Box::new(resource.created_at),
         Box::new(resource.updated_at),
+        Box::new(resource.sort_order),
     ]
 }
 
 const RESOURCE_UPSERT: &str =
-    "INSERT INTO resources (id, project_id, title, url, note, tags, created_at, updated_at)
-  VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
+    "INSERT INTO resources (id, project_id, title, url, note, tags, created_at, updated_at, sort_order)
+  VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)
   ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id, title=excluded.title,
-    url=excluded.url, note=excluded.note, tags=excluded.tags, updated_at=excluded.updated_at
+    url=excluded.url, note=excluded.note, tags=excluded.tags, updated_at=excluded.updated_at,
+    sort_order=excluded.sort_order
   WHERE excluded.updated_at >= resources.updated_at";
 
 pub fn load_projects_from_conn(conn: &rusqlite::Connection) -> AppResult<Vec<DbProject>> {

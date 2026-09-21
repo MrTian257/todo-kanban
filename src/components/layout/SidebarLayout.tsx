@@ -212,7 +212,7 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
         </Tooltip>
 
         {isMacOS && <div data-tauri-drag-region className="tk-toolbar-title h-full min-w-0 flex-1 flex items-center truncate px-3 text-sm font-semibold">
-          {location.pathname.startsWith("/project/") ? "项目看板" : location.pathname === "/settings/workflow" ? "设置 / 工作流" : location.pathname === "/settings" ? "设置" : NAV_ITEMS.find(item => location.pathname.startsWith(item.to))?.label ?? "工作台"}
+          {location.pathname.startsWith("/project/") ? "项目看板" : location.pathname === "/settings/workflow" ? "设置 / 工作流" : location.pathname === "/settings/fields" ? "设置 / 自定义字段" : location.pathname === "/settings" ? "设置" : NAV_ITEMS.find(item => location.pathname.startsWith(item.to))?.label ?? "工作台"}
         </div>}
         <form className="tk-toolbar-search mx-2 flex w-full min-w-0 max-w-sm items-center gap-1" onSubmit={event => { event.preventDefault(); navigate(`/todos?q=${encodeURIComponent(search)}`); }}>
           <Input ref={searchRef} aria-label="全局搜索" value={search} onChange={event => setSearch(event.target.value)} placeholder={`搜索任务 · ${(isMacOS ? "⌘⇧F" : shortcutLabel("K"))}`} className="h-7 min-w-0 text-xs" />

@@ -114,6 +114,8 @@ export interface LibraryResource {
   tags: string[];
   createdAt: number;
   updatedAt: number;
+  /** 手工排序（v12）：升序展示；新建资料取最小值 - 1 排在最前 */
+  sortOrder: number;
 }
 
 export interface AppState {

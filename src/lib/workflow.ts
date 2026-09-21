@@ -130,6 +130,14 @@ export async function applyChange(command: "history_restore" | "backup_restore" 
   await loadWorkflow();
 }
 
+/**
+ * 自动脚本补写：对「当前已处于触发器所指状态」的存量任务应用规则动作。
+ * 仅支持泳道 / 状态触发（事件型触发无法确定补写范围）；返回 [任务数, 动作数]。
+ */
+export async function automationBackfill(ruleId: string): Promise<[number, number]> {
+  return desktopAction<[number, number]>("automation_backfill", { ruleId });
+}
+
 /** 指定任务尚未完成的依赖任务（用于提示阻塞）。 */
 export function blockers(todoId: string, workflow: Workflow, todos: Todo[]): Todo[] {
   const ids = workflow.links.find(link => link.todoId === todoId)?.dependsOn ?? [];

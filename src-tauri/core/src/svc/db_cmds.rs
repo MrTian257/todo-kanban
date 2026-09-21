@@ -101,6 +101,48 @@ pub fn save_state_checked(payload: DbState, expected: DbState) -> AppResult<DbSt
     Ok(saved)
 }
 
+/// 自动脚本补写：对「当前已处于触发器所指状态」的存量任务应用规则动作。
+/// 典型场景：规则创建前就已位于目标泳道 / 目标状态的任务不会因事件触发拿到值，此处人工补齐。
+/// 走 save_state_checked 同一写链（差异写 + 变更历史 + 写锁互斥）。
+pub fn automation_backfill(rule_id: String) -> AppResult<(usize, usize)> {
+    let path = db_path()?;
+    let _guard = DB_RW_LOCK
+        .lock()
+        .map_err(|_| AppError::invalid("写锁获取失败"))?;
+    let (conn, _report) = db::open_and_init(&path, &backup_dir()?)?;
+    let config = crate::svc::workflow::read(&conn)?;
+    let Some(rule) = config.automations.iter().find(|item| item.id == rule_id) else {
+        return Err(AppError::invalid("自动脚本不存在，请刷新后重试"));
+    };
+    let state = db::load_state(&conn)?;
+    let mut todos = state.todos.clone();
+    let outcome = crate::svc::automation::backfill_apply(
+        &mut todos,
+        &state.projects,
+        &config.field_defs,
+        rule,
+        crate::svc::fields::now_ms(),
+    )
+    .ok_or_else(|| {
+        AppError::invalid(
+            "该触发器不支持补写：仅「拖入指定泳道」与「状态变为指定值」可补写存量任务",
+        )
+    })?;
+    if outcome.actions == 0 {
+        return Ok((0, 0));
+    }
+    let payload = DbState {
+        projects: state.projects.clone(),
+        resources: state.resources.clone(),
+        todos,
+    };
+    let (_saved, trash) = db::save_state_checked(&conn, &payload, &state)?;
+    if !trash.is_empty() {
+        attachments::move_to_trash_at(&attachments::attachments_root_at(&path), &trash);
+    }
+    Ok((outcome.todos, outcome.actions))
+}
+
 /// 恢复历史版本：与 save_state_checked 同一写链，但停用自定义字段自动脚本——
 /// 还原必须忠实，否则恢复出来的旧值会被规则立刻改写。
 pub fn restore_state_checked(payload: DbState, expected: DbState) -> AppResult<DbState> {

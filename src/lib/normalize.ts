@@ -117,6 +117,8 @@ export function normalizeResource(raw: Partial<LibraryResource>): LibraryResourc
     tags: normalizeResourceTags(raw.tags),
     createdAt: raw.createdAt ?? Date.now(),
     updatedAt: raw.updatedAt ?? Date.now(),
+    // 旧数据（v11 及以前）没有手工序号：统一 0，由展示层按更新时间兜底排序
+    sortOrder: typeof raw.sortOrder === "number" && Number.isFinite(raw.sortOrder) ? raw.sortOrder : 0,
   };
 }
 

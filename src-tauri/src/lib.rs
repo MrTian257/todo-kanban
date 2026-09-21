@@ -164,6 +164,7 @@ pub fn run() {
             desktop::arm_quit_protection,
             commands::workflow_load,
             commands::workflow_save,
+            commands::automation_backfill,
             commands::history_list,
             commands::history_restore,
             commands::backup_list,

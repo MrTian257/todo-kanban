@@ -9,7 +9,7 @@
 | `todo-kanban`（壳） | 生命周期 + invoke 注册（38 命令） | `src/main.rs`、`src/lib.rs`、`src/commands.rs` |
 | `todo-kanban-core` | 纯业务逻辑，无 tauri 依赖，可独立单测 | `core/src/`（详见 core/src/AGENTS.md） |
 | `todo-kanban-upgrade` | 数据版本迁移引擎（备份/逐级迁移/报告） | `upgrade/src/` |
-| `todo-kanban-config` | 版本常量（SOFTWARE_VERSION、CURRENT_DATA_VERSION=10、迁移表、changelog） | `config/src/lib.rs` |
+| `todo-kanban-config` | 版本常量（SOFTWARE_VERSION、CURRENT_DATA_VERSION=12、迁移表、changelog） | `config/src/lib.rs` |
 | `mcp-server` | 独立 stdio JSON-RPC 进程（11 tools + 4 resources） | `mcp-server/src/` |
 
 ## WHERE TO LOOK

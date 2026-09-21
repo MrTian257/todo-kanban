@@ -13,6 +13,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useEditingGuard } from "@/lib/editingGuard";
 import { normalizeResourceTags } from "@/lib/normalize";
+import { frontSortOrder } from "@/lib/resourceOrder";
 import { flushPersistence, useAppStore } from "@/lib/store";
 import type { LibraryResource } from "@/lib/types";
 import { newId } from "@/lib/utils";
@@ -50,6 +51,7 @@ function ResourceEditorForm({ resourceId }: { resourceId: string }) {
   const isNew = resourceId === NEW;
   const resource = useAppStore(state => (isNew ? null : state.resources.find(item => item.id === resourceId)));
   const projects = useAppStore(state => state.projects);
+  const resources = useAppStore(state => state.resources);
   const activeProjectId = useAppStore(state => state.activeProjectId);
   const upsertResource = useAppStore(state => state.upsertResource);
   const activeProjects = React.useMemo(() => projects.filter(item => !item.archived), [projects]);
@@ -105,6 +107,8 @@ function ResourceEditorForm({ resourceId }: { resourceId: string }) {
         tags,
         createdAt: resource?.createdAt ?? now,
         updatedAt: now,
+        // 新建资料排在最前：取当前最小序号 - 1；编辑保持原位置
+        sortOrder: resource?.sortOrder ?? frontSortOrder(resources),
       };
       upsertResource(next);
       await flushPersistence();

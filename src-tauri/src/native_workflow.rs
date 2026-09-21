@@ -121,6 +121,9 @@ pub fn desktop_update_tasks(app: tauri::AppHandle, tasks: Vec<TrayTask>) -> Resu
     let menu = builder
         .separator()
         .text("workflow", "工作流与提醒")
+        .separator()
+        // 退出应用：与系统退出/关闭同一条前端保存保护链（有未保存编辑时先让用户确认）
+        .text("quit", "退出")
         .build()
         .map_err(|e| e.to_string())?;
     let Some(tray) = app.tray_by_id("todo-workflow") else {
@@ -138,6 +141,11 @@ pub fn install(app: &tauri::App) {
                 let id = event.id().as_ref();
                 if id == "quick-add" {
                     quick_add(app);
+                    return;
+                }
+                if id == "quit" {
+                    // 复用桌面退出的保存保护：唤起主窗口 → 前端确认 → finish_quit
+                    crate::desktop::request_quit(app);
                     return;
                 }
                 if let Some(window) = app.get_webview_window("main") {
