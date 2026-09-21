@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>todo-kanban · 页面原型：一般设置 / 自定义字段配置</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2318181b'/%3E%3Ctext x='32' y='44' font-size='36' text-anchor='middle' fill='white' font-family='sans-serif' font-weight='700'%3ET%3C/text%3E%3C/svg%3E">
+<style>
+  :root{
+    --bg:#fafafa; --card:#ffffff; --border:#e4e4e7; --fg:#18181b;
+    --muted-fg:#71717a; --muted:#f4f4f5; --primary:#18181b; --primary-fg:#fafafa;
+    --accent:#f4f4f5; --ring:#18181b; --destructive:#dc2626; --destructive-bg:#fef2f2;
+    --radius:10px;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    font-family:var(--sans); color:var(--fg); background:#e8e8ec;
+    -webkit-font-smoothing:antialiased; font-size:14px; line-height:1.5;
+    padding:28px;
+  }
+  /* 顶部说明条 */
+  .page-head{max-width:1280px;margin:0 auto 14px;display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+  .page-head h1{font-size:18px;font-weight:700}
+  .page-head .sub{color:#52525b;font-size:13px}
+  .page-head .tag{font-family:var(--mono);font-size:12px;color:#71717a;border:1px solid #d4d4d8;border-radius:999px;padding:2px 10px;background:#fff}
+
+  /* 应用窗口 */
+  .app{
+    max-width:1280px;height:860px;margin:0 auto;background:var(--bg);
+    border:1px solid #d4d4d8;border-radius:14px;overflow:hidden;
+    box-shadow:0 24px 60px -20px rgba(0,0,0,.25);
+    display:flex;
+  }
+  /* 侧边栏 */
+  .sidebar{width:216px;flex:none;background:#fff;border-right:1px solid var(--border);display:flex;flex-direction:column;padding:14px 10px}
+  .brand{display:flex;align-items:center;gap:8px;padding:6px 10px 14px;font-weight:700;font-size:15px}
+  .brand .logo{width:22px;height:22px;border-radius:6px;background:var(--primary);color:#fff;display:grid;place-items:center;font-size:12px;font-weight:700}
+  .nav{display:flex;flex-direction:column;gap:2px}
+  .nav-item{display:flex;align-items:center;gap:9px;padding:7px 10px;border-radius:8px;color:#52525b;font-size:13.5px;cursor:default}
+  .nav-item svg{width:16px;height:16px;flex:none}
+  .nav-item.active{background:var(--muted);color:var(--fg);font-weight:600}
+  .nav-item .badge{margin-left:auto;font-size:11px;background:var(--muted);color:var(--muted-fg);border-radius:999px;padding:1px 7px}
+  .side-foot{margin-top:auto;padding:10px;font-size:11.5px;color:#a1a1aa;border-top:1px solid var(--border)}
+
+  /* 主区 */
+  .main{flex:1;min-width:0;display:flex;flex-direction:column}
+  .topbar{height:48px;flex:none;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;padding:0 18px;background:#fff}
+  .seg{display:flex;background:var(--muted);border-radius:9px;padding:3px;gap:2px}
+  .seg button{border:0;background:transparent;padding:5px 14px;border-radius:7px;font-size:13px;color:#52525b;cursor:pointer;font-family:inherit}
+  .seg button.on{background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.08);color:var(--fg);font-weight:600}
+  .topbar .hint{margin-left:auto;font-size:12px;color:#a1a1aa}
+
+  .content{flex:1;overflow:auto;padding:22px 26px}
+  .view{display:none}
+  .view.on{display:block}
+  .content h2.page-title{font-size:20px;font-weight:700;margin-bottom:16px}
+
+  /* 卡片 */
+  .cards{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+  .card-h{padding:16px 18px 0}
+  .card-t{font-size:14.5px;font-weight:600;display:flex;align-items:center;gap:7px}
+  .card-t svg{width:16px;height:16px;color:#52525b}
+  .card-d{font-size:12.5px;color:var(--muted-fg);margin-top:3px;line-height:1.55}
+  .card-b{padding:14px 18px 18px}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:14px}
+  .field-label{font-size:13px;font-weight:500}
+  .field-hint{font-size:12px;color:var(--muted-fg);margin-top:2px}
+  .mb12{margin-bottom:14px}
+
+  /* 控件 */
+  select,input[type=text],input[type=number],input[type=password]{
+    font-family:inherit;font-size:13px;color:var(--fg);
+    border:1px solid var(--border);border-radius:8px;background:#fff;
+    height:36px;padding:0 11px;width:100%;outline:none;
+  }
+  select:focus,input:focus{border-color:#a1a1aa;box-shadow:0 0 0 2px rgba(0,0,0,.06)}
+  .w40{width:160px}
+  .btn{display:inline-flex;align-items:center;gap:6px;height:34px;padding:0 14px;border-radius:8px;
+    border:1px solid var(--border);background:#fff;font-size:13px;font-weight:500;cursor:pointer;font-family:inherit;color:var(--fg);white-space:nowrap;flex:none}
+  .btn:hover{background:var(--accent)}
+  .btn.primary{background:var(--primary);color:var(--primary-fg);border-color:var(--primary)}
+  .btn.primary:hover{background:#27272a}
+  .btn.destructive{background:var(--destructive);color:#fff;border-color:var(--destructive)}
+  .btn.sm{height:28px;padding:0 10px;font-size:12.5px}
+  .btn.icon{width:34px;padding:0;justify-content:center}
+  .btn.ghost{border-color:transparent;background:transparent;color:#52525b}
+  .btn.ghost:hover{background:var(--muted)}
+  code{font-family:var(--mono);font-size:12px;background:var(--muted);padding:1px 5px;border-radius:5px}
+
+  /* switch */
+  .switch{width:40px;height:22px;border-radius:999px;background:#d4d4d8;position:relative;cursor:pointer;transition:background .15s;flex:none}
+  .switch::after{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#fff;transition:transform .15s;box-shadow:0 1px 2px rgba(0,0,0,.2)}
+  .switch.on{background:#16a34a}
+  .switch.on::after{transform:translateX(18px)}
+
+  /* 皮肤选择 */
+  .skins{display:flex;flex-wrap:wrap;gap:8px}
+  .skin{border:1px solid var(--border);border-radius:8px;padding:8px 12px;cursor:pointer;text-align:left;font-family:inherit;background:#fff;min-width:104px}
+  .skin .n{font-size:13px;font-weight:500}
+  .skin .d{font-size:11px;color:var(--muted-fg);margin-top:1px}
+  .skin.sel{border-color:var(--fg);background:var(--muted)}
+  .skin .dot{width:10px;height:10px;border-radius:3px;display:inline-block;margin-right:6px;vertical-align:middle}
+
+  .muted-list{font-size:12.5px;color:var(--muted-fg);line-height:1.9}
+  .toolcard{border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-top:8px}
+  .toolcard .nm{font-size:13px;font-weight:500;color:var(--fg)}
+  .pill{display:inline-block;font-size:11px;padding:1px 8px;border-radius:999px;border:1px solid var(--border);color:var(--muted-fg);font-family:var(--mono)}
+  .pill.sec{background:var(--muted);border-color:transparent;color:var(--fg)}
+
+  /* ===== 视图2：字段面板 ===== */
+  .panel{background:#fff;border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px}
+  .panel .ph{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+  .panel .ph h3{font-size:15px;font-weight:600}
+  .panel .intro{font-size:12.5px;color:var(--muted-fg);margin-bottom:14px;line-height:1.6}
+  .frow{display:flex;align-items:center;justify-content:space-between;gap:10px;border-top:1px solid var(--border);padding:10px 0;font-size:13px}
+  .frow .meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .frow .name{font-weight:600}
+  .badge{font-size:11px;background:var(--muted);color:#52525b;border-radius:5px;padding:2px 7px}
+  .scope{font-size:12px;color:var(--muted-fg)}
+  .cardmark{font-size:11.5px;color:#16a34a}
+  .actions{display:flex;gap:4px}
+
+  /* 模态遮罩 */
+  .overlay{position:absolute;inset:0;background:rgba(24,24,27,.42);display:flex;align-items:center;justify-content:center;z-index:20;padding:24px}
+  .dialog{background:#fff;border-radius:14px;width:560px;max-width:100%;max-height:calc(100% - 48px);display:flex;flex-direction:column;box-shadow:0 30px 80px -20px rgba(0,0,0,.5)}
+  .dialog .dh{padding:18px 22px 0}
+  .dialog .dh h3{font-size:16px;font-weight:600}
+  .dialog .dh p{font-size:12.5px;color:var(--muted-fg);margin-top:4px;line-height:1.55}
+  .dialog .db{padding:16px 22px;overflow:auto}
+  .dlg-foot{padding:12px 22px 18px;display:flex;justify-content:flex-end;gap:8px;border-top:1px solid var(--border);background:#fcfcfd;border-radius:0 0 14px 14px}
+  .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .fg{display:flex;flex-direction:column;gap:5px}
+  .fg label,.lbl{font-size:12.5px;font-weight:500;color:#3f3f46}
+  .hint-line{font-size:12px;color:var(--muted-fg);padding:8px 10px;background:var(--muted);border-radius:7px;line-height:1.5}
+  .fieldset{border:1px solid var(--border);border-radius:9px;padding:12px}
+  .fieldset legend{font-size:12.5px;font-weight:600;padding:0 6px}
+  .opt-row{display:flex;gap:8px;margin-bottom:8px}
+  .chk{display:flex;align-items:center;gap:7px;font-size:13px;color:#3f3f46;cursor:pointer}
+  .chk input{width:15px;height:15px;accent-color:var(--primary)}
+  .err{font-size:12.5px;color:var(--destructive);background:var(--destructive-bg);padding:8px 10px;border-radius:7px}
+  .src-switch{display:none;align-items:center;gap:6px;margin-left:auto;font-size:12px;color:#71717a}
+  .src-switch.show{display:inline-flex}
+  .src-switch .grp{display:flex;background:var(--muted);border-radius:8px;padding:3px;gap:2px}
+  .src-switch .grp button{border:0;background:transparent;padding:4px 10px;border-radius:6px;font-size:12px;color:#52525b;cursor:pointer;font-family:inherit;white-space:nowrap}
+  .src-switch .grp button.on{background:#fff;font-weight:600;color:var(--fg);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+  .toast{position:absolute;bottom:24px;left:50%;transform:translateX(-50%);background:var(--primary);color:#fff;padding:9px 18px;border-radius:9px;font-size:13px;opacity:0;transition:opacity .2s;z-index:30;pointer-events:none}
+  .toast.show{opacity:1}
+  .hidden{display:none !important}
+  @media (max-width:760px){
+    body{padding:0}
+    .app{height:auto;min-height:100vh;border-radius:0;border:0;box-shadow:none}
+    .sidebar{display:none}
+    .cards{grid-template-columns:1fr}
+    .demo-toggle{position:static;margin:12px}
+    .overlay{position:fixed}
+  }
+</style>
+</head>
+<body>
+
+<div class="page-head">
+  <h1>todo-kanban 原型图</h1>
+  <span class="sub">一般设置页 · 自定义字段属性配置对话框</span>
+  <span class="tag">v2.0.0 · 浅色主题 · 可交互</span>
+</div>
+
+<div class="app">
+  <!-- ============ 侧边栏 ============ -->
+  <aside class="sidebar">
+    <div class="brand"><span class="logo">T</span> todo-kanban</div>
+    <nav class="nav">
+      <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/></svg>专注</div>
+      <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6h11M9 12h11M9 18h11"/><path d="M4 6h.01M4 12h.01M4 18h.01"/></svg>待办<span class="badge">12</span></div>
+      <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>项目</div>
+      <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h16v4H4zM4 12h10v7H4z"/></svg>工作流</div>
+      <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16v12H4z"/><path d="M8 20h8"/></svg>资源库</div>
+      <div class="nav-item active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6a7 7 0 0 0 0 2.4l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2z"/></svg>设置</div>
+    </nav>
+    <div class="side-foot">桌面端 · SQLite 本地存储</div>
+  </aside>
+
+  <!-- ============ 主区 ============ -->
+  <div class="main">
+    <div class="topbar">
+      <div class="seg">
+        <button class="on" data-view="settings">一般设置</button>
+        <button data-view="fields">自定义字段配置</button>
+      </div>
+      <div class="src-switch" id="srcSwitch">
+        <span>值来源</span>
+        <div class="grp">
+          <button class="on" data-src="manual">手动填写</button>
+          <button data-src="builtin">内置属性</button>
+          <button data-src="rule">自动脚本</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="content">
+      <!-- ===== 视图1：一般设置 ===== -->
+      <section class="view on" id="view-settings">
+        <h2 class="page-title">设置</h2>
+        <div class="cards">
+
+          <!-- 外观 -->
+          <div class="card">
+            <div class="card-h"><div class="card-t">外观</div>
+              <div class="card-d">明暗模式 × 主题皮肤（正交叠加）</div></div>
+            <div class="card-b">
+              <div class="mb12">
+                <div class="field-label" style="margin-bottom:7px">明暗模式</div>
+                <select class="w40">
+                  <option>浅色</option><option selected>跟随系统</option><option>深色</option>
+                </select>
+              </div>
+              <div>
+                <div class="field-label" style="margin-bottom:7px">主题皮肤</div>
+                <div class="skins">
+                  <button class="skin sel"><span class="dot" style="background:#a1a1aa"></span><div class="n">星尘</div><div class="d">中性灰 · 标准圆角</div></button>
+                  <button class="skin"><span class="dot" style="background:#1d4ed8"></span><div class="n">海洋</div><div class="d">深海蓝 · 大圆角</div></button>
+                  <button class="skin"><span class="dot" style="background:#ea580c"></span><div class="n">落日</div><div class="d">暖橙 · 柔和圆角</div></button>
+                  <button class="skin"><span class="dot" style="background:#4d7c0f"></span><div class="n">森林</div><div class="d">苔藓绿 · 标准圆角</div></button>
+                  <button class="skin"><span class="dot" style="background:#3f3f46"></span><div class="n">石墨</div><div class="d">冷灰 · 小圆角紧凑</div></button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- MCP -->
+          <div class="card">
+            <div class="card-h"><div class="card-t"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M12 8V4M8 4h8"/></svg>MCP 集成</div>
+              <div class="card-d">AI 编程工具经 MCP 把拆分任务登记到本应用；Token 用于 server 启动认证。</div></div>
+            <div class="card-b">
+              <div class="row mb12">
+                <div><div class="field-label">启用 MCP</div><div class="field-hint">默认开启；禁用后 server 启动将被拒绝。</div></div>
+                <div class="switch on" id="mcpSwitch"></div>
+              </div>
+              <div class="fg">
+                <label class="lbl">授权 Token</label>
+                <div style="display:flex;gap:8px">
+                  <input type="password" value="todo-kanban-local" style="font-family:var(--mono)">
+                  <button class="btn icon" title="显示/隐藏">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
+                  </button>
+                  <button class="btn primary" id="mcpSave">保存</button>
+                </div>
+                <div class="field-hint">默认全局固定授权 Key：<code>todo-kanban-local</code>；server 启动需携带此 Token。</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 附件维护 -->
+          <div class="card">
+            <div class="card-h"><div class="card-t"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.5l-8.5 8.5a5 5 0 0 1-7-7l8.5-8.5a3.5 3.5 0 0 1 5 5l-8.5 8.5a2 2 0 0 1-3-3l8-8"/></svg>附件维护</div>
+              <div class="card-d">任务图片以文件存于 attachments/&lt;任务ID&gt;/，备注中仅保留 attachment:// 短引用。</div></div>
+            <div class="card-b">
+              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+                <button class="btn" id="migrateBtn">迁移历史内嵌图片</button>
+                <button class="btn" id="gcBtn">清理无效附件</button>
+              </div>
+              <div class="field-hint">迁移按任务逐条进行（单条全部成功才生效）；清理把孤儿文件移入 attachments/trash/ 可找回。</div>
+            </div>
+          </div>
+
+          <!-- 数据说明 -->
+          <div class="card">
+            <div class="card-h"><div class="card-t">数据说明</div></div>
+            <div class="card-b muted-list">
+              <div>• 开源地址：<code>github.com/MrTian257/todo-kanban</code></div>
+              <div>• 数据来源：桌面端 SQLite <code>todo-kanban.db</code>，当前数据版本 <span class="pill sec">v11</span>（支持 v1 ~ v11）。</div>
+              <div>• 数据升级：启动自动检查，兼容则硬备份到 <code>backup/</code> 再逐级升级。</div>
+              <div>• 浏览器预览无本地存储；Git 依赖本机 Git ≥ 2.20。</div>
+              <div class="toolcard">
+                <div class="nm">git · 已定位 <span class="pill" style="margin-left:6px">路径可用</span></div>
+                <code style="display:block;margin-top:4px">C:\Program Files\Git\cmd\git.exe</code>
+                <div class="field-hint">来源：PATH；仅检查路径，未验证运行结果。</div>
+              </div>
+              <div class="toolcard">
+                <div class="nm">curl · 已定位 <span class="pill" style="margin-left:6px">路径可用</span></div>
+                <code style="display:block;margin-top:4px">C:\Windows\System32\curl.exe</code>
+              </div>
+              <div style="margin-top:10px">• 软件版本 <span class="pill">2.0.0</span>　当前皮肤 <span class="pill">星尘</span></div>
+              <div>• Tauri 2.x · React 19 · SQLite 3.x · Git 2.45</div>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ===== 视图2：自定义字段配置 ===== -->
+      <section class="view" id="view-fields">
+        <div class="panel">
+          <div class="ph">
+            <h3>自定义字段</h3>
+            <div style="display:flex;gap:8px">
+              <button class="btn sm">清理未定义字段值（3）</button>
+              <button class="btn sm primary" id="newFieldBtn">新建字段</button>
+            </div>
+          </div>
+          <p class="intro">在内置字段之外自定义属性：类型、候选项、默认值，以及<b>值来源</b>（手动填写 / 任务内置属性 / 自动脚本写入）。值随任务保存并参与变更历史与 MCP 读写。</p>
+
+          <div class="frow">
+            <div class="meta"><span class="name">进入开发时间</span><span class="badge">日期时间</span><span class="badge">手动填写</span><span class="scope">所有项目</span><span class="cardmark">卡片展示</span></div>
+            <div class="actions"><button class="btn sm ghost">编辑</button><button class="btn sm ghost">删除</button></div>
+          </div>
+          <div class="frow">
+            <div class="meta"><span class="name">当前阶段</span><span class="badge">单选</span><span class="badge">手动填写</span><span class="scope">所有项目</span><span class="cardmark">卡片展示</span></div>
+            <div class="actions"><button class="btn sm ghost">编辑</button><button class="btn sm ghost">删除</button></div>
+          </div>
+          <div class="frow">
+            <div class="meta"><span class="name">完成时间</span><span class="badge">日期时间</span><span class="badge">任务内置属性</span><span class="scope">doneAt</span><span class="scope">所有项目</span></div>
+            <div class="actions"><button class="btn sm ghost">编辑</button><button class="btn sm ghost">删除</button></div>
+          </div>
+          <div class="frow">
+            <div class="meta"><span class="name">AI 协助标记</span><span class="badge">勾选</span><span class="badge">自动脚本写入</span><span class="scope">所有项目</span></div>
+            <div class="actions"><button class="btn sm ghost">编辑</button><button class="btn sm ghost">删除</button></div>
+          </div>
+        </div>
+
+        <!-- 模态对话框 -->
+        <div class="overlay">
+          <div class="dialog">
+            <div class="dh">
+              <h3 id="dlgTitle">编辑自定义字段</h3>
+              <p>字段标识创建后不可修改（任务上的值按标识关联）。值来源决定值从哪来：手动填写、引用任务内置属性，或由自动脚本写入。</p>
+            </div>
+            <div class="db">
+              <div class="fg" style="margin-bottom:12px">
+                <label class="lbl">字段名称</label>
+                <input type="text" value="进入开发时间" placeholder="例如：进入开发时间">
+              </div>
+
+              <div class="form-grid" style="margin-bottom:12px">
+                <div class="fg">
+                  <label class="lbl">字段类型</label>
+                  <select id="typeSel">
+                    <option>单行文本</option>
+                    <option>数字</option>
+                    <option>日期</option>
+                    <option selected>日期时间</option>
+                    <option>单选</option>
+                    <option>多选</option>
+                    <option>勾选</option>
+                  </select>
+                </div>
+                <div class="fg">
+                  <label class="lbl">值来源</label>
+                  <select id="srcSel">
+                    <option value="manual" selected>手动填写</option>
+                    <option value="builtin">任务内置属性（只读派生）</option>
+                    <option value="rule">由自动脚本写入（只读）</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="hint-line" id="srcHint">在任务详情里手动填写 / 选择，值随任务保存。</div>
+
+              <!-- builtin -->
+              <div class="fg hidden" id="builtinBox" style="margin-top:12px">
+                <label class="lbl">内置属性</label>
+                <select>
+                  <option>创建时间</option><option>更新时间</option><option>开始时间</option>
+                  <option>完成时间</option><option>计划开始日期</option><option>计划结束日期</option>
+                  <option>状态</option><option>泳道</option><option>分支</option><option>提交标记</option>
+                  <option>序号</option><option>提交数</option><option>项目</option><option>阻塞原因</option>
+                </select>
+              </div>
+
+              <!-- 候选项（select/multiselect） -->
+              <fieldset class="fieldset hidden" id="optBox" style="margin-top:12px">
+                <legend>候选项（最多 100 个）</legend>
+                <div class="opt-row"><input type="text" value="待评估"><button class="btn sm ghost">删除</button></div>
+                <div class="opt-row"><input type="text" value="开发中"><button class="btn sm ghost">删除</button></div>
+                <div class="opt-row"><input type="text" value="已上线"><button class="btn sm ghost">删除</button></div>
+                <button class="btn sm">添加候选项</button>
+              </fieldset>
+
+              <!-- 默认值（manual） -->
+              <div class="fieldset" id="defBox" style="margin-top:12px">
+                <legend style="font-size:12.5px;font-weight:600;padding:0 6px">新建任务的默认值</legend>
+                <input type="text" placeholder="留空表示无默认值" style="margin-top:6px">
+              </div>
+
+              <div class="fg" style="margin-top:12px">
+                <label class="lbl">说明（显示在任务详情里）</label>
+                <input type="text" placeholder="可选" value="任务从「待开发」拖入开发泳道后自动记录">
+              </div>
+
+              <div class="form-grid" style="margin-top:12px">
+                <div class="fg">
+                  <label class="lbl">作用范围</label>
+                  <select><option>所有项目</option><option>todo-kanban 重构</option><option>官网改版</option></select>
+                </div>
+                <div class="fg">
+                  <label class="lbl">排序</label>
+                  <input type="number" value="2">
+                </div>
+              </div>
+
+              <div style="display:flex;gap:20px;margin-top:14px">
+                <label class="chk"><input type="checkbox" checked>在看板卡片上展示</label>
+                <label class="chk" id="reqBox"><input type="checkbox">必填（仅界面提示）</label>
+              </div>
+            </div>
+            <div class="dlg-foot">
+              <button class="btn">取消</button>
+              <button class="btn primary" id="saveBtn">保存字段</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast">字段已保存</div>
+
+<script>
+  // 视图切换
+  var srcSwitch=document.getElementById('srcSwitch');
+  document.querySelectorAll('.seg button[data-view]').forEach(b=>{
+    b.addEventListener('click',()=>{
+      document.querySelectorAll('.seg button[data-view]').forEach(x=>x.classList.remove('on'));
+      b.classList.add('on');
+      document.querySelectorAll('.view').forEach(v=>v.classList.remove('on'));
+      document.getElementById('view-'+b.dataset.view).classList.add('on');
+      srcSwitch.classList.toggle('show', b.dataset.view==='fields');
+    });
+  });
+
+  // 皮肤选择
+  document.querySelectorAll('.skin').forEach(s=>{
+    s.addEventListener('click',()=>{
+      document.querySelectorAll('.skin').forEach(x=>x.classList.remove('sel'));
+      s.classList.add('sel');
+    });
+  });
+  // MCP 开关
+  document.getElementById('mcpSwitch').addEventListener('click',function(){this.classList.toggle('on');});
+
+  // 对话框条件分支：值来源 / 字段类型
+  var srcSel=document.getElementById('srcSel');
+  var srcHint=document.getElementById('srcHint');
+  var builtinBox=document.getElementById('builtinBox');
+  var defBox=document.getElementById('defBox');
+  var reqBox=document.getElementById('reqBox');
+  var demoBtns=document.querySelectorAll('#srcSwitch button[data-src]');
+  var HINTS={
+    manual:'在任务详情里手动填写 / 选择，值随任务保存。',
+    builtin:'直接引用任务已有属性（创建时间、完成时间、泳道、分支…），展示时实时求值，不占用存储。',
+    rule:'值由自动脚本写入，详情页只读；请在「自动脚本」里配置写入规则。'
+  };
+  function applySource(src){
+    srcSel.value=src;
+    srcHint.textContent=HINTS[src];
+    builtinBox.classList.toggle('hidden',src!=='builtin');
+    defBox.classList.toggle('hidden',src!=='manual');
+    reqBox.classList.toggle('hidden',src!=='manual');
+    demoBtns.forEach(b=>b.classList.toggle('on',b.dataset.src===src));
+  }
+  demoBtns.forEach(b=>b.addEventListener('click',()=>applySource(b.dataset.src)));
+  srcSel.addEventListener('change',e=>applySource(e.target.value));
+
+  // 字段类型 → 候选项区
+  var typeSel=document.getElementById('typeSel');
+  var optBox=document.getElementById('optBox');
+  typeSel.addEventListener('change',()=>{
+    var t=typeSel.selectedOptions[0].text;
+    optBox.classList.toggle('hidden',!(t==='单选'||t==='多选'));
+  });
+
+  // 保存 toast
+  var toast=document.getElementById('toast');
+  function showToast(msg){toast.textContent=msg;toast.classList.add('show');setTimeout(()=>toast.classList.remove('show'),1600);}
+  // 原型演示：背景面板其余按钮统一反馈
+  document.addEventListener('click',function(e){
+    var b=e.target.closest('button'); if(!b) return;
+    var t=b.textContent.trim();
+    if(['编辑','删除','取消','清理未定义字段值（3）'].indexOf(t)>=0) showToast('原型演示：'+t);
+  });
+  document.getElementById('saveBtn').addEventListener('click',()=>showToast('字段已保存'));
+  document.getElementById('newFieldBtn').addEventListener('click',()=>showToast('原型演示：打开新建字段对话框'));
+  document.getElementById('mcpSave').addEventListener('click',()=>showToast('MCP 设置已保存'));
+  document.getElementById('migrateBtn').addEventListener('click',()=>showToast('原型演示：打开迁移确认对话框'));
+  document.getElementById('gcBtn').addEventListener('click',()=>showToast('原型演示：打开清理确认对话框'));
+</script>
+</body>
+</html>
