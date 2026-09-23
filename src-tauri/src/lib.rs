@@ -1,4 +1,4 @@
-// 应用入口：注册 39 个 handler（commands 30 + native_workflow 5 + desktop 4）
+// 应用入口：注册 40 个 handler（commands 32 + native_workflow 5 + desktop 3）
 // + attachment:// 自定义协议（附件供图）+ opener/log/clipboard-manager/dialog/window-state 插件 + 启动自举。
 // 日志：数据目录 kanban.log（追加写，超限轮转只保留一份）。
 // 可选能力（菜单栏/全局快捷键）安装失败只降级为可见错误，不影响启动。
@@ -193,6 +193,7 @@ pub fn run() {
             commands::attachment_import,
             commands::attachment_migrate_inline,
             commands::attachment_gc_orphans,
+            commands::git_report_fetch,
         ])
         .build(tauri::generate_context!())
         .expect("应用初始化失败")

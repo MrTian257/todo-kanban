@@ -1,11 +1,11 @@
-//! 30 个 Tauri 命令薄壳：一行转调 core::svc，错误 map_err 转中文 String（命令内不 panic）。
+//! 32 个 Tauri 命令薄壳：一行转调 core::svc，错误 map_err 转中文 String（命令内不 panic）。
 //! 契约见 docs/02-development（backend-contract）与 CLAUDE.md「新增 Tauri 命令」。
 
 use todo_kanban_core::db::VersionReport;
 use todo_kanban_core::models::{
     AttachmentInfo, CommitInfo, DbState, GcSummary, GitInfo, McpSettings, MigrateSummary,
 };
-use todo_kanban_core::svc::{attachments, db_cmds, git_cmds, repo_cache};
+use todo_kanban_core::svc::{attachments, db_cmds, git_cmds, git_report, repo_cache};
 
 async fn blocking<T: Send + 'static>(
     work: impl FnOnce() -> Result<T, String> + Send + 'static,
@@ -277,4 +277,13 @@ pub async fn proposal_reject(id: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn automation_backfill(rule_id: String) -> Result<(usize, usize), String> {
     blocking(move || db_cmds::automation_backfill(rule_id).map_err(err_str)).await
+}
+
+/// Git 报告（日报 / 周报 / 月报）：按时间窗从 GitLab API 拉取提交，按开发人员归类聚合。
+/// 纯查询——不写库、不进 db_save_state 写链；归类表配置走 workflow_load / workflow_save。
+#[tauri::command]
+pub async fn git_report_fetch(
+    payload: git_report::ReportRequest,
+) -> Result<git_report::ReportResult, String> {
+    blocking(move || git_report::fetch(payload).map_err(err_str)).await
 }

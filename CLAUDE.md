@@ -9,7 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 权威文档（改动前先查；注意部分文档与实际代码有漂移，**以源码为准**）：
 - `docs/软件设计文档.md` — 整合视图（产品/架构/数据/接口/UI/流程）
 - `docs/02-development/directory-map.md` — 「去哪里改」文件地图（部分文件名仍为 todo-git 旧称，如 TodoCard.tsx、todo-git-core 已更名/移除）
-- `docs/decisions/` — ADR-001 ~ ADR-012 架构决策（文件名自描述：hash-router / system-cli-git-curl / sqlite-storage / db-config-data-source / workspace-split / global-seq-and-commit-dedupe / mcp-handwritten-protocol / single-store-write-chain / swimlane-board / swimlane-order-persistence / data-version-upgrade / fixed-db-path）
+- `docs/decisions/` — ADR-001 ~ ADR-015 架构决策（文件名自描述：hash-router / system-cli-git-curl / sqlite-storage / db-config-data-source / workspace-split / global-seq-and-commit-dedupe / mcp-handwritten-protocol / single-store-write-chain / swimlane-board / swimlane-order-persistence / data-version-upgrade / fixed-db-path / custom-fields-and-automations / git-report）
 - `docs/README.md` 的文档地图已漂移（列出多份不存在的文件），只作背景参考
 
 ## 环境与常用命令
@@ -45,7 +45,7 @@ cargo test -p mcp-server         # MCP 单测（握手 / 工具清单 / 映射 /
 ## 架构：三进程位面
 
 ```
-React SPA ──Tauri invoke（38 个命令）──> Rust 壳 crate（src-tauri/src/）
+React SPA ──Tauri invoke（32 个命令）──> Rust 壳 crate（src-tauri/src/）
                                             └─ 转调 todo-kanban-core（纯逻辑，无 tauri 依赖）
 mcp-server（独立 stdio 进程，复用同一个 core）
 ```
@@ -92,6 +92,8 @@ SQLite WAL，数据源固定为**程序运行目录** `todo-kanban.db`（ADR-012
 
 系统 git CLI（`tool/git_cli.rs` + `proc.rs`，无 libgit2）。约定：输出格式 `%H%x1f%s%x1f%cI`、30s 超时、`--no-pager -c color.ui=false -c core.quotepath=false`；所有子进程经 `quiet_command` 构造（Windows `CREATE_NO_WINDOW` 防 release GUI 壳闪黑框——新增子进程勿绕过）。分支列表走 SQLite 持久缓存（`db/repo_cache.rs` + `svc/repo_cache.rs`：命中即回、30s 节流后台刷新、检出后失效；无数据源时退化直读 git 不落缓存）；GitLab 远端分支经系统 curl（`svc/gitlab.rs`）。
 
+Git 报告（日报/周报/月报，ADR-015）只走 GitLab API，不读本地 git：`svc/git_report.rs` 用 `gitlab::commits_window`（`all=true&since&until&with_stats=true`，20 页 / 30s 预算，超限返回部分结果 + truncated）拉窗口内提交，按 `Workflow.gitReportDevs` 的别名（大小写不敏感，含 `@` 匹配邮箱否则姓名，支持 `*` 通配）归类，合并提交按 `parent_ids.len() > 1` 判定并默认排除；「按模块分布」是可选开关（逐提交调 `/commits/:sha/diff`，200 条 / 4 路并发 / 20s 预算）。类型规则同样按项目自定义（`Workflow.gitReportKinds`，空 = 内置 `default_kind_rules()`）：conventional 前缀优先，其次按规则顺序扫关键词（ASCII 按词边界、中文按子串），未命中落 `other`。成员维度另带 `byDay`/`byHour` 分桶（日报按小时、周报/月报按天出每人一张图），月报额外渲染日历热力图（`monthGrid` + `heatLevel`）。命令 `git_report_fetch` 是纯查询：不写库、不进 `db_save_state` 写链。
+
 ### 附件（图片）协议（v8，ADR-013）
 
 note 持久化只存 `attachment://<todoId>/<file>` 短引用；展示/编辑时前缀换为自定义协议 URL（Windows `http://attachment.localhost/`，其余 `attachment://localhost/`），由 app 壳注册的 attachment 协议按相对路径直接供图（serve 不查库）。文件落 `<db 目录>/attachments/<todoId>/`，单张上限 5MB；save_state 对 note 引用补链（INSERT OR IGNORE），仅待办被差集删除时删关系、文件移 `attachments/trash/`。历史内嵌 data URL 图片继续兼容，不强制迁移。
@@ -109,6 +111,7 @@ note 持久化只存 `attachment://<todoId>/<file>` 短引用；展示/编辑时
 | 想改什么 | 位置 |
 | --- | --- |
 | 新增 Tauri 命令 | core/svc 加业务函数 → `src-tauri/src/commands.rs` 加薄壳 → `src-tauri/src/lib.rs` 注册 → `src/lib/git.ts`（或新建 lib 模块）封装 invoke |
+| Git 报告（日报/周报/月报） | 后端 `core/src/svc/git_report.rs`（GitLab API 聚合，命令 `git_report_fetch`，纯查询不写库）；前端 `src/pages/GitReportPage.tsx` + `src/lib/gitReport.ts`（DTO/调用/会话缓存）+ `src/lib/gitReportPeriod.ts`（周期口径，有 node 测试）；归类表存 workflow_state 的 `gitReportDevs`；决策见 ADR-015 |
 | 改 git 行为 | core/svc/git_cmds.rs（执行器 tool/git_cli.rs，子进程 tool/proc.rs） |
 | 改 GitLab 远端 | core/svc/gitlab.rs + svc/repo_cache.rs（缓存编排） |
 | 改存储/表结构 | core/db/schema.rs + row.rs + db/mod.rs 三处同步 + svc/db_cmds.rs |

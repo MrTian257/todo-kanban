@@ -27,11 +27,12 @@ todo-kanban/
 
 | 想改什么 | 位置 |
 | --- | --- |
-| 前端路由/页面 | `src/pages/` + `src/App.tsx`（HashRouter 12 路由；启动落点 = 上次打开项目的看板 `/project/:id`，「项目看板」菜单入口 `/board`） |
+| 前端路由/页面 | `src/pages/` + `src/App.tsx`（HashRouter 13 路由；启动落点 = 上次打开项目的看板 `/project/:id`，「项目看板」菜单入口 `/board`） |
 | 前端状态/数据流 | `src/lib/store.ts`（唯一 zustand store，ADR-008 写链） |
 | 前端类型（与后端对齐） | `src/lib/types.ts` ↔ `src-tauri/core/src/models.rs`（改字段必须两端同步） |
 | 拖拽/泳道 | `src/components/board/SwimlaneBoard.tsx` + `src/lib/boardOrder.ts`（有 node 测试） |
 | Tauri 命令 | 业务函数在 `core/svc/` → 薄壳 `src-tauri/src/commands.rs` → 注册 `src-tauri/src/lib.rs` → 前端封装 `src/lib/git.ts` |
+| Git 报告（日报/周报/月报） | 后端 `core/src/svc/git_report.rs`（GitLab API 聚合，命令 `git_report_fetch`，纯查询不写库）；前端 `src/pages/GitReportPage.tsx` + `src/lib/gitReport.ts` + `src/lib/gitReportPeriod.ts`（周期口径有 node 测试）；开发人员归类存 workflow_state 的 `gitReportDevs`（页面内「开发人员归类」对话框编辑，见 ADR-015） |
 | Rust 业务逻辑 | `src-tauri/core/src/`（svc/ 编排、db/ 存储、tool/ git CLI） |
 | 数据版本升级 | `src-tauri/config/src/lib.rs` + `upgrade/` + schema.rs/row.rs/db 三处（ADR-011） |
 | MCP 工具 | `src-tauri/mcp-server/src/bridge.rs` + `protocol.rs`，业务走 core/svc |
@@ -48,7 +49,7 @@ todo-kanban/
 | `startGitCacheWarm` | fn | `src/lib/store.ts:386` | 启动后预热 git 分支缓存 |
 | `Project` / `Todo` | type | `src/lib/types.ts:56/76` | 前后端 serde rename 强对齐契约 |
 | `GitInfo` | type | `src/lib/types.ts:19` | **唯一 snake_case 例外**（models.rs 头部注释） |
-| `commands.rs` 38 命令 | module | `src-tauri/src/commands.rs` | 薄壳：一行转调 core::svc，map_err 中文 |
+| `commands.rs` 32 命令 | module | `src-tauri/src/commands.rs` | 薄壳：一行转调 core::svc，map_err 中文 |
 | `core/src/lib.rs` | barrel | `src-tauri/core/src/lib.rs` | 导出 db/error/models/svc/tool |
 | `db_cmds.rs` | svc | `src-tauri/core/src/svc/` | 读写编排 + DB_RW_LOCK（外部改动由 state_poll 轮询） |
 | `git_cmds.rs` | svc | `src-tauri/core/src/svc/` | git 行为（执行器在 tool/git_cli.rs） |

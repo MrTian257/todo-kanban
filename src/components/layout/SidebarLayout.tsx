@@ -10,6 +10,7 @@ import { useTheme } from "next-themes";
 import {
   Search,
   CalendarDays,
+  ChartColumn,
   Copy,
   Kanban,
   ListTodo,
@@ -42,6 +43,8 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
+  // Git 报告（日报/周报/月报）：按需求放在导航最上部，跟随当前活跃项目
+  { to: "/report", label: "Git 日报", icon: ChartColumn },
   // 项目看板 = 当前活跃项目的看板：/board 只是稳定入口，真实路由是 /project/:id，两者都算选中
   {
     to: "/board",

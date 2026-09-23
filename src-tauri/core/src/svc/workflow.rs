@@ -10,6 +10,13 @@ use std::collections::{HashMap, HashSet};
 
 use super::automation::{self, AutomationRule};
 use super::fields::{self, FieldDef};
+use super::git_report::{GitDeveloper, GitKindRule};
+
+/// Git 报告配置上限（与前端表单限制一致）
+const MAX_GIT_REPORT_DEVELOPERS: usize = 200;
+const MAX_GIT_REPORT_ALIASES: usize = 50;
+const MAX_GIT_REPORT_KINDS: usize = 50;
+const MAX_GIT_REPORT_KEYWORDS: usize = 50;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -62,6 +69,14 @@ pub struct Workflow {
     /// 自动脚本（v11）：声明式规则，由保存事务在 core 内执行
     #[serde(default)]
     pub automations: Vec<AutomationRule>,
+    /// Git 报告开发人员归类（每个项目一份）：把一个实际开发人员的多个提交人姓名/邮箱归到一起。
+    /// 只是配置，不参与任务快照；旧数据缺失时为空数组。
+    #[serde(default)]
+    pub git_report_devs: Vec<GitDeveloper>,
+    /// Git 报告类型规则（每个项目一份）：提交类型（feat/fix/…）的匹配词表；
+    /// 空数组 = 使用内置默认规则（core/src/svc/git_report.rs::default_kind_rules）。
+    #[serde(default)]
+    pub git_report_kinds: Vec<GitKindRule>,
 }
 impl Default for Workflow {
     fn default() -> Self {
@@ -76,6 +91,8 @@ impl Default for Workflow {
             backup_keep: 7,
             field_defs: vec![],
             automations: vec![],
+            git_report_devs: vec![],
+            git_report_kinds: vec![],
         }
     }
 }
@@ -115,6 +132,81 @@ pub fn load() -> AppResult<Workflow> {
 pub fn read_at(path: &std::path::Path) -> AppResult<Workflow> {
     read(&db::open_existing(path, false)?)
 }
+/// Git 报告归类表校验：数量 / 长度上限 + id 唯一。
+/// 刻意不校验 projectId 是否仍存在——项目删除后配置仍须能保存（与 fieldDefs 的失效引用同策略），
+/// 报告侧只按当前项目取用，残留条目无害。
+fn validate_git_report_devs(list: &[GitDeveloper]) -> AppResult<()> {
+    if list.len() > MAX_GIT_REPORT_DEVELOPERS {
+        return Err(AppError::invalid("开发人员数量超出限制（最多 200 人）"));
+    }
+    for developer in list {
+        if developer.project_id.trim().is_empty() {
+            return Err(AppError::invalid("开发人员必须归属某个项目"));
+        }
+        if developer.name.chars().count() > 100 {
+            return Err(AppError::invalid("开发人员姓名过长（最多 100 字）"));
+        }
+        if developer.aliases.len() > MAX_GIT_REPORT_ALIASES {
+            return Err(AppError::invalid("单个开发人员的别名最多 50 条"));
+        }
+        if developer
+            .aliases
+            .iter()
+            .any(|alias| alias.chars().count() > 200)
+        {
+            return Err(AppError::invalid("别名过长（最多 200 字）"));
+        }
+    }
+    unique(list.iter().map(|item| item.id.as_str()))?;
+    Ok(())
+}
+
+/// Git 报告类型规则校验：数量 / 长度上限 + id 唯一 + 同项目内 key 不重复。
+/// 与归类表同策略：不校验 projectId 是否仍存在（项目删除后配置仍须能保存）。
+fn validate_git_report_kinds(list: &[GitKindRule]) -> AppResult<()> {
+    if list.len() > MAX_GIT_REPORT_KINDS {
+        return Err(AppError::invalid("类型规则数量超出限制（最多 50 条）"));
+    }
+    let mut keys: HashSet<(String, String)> = HashSet::new();
+    for rule in list {
+        let project = rule.project_id.trim();
+        if project.is_empty() {
+            return Err(AppError::invalid("类型规则必须归属某个项目"));
+        }
+        let key = rule.key.trim();
+        if key.is_empty() || key.chars().count() > 40 {
+            return Err(AppError::invalid("类型规则的 key 不能为空且最多 40 字"));
+        }
+        if !keys.insert((project.to_lowercase(), key.to_lowercase())) {
+            return Err(AppError::invalid("同一项目内的类型 key 不能重复"));
+        }
+        if rule.label.chars().count() > 50 {
+            return Err(AppError::invalid("类型名称过长（最多 50 字）"));
+        }
+        let color = rule.color.trim();
+        if !color.is_empty() && !is_hex_color(color) {
+            return Err(AppError::invalid("类型颜色必须是 #rrggbb 形式"));
+        }
+        if rule.keywords.len() > MAX_GIT_REPORT_KEYWORDS {
+            return Err(AppError::invalid("单个类型的匹配关键词最多 50 条"));
+        }
+        if rule
+            .keywords
+            .iter()
+            .any(|keyword| keyword.chars().count() > 100)
+        {
+            return Err(AppError::invalid("匹配关键词过长（最多 100 字）"));
+        }
+    }
+    unique(list.iter().map(|item| item.id.as_str()))?;
+    Ok(())
+}
+
+/// `#rrggbb` 颜色格式校验（# 后 6 位十六进制）
+fn is_hex_color(value: &str) -> bool {
+    value.len() == 7 && value.starts_with('#') && value[1..].chars().all(|c| c.is_ascii_hexdigit())
+}
+
 fn unique<'a>(ids: impl Iterator<Item = &'a str>) -> AppResult<()> {
     let mut seen = HashSet::new();
     for id in ids {
@@ -165,6 +257,8 @@ pub fn validate(value: &Workflow, state: &DbState) -> AppResult<()> {
     // （删泳道或删字段后仍必须能保存配置，失效项由前端标注且不参与运行）。
     fields::validate_defs(&value.field_defs)?;
     automation::validate(&value.automations)?;
+    validate_git_report_devs(&value.git_report_devs)?;
+    validate_git_report_kinds(&value.git_report_kinds)?;
     unique(value.links.iter().map(|v| v.todo_id.as_str()))?;
     unique(value.templates.iter().map(|v| v.id.as_str()))?;
     unique(value.reminders.iter().map(|v| v.id.as_str()))?;

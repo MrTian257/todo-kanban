@@ -463,6 +463,7 @@ input, textarea, select, button { font-family: inherit; }
 .tk-focus-completed:hover { background: color-mix(in oklch, var(--muted) 50%, var(--card)); }
 .tk-focus-list .tk-task-row { padding: calc(18px * var(--tk-density)) calc(20px * var(--tk-density)); }
 .tk-focus-list .tk-task-body > .tk-task-meta:first-of-type { display: inline-flex; margin-right: 12px; margin-top: 7px; }
+
 .tk-focus-list .tk-task-branch { display: inline-flex; vertical-align: middle; margin-top: 7px; }
 .tk-focus-list .tk-task-body > .tk-task-meta:last-child { display: inline-flex; margin-top: 7px; margin-left: 12px; color: var(--primary); }
 .tk-focus-blocked .tk-task-body > .tk-task-meta:last-child { margin-left: 0; }
@@ -486,3 +487,155 @@ input, textarea, select, button { font-family: inherit; }
   .tk-focus-list .tk-task-body > .tk-task-meta:last-child { display: flex; margin-left: 0; }
   .tk-focus-list .tk-task-actions { margin-left: 24px; }
 }
+/* ── Git 报告（日报 / 周报 / 月报）────────────────────────────────────────────
+   参考「前端团队 Git 周报」的信息层级，颜色一律走主题变量，保证 5 套皮肤 + 明暗都正常。
+   图表是零依赖内联 SVG（ReportDonut / ReportBars），这里只负责排版。 */
+.tk-report-content { display: flex; flex-direction: column; gap: calc(16px * var(--tk-density)); padding-bottom: 16px; }
+.tk-report-header { display: flex; flex-direction: column; gap: calc(14px * var(--tk-density)); }
+.tk-report-header-top { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.tk-report-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.tk-report-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: calc(12px * var(--tk-density)); border: 1px solid var(--border); border-radius: 12px; background: var(--card); }
+.tk-report-tabs { display: inline-flex; padding: 3px; gap: 2px; border-radius: 9px; background: var(--muted); }
+.tk-report-tab { padding: 5px 14px; border-radius: 7px; font-size: 13px; font-weight: 500; color: var(--muted-foreground); transition: background .15s, color .15s; }
+.tk-report-tab[data-selected="true"] { background: var(--card); color: var(--primary); font-weight: 600; box-shadow: 0 1px 2px #0000000f; }
+.tk-report-period { display: flex; align-items: center; gap: 6px; }
+.tk-report-period-label { min-width: 240px; text-align: center; font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.tk-report-switches { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin-left: auto; }
+.tk-report-switch { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted-foreground); cursor: pointer; }
+.tk-report-banner { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-radius: 10px; font-size: 12.5px; }
+.tk-report-banner-warn { border: 1px solid color-mix(in oklch, var(--node-doing) 35%, var(--border)); background: color-mix(in oklch, var(--node-doing) 12%, var(--card)); color: var(--foreground); }
+.tk-report-banner-error { border: 1px solid color-mix(in oklch, var(--destructive) 35%, var(--border)); background: color-mix(in oklch, var(--destructive) 10%, var(--card)); color: var(--foreground); }
+.tk-report-card { padding: calc(16px * var(--tk-density)); border: 1px solid var(--border); border-radius: 12px; background: var(--card); box-shadow: 0 2px 8px #18234c03; }
+.tk-report-card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+.tk-report-card-head h3 { font-size: 14px; font-weight: 650; }
+.tk-report-hint, .tk-report-sub { font-size: 12px; color: var(--muted-foreground); }
+.tk-report-card-actions { display: flex; justify-content: flex-end; margin-top: 12px; }
+.tk-report-empty { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 28px 12px; font-size: 13px; color: var(--muted-foreground); }
+.tk-report-note { margin-bottom: 12px; padding: 10px 12px; border-radius: 9px; border: 1px solid var(--border); background: color-mix(in oklch, var(--primary) 6%, var(--card)); font-size: 12.5px; color: var(--foreground); }
+.tk-report-placeholder { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 46px 20px; text-align: center; }
+.tk-report-placeholder h2 { font-size: 16px; font-weight: 650; }
+.tk-report-placeholder p { max-width: 520px; font-size: 13px; color: var(--muted-foreground); }
+.tk-report-body { display: flex; flex-direction: column; gap: calc(16px * var(--tk-density)); }
+.tk-report-kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+.tk-report-kpi { padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--card); text-align: center; }
+.tk-report-kpi-value { font-size: 26px; font-weight: 750; line-height: 1.15; color: var(--primary); font-variant-numeric: tabular-nums; }
+.tk-report-kpi-unit { margin-left: 3px; font-size: 12px; font-weight: 500; color: var(--muted-foreground); }
+.tk-report-kpi-label { margin-top: 6px; font-size: 12.5px; color: var(--muted-foreground); }
+.tk-report-charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+.tk-report-donut { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.tk-report-donut-value { font-size: 24px; font-weight: 750; fill: var(--foreground); }
+.tk-report-donut-unit { font-size: 11px; fill: var(--muted-foreground); }
+.tk-report-legend { display: flex; flex-direction: column; gap: 6px; min-width: 130px; flex: 1; }
+.tk-report-legend li { display: flex; align-items: center; gap: 7px; font-size: 12.5px; }
+.tk-report-swatch { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+.tk-report-legend-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted-foreground); }
+.tk-report-legend-count { font-weight: 650; font-variant-numeric: tabular-nums; }
+.tk-report-bars { display: flex; flex-direction: column; gap: 8px; }
+.tk-report-bars li { display: grid; grid-template-columns: 110px minmax(0, 1fr) auto auto; align-items: center; gap: 10px; font-size: 12.5px; }
+.tk-report-bar-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tk-report-bar-track { height: 10px; border-radius: 6px; background: var(--muted); overflow: hidden; }
+.tk-report-bar-fill { display: block; height: 100%; border-radius: 6px; }
+.tk-report-bar-value { min-width: 66px; text-align: right; font-weight: 650; font-variant-numeric: tabular-nums; }
+.tk-report-bar-unit { margin-left: 2px; font-size: 11px; font-weight: 400; color: var(--muted-foreground); }
+.tk-report-bar-detail { min-width: 120px; font-size: 11.5px; color: var(--muted-foreground); }
+.tk-report-table-wrap { overflow-x: auto; }
+.tk-report-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.tk-report-table th, .tk-report-table td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.tk-report-table th { font-size: 11.5px; font-weight: 600; color: var(--muted-foreground); }
+.tk-report-table tbody tr:hover { background: color-mix(in oklch, var(--muted) 45%, var(--card)); }
+.tk-report-strong { font-weight: 650; }
+.tk-report-add { color: var(--node-done); font-variant-numeric: tabular-nums; }
+.tk-report-del { color: var(--destructive); font-variant-numeric: tabular-nums; }
+.tk-report-subject { max-width: 420px; overflow: hidden; text-overflow: ellipsis; }
+.tk-report-pills { display: inline-flex; align-items: center; gap: 5px; }
+.tk-report-pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+.tk-report-link { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--primary); text-decoration: underline; text-underline-offset: 2px; }
+.tk-report-authors { display: flex; flex-direction: column; }
+.tk-report-authors li { display: grid; grid-template-columns: 140px minmax(0, 1fr) 90px 150px; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--border); font-size: 12.5px; }
+.tk-report-author-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.tk-report-author-email { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted-foreground); }
+.tk-report-author-count { font-variant-numeric: tabular-nums; }
+.tk-report-author-row { display: grid; grid-template-columns: 18px 1fr 1fr 40px; align-items: center; gap: 8px; padding: 6px 4px; border-radius: 7px; font-size: 12.5px; cursor: pointer; }
+.tk-report-author-row:hover { background: color-mix(in oklch, var(--muted) 50%, var(--card)); }
+.tk-report-foot { font-size: 11.5px; color: var(--muted-foreground); text-align: center; }
+.tk-report-alias-dialog { max-height: 82vh; overflow: hidden; }
+.tk-report-alias-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 14px; min-height: 0; }
+.tk-report-alias-pane { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+.tk-report-alias-head { display: flex; align-items: center; justify-content: space-between; font-size: 12.5px; font-weight: 600; }
+.tk-report-alias-list { display: flex; flex-direction: column; gap: 6px; overflow-y: auto; max-height: 42vh; padding-right: 2px; }
+.tk-report-alias-item { padding: 8px; border: 1px solid var(--border); border-radius: 9px; cursor: pointer; }
+.tk-report-alias-item.is-active { border-color: color-mix(in oklch, var(--primary) 45%, var(--border)); background: color-mix(in oklch, var(--primary) 5%, var(--card)); }
+.tk-report-alias-row { display: flex; align-items: center; gap: 6px; }
+.tk-report-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.tk-report-chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 4px 1px 8px; border-radius: 999px; background: var(--muted); font-size: 11.5px; }
+.tk-report-chip button { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; border-radius: 999px; color: var(--muted-foreground); }
+.tk-report-chip button:hover { background: color-mix(in oklch, var(--destructive) 18%, transparent); color: var(--destructive); }
+.tk-report-alias-add { display: flex; align-items: center; gap: 6px; }
+@media (max-width: 1100px) { .tk-report-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 860px) {
+  .tk-report-period-label { min-width: 0; }
+  .tk-report-switches { margin-left: 0; }
+  .tk-report-alias-grid { grid-template-columns: minmax(0, 1fr); }
+  .tk-report-bars li { grid-template-columns: 90px minmax(0, 1fr) auto; }
+  .tk-report-bar-detail { display: none; }
+  .tk-report-authors li { grid-template-columns: 120px minmax(0, 1fr) 70px; }
+  .tk-report-authors li > .tk-report-sub { display: none; }
+}
+
+/* ── Git 报告：类型规则对话框 / 按成员图表 / 月历热力图 ─────────────────────── */
+.tk-report-kind-dialog { max-height: 86vh; overflow: hidden; }
+.tk-report-kind-list { display: flex; flex-direction: column; gap: 8px; overflow-y: auto; max-height: 52vh; padding-right: 2px; }
+.tk-report-kind-item { display: flex; gap: 8px; padding: 8px; border: 1px solid var(--border); border-radius: 10px; }
+.tk-report-kind-item.is-off { opacity: .55; }
+.tk-report-kind-order { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.tk-report-kind-fields { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 0; }
+.tk-report-kind-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.tk-report-kind-color { width: 14px; height: 14px; border-radius: 4px; flex: none; }
+.tk-report-color-input { width: 30px; height: 30px; padding: 0; border: 1px solid var(--border); border-radius: 7px; background: transparent; cursor: pointer; }
+.tk-report-kind-used { padding: 1px 7px; border-radius: 999px; background: color-mix(in oklch, var(--primary) 12%, var(--card)); color: var(--primary); font-size: 11px; font-weight: 600; }
+.tk-report-member-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+.tk-report-member { display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: color-mix(in oklch, var(--muted) 25%, var(--card)); }
+.tk-report-member-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px; }
+.tk-report-mini { display: flex; align-items: flex-end; gap: 2px; height: 56px; }
+.tk-report-mini-col { display: flex; flex-direction: column; justify-content: flex-end; align-items: center; flex: 1; min-width: 0; height: 100%; }
+.tk-report-mini-bar { width: 100%; border-radius: 3px 3px 0 0; background: var(--primary); transition: height .15s; }
+.tk-report-mini-bar[data-empty="true"] { background: color-mix(in oklch, var(--muted-foreground) 25%, transparent); }
+.tk-report-mini-label { margin-top: 3px; font-size: 9px; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+.tk-report-mini-types { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 11.5px; color: var(--muted-foreground); }
+.tk-report-mini-type { display: inline-flex; align-items: center; gap: 4px; }
+.tk-report-mini-type b { color: var(--foreground); font-variant-numeric: tabular-nums; }
+.tk-report-heat { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; max-width: 460px; }
+.tk-report-heat-week { text-align: center; font-size: 11px; color: var(--muted-foreground); }
+.tk-report-heat-cell { display: flex; align-items: center; justify-content: center; aspect-ratio: 1 / 1; border-radius: 5px; border: 1px solid var(--border); font-size: 11px; font-variant-numeric: tabular-nums; color: var(--muted-foreground); }
+.tk-report-heat-cell.is-pad { border-color: transparent; background: transparent; }
+.tk-report-heat-cell[data-level="0"] { background: color-mix(in oklch, var(--muted) 55%, var(--card)); }
+.tk-report-heat-cell[data-level="1"] { background: color-mix(in oklch, var(--primary) 18%, var(--card)); color: var(--foreground); }
+.tk-report-heat-cell[data-level="2"] { background: color-mix(in oklch, var(--primary) 38%, var(--card)); color: var(--foreground); }
+.tk-report-heat-cell[data-level="3"] { background: color-mix(in oklch, var(--primary) 62%, var(--card)); color: var(--primary-foreground); }
+.tk-report-heat-cell[data-level="4"] { background: var(--primary); color: var(--primary-foreground); }
+.tk-report-heat-legend { display: flex; align-items: center; gap: 5px; margin-top: 10px; }
+.tk-report-heat-legend .tk-report-heat-cell.is-legend { width: 14px; height: 14px; aspect-ratio: auto; }
+@media (max-width: 860px) {
+  .tk-report-member-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+
+/* ── Git 报告：月报「热力图 + 成员排名」两列布局 ─────────────────────────── */
+.tk-report-month-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 320px); gap: calc(16px * var(--tk-density)); align-items: start; }
+.tk-report-rank-metrics { display: inline-flex; gap: 2px; padding: 2px; border-radius: 8px; background: var(--muted); }
+.tk-report-rank-metrics button { padding: 3px 9px; border-radius: 6px; font-size: 11.5px; color: var(--muted-foreground); transition: background .15s, color .15s; }
+.tk-report-rank-metrics button[data-selected="true"] { background: var(--card); color: var(--primary); font-weight: 600; }
+.tk-report-rank-metrics button:disabled { opacity: .45; cursor: not-allowed; }
+.tk-report-rank-list { display: flex; flex-direction: column; gap: 11px; }
+.tk-report-rank-list li { display: flex; align-items: flex-start; gap: 9px; }
+.tk-report-rank-index { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 20px; height: 20px; border-radius: 6px; background: var(--muted); color: var(--muted-foreground); font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.tk-report-rank-index[data-top="1"] { background: var(--primary); color: var(--primary-foreground); }
+.tk-report-rank-index[data-top="2"] { background: color-mix(in oklch, var(--primary) 55%, var(--card)); color: var(--primary-foreground); }
+.tk-report-rank-index[data-top="3"] { background: color-mix(in oklch, var(--primary) 32%, var(--card)); color: var(--foreground); }
+.tk-report-rank-body { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; }
+.tk-report-rank-line { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.tk-report-rank-value { font-size: 12.5px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.tk-report-rank-track { height: 6px; border-radius: 4px; background: var(--muted); overflow: hidden; }
+.tk-report-rank-fill { display: block; height: 100%; border-radius: 4px; background: var(--primary); }
+@media (max-width: 1100px) { .tk-report-month-grid { grid-template-columns: minmax(0, 1fr); } }
+

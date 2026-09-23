@@ -26,6 +26,7 @@ const TodoListPage = lazy(() => import("@/pages/TodoListPage").then(module => ({
 const ResourceLibraryPage = lazy(() => import("@/pages/ResourceLibraryPage").then(module => ({ default: module.ResourceLibraryPage })));
 const ResourceEditorPage = lazy(() => import("@/pages/ResourceEditorPage").then(module => ({ default: module.ResourceEditorPage })));
 const FieldSettingsPage = lazy(() => import("@/pages/FieldSettingsPage").then(module => ({ default: module.FieldSettingsPage })));
+const GitReportPage = lazy(() => import("@/pages/GitReportPage").then(module => ({ default: module.GitReportPage })));
 
 import { PersistenceStatus } from "@/components/layout/PersistenceStatus";
 
@@ -118,6 +119,8 @@ function Application() {
               <Route path="/settings/workflow" element={<WorkflowPage />} />
               {/* 自定义字段与自动脚本：从「工作流」拆出的独立设置项 */}
               <Route path="/settings/fields" element={<FieldSettingsPage />} />
+              {/* Git 报告（日报/周报/月报）：跟随当前活跃项目，手动刷新才生成 */}
+              <Route path="/report" element={<GitReportPage />} />
               <Route path="/focus" element={<FocusPage />} />
               <Route path="/todos" element={<TodoListPage />} />
               <Route path="/projects" element={<ProjectListPage />} />

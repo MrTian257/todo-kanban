@@ -5,20 +5,21 @@ import { useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { isTauri } from "./storage";
 import { AppState, AutomationRule, CustomFieldDef, Todo } from "./types";
+import { GitDeveloper } from "./gitReport";
 import { normalizeFieldDef, normalizeRule } from "./customFields";
 import { flushPersistence, reloadRemoteState, useAppStore } from "./store";
 
 export interface TaskLinks { todoId: string; parentId: string | null; dependsOn: string[]; resourceIds: string[] }
 export interface TaskTemplate { id: string; projectId: string | null; name: string; title: string; note: string; repoPath: string; branch: string }
 export interface Reminder { id: string; todoId: string; at: number; deliveredAt: number | null }
-export interface Workflow { revision: number; links: TaskLinks[]; templates: TaskTemplate[]; reminders: Reminder[]; remindersEnabled: boolean; backupEnabled: boolean; backupHours: number; backupKeep: number; fieldDefs: CustomFieldDef[]; automations: AutomationRule[] }
+export interface Workflow { revision: number; links: TaskLinks[]; templates: TaskTemplate[]; reminders: Reminder[]; remindersEnabled: boolean; backupEnabled: boolean; backupHours: number; backupKeep: number; fieldDefs: CustomFieldDef[]; automations: AutomationRule[]; gitReportDevs: GitDeveloper[] }
 export interface HistoryEntry { id: string; entity: string; entityId: string; actor: string; happenedAt: number; before: Record<string, unknown> | null; after: Record<string, unknown> | null }
 export interface BackupInfo { id: string; createdAt: number; projects: number; todos: number; resources: number; attachmentFiles: number; attachmentBytes: number }
 export interface Proposal { id: string; createdAt: number; expected: AppState; payload: AppState; status: string }
 export interface DesktopStatus { shortcutError: string; trayError: string; backgroundError: string }
 
 const PREVIEW_KEY = "workflow-preview";
-const EMPTY: Workflow = { revision: 0, links: [], templates: [], reminders: [], remindersEnabled: false, backupEnabled: false, backupHours: 24, backupKeep: 7, fieldDefs: [], automations: [] };
+const EMPTY: Workflow = { revision: 0, links: [], templates: [], reminders: [], remindersEnabled: false, backupEnabled: false, backupHours: 24, backupKeep: 7, fieldDefs: [], automations: [], gitReportDevs: [] };
 
 /** 旧配置兜底：字段定义与自动脚本缺失时补空数组，脏项直接丢弃（前端不因配置损坏而崩） */
 function normalizeWorkflow(value: Workflow): Workflow {
@@ -29,6 +30,12 @@ function normalizeWorkflow(value: Workflow): Workflow {
     reminders: Array.isArray(value.reminders) ? value.reminders : [],
     fieldDefs: Array.isArray(value.fieldDefs) ? value.fieldDefs.map(normalizeFieldDef).filter((def): def is CustomFieldDef => def !== null) : [],
     automations: Array.isArray(value.automations) ? value.automations.map(normalizeRule).filter((rule): rule is AutomationRule => rule !== null) : [],
+    // Git 报告归类表：旧配置缺失时补空数组；缺 id/name 的脏项直接丢弃（前端不因配置损坏而崩）
+    gitReportDevs: Array.isArray(value.gitReportDevs)
+      ? value.gitReportDevs
+          .filter((dev): dev is GitDeveloper => !!dev && typeof dev.id === "string" && dev.id.trim().length > 0 && typeof dev.name === "string")
+          .map((dev) => ({ id: dev.id, projectId: dev.projectId ?? "", name: dev.name, aliases: Array.isArray(dev.aliases) ? dev.aliases.filter((alias) => typeof alias === "string" && alias.trim().length > 0) : [] }))
+      : [],
   };
 }
 

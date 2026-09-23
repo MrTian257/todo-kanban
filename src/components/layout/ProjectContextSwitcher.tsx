@@ -1,7 +1,7 @@
 // 侧栏项目上下文区：展开显示当前项目名 + 生产分支摘要；收起保留图标入口。
 // 选择器仅列出活跃项目；选择后设置 activeProjectId 并跳转该项目看板。
 
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { Check, ChevronsUpDown, FolderKanban, GitBranch } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { useAppStore } from "@/lib/store";
@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 
 export function ProjectContextSwitcher({ collapsed }: { collapsed: boolean }) {
   const navigate = useNavigate();
+  const location = useLocation();
   const activeProjectId = useAppStore(state => state.activeProjectId);
   const projects = useAppStore(state => state.projects);
   const setActiveProjectId = useAppStore(state => state.setActiveProjectId);
@@ -17,7 +18,8 @@ export function ProjectContextSwitcher({ collapsed }: { collapsed: boolean }) {
 
   const select = (id: string) => {
     setActiveProjectId(id);
-    navigate(`/project/${id}`);
+    // Git 报告页要「切项目即同步切换报告」，不能被弹回看板；其他入口保持原有「切项目即去看板」行为
+    if (!location.pathname.startsWith("/report")) navigate(`/project/${id}`);
   };
 
   return (
