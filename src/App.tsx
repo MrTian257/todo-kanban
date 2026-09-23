@@ -2,7 +2,7 @@ import { WorkflowLifecycle } from "@/components/workflow/WorkflowLifecycle";
 import { NavigationGuard } from "@/components/layout/NavigationGuard";
 import { DesktopLifecycle } from "@/components/layout/DesktopLifecycle";
 // 路由根：HashRouter + ThemeProvider + TooltipProvider + Toaster + ContextMenuOverlay + SidebarLayout
-// 副作用集中：initAppStore / startExternalSync / startGitCacheWarm / 皮肤初始化
+// 副作用集中：initAppStore / startExternalSync / startGitCacheWarm / 皮肤与展示尺寸初始化
 // （右键菜单系统与输入建议控制在 main.tsx 全局安装，弹层在下方挂载）
 
 import { lazy, Suspense, useEffect, useState } from "react";

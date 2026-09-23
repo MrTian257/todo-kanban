@@ -174,6 +174,8 @@ export function SettingsPage() {
                 ))}
               </div>
             </div>
+            {/* 展示尺寸：小 / 大 / 撑满 三档密度（间距 + 控件尺寸 + 标题字号 + 内容区宽度），
+                与明暗、皮肤正交叠加；三档取值集中在 index.css 的 :root[data-display-size] 令牌块。 */}
             <div className="space-y-2">
               <span className="text-sm font-medium">展示尺寸</span>
               <div className="flex flex-wrap gap-2">

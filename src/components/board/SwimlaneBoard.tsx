@@ -23,7 +23,17 @@ const collision: CollisionDetection = args => {
   const laneDrag = args.active.data.current?.kind === "lane";
   const containers = args.droppableContainers.filter(c => laneDrag ? c.data.current?.kind === "lane" : c.data.current?.kind !== "lane" && c.id !== args.active.id);
   const hits = pointerWithin({...args, droppableContainers:containers});
-  if (hits.length) return [...hits].sort((a,b) => Number(String(a.id).startsWith("body:"))-Number(String(b.id).startsWith("body:")));
+  if (hits.length) {
+    // 卡片优先：指针落在卡片上时以该卡片作为落点基准。
+    const cards = hits.filter(h => !String(h.id).startsWith("body:"));
+    if (cards.length) return cards;
+    // 只命中泳道空白区（被拖卡片自身占位、卡片之间的间隙、末尾空白）：取「同泳道」最近的卡片，
+    // 交给 locate 的前后判定换算落点。否则按住卡片原地放开会被当成「移动到末尾」。
+    const laneIds = new Set(hits.map(h => h.data?.current?.laneId));
+    const sameLaneCards = containers.filter(c => c.data.current?.kind === "todo" && laneIds.has(c.data.current?.laneId));
+    const nearest = sameLaneCards.length ? closestCenter({...args, droppableContainers: sameLaneCards}) : [];
+    return nearest.length ? nearest : hits;
+  }
   // Pointer outside the board cancels instead of snapping to a distant task.
   return args.pointerCoordinates ? [] : closestCenter({...args,droppableContainers:containers});
 };
@@ -68,13 +78,24 @@ export function SwimlaneBoard({projectId, query = "", branch = ""}: {projectId:s
     if (e.active.data.current?.kind === "lane") {setLaneOver(e.over ? String(e.over.id).slice(5):null);return;}
     const next=locate(e);targetRef.current=next;setTarget(previous => previous?.laneId === next?.laneId && previous?.index === next?.index ? previous : next);
   };
+  // 落点是否真的换了位置：同泳道同序号 = 原地放弃拖拽，不写库。
+  // locate 的 index 以「移除被拖任务后」的列表为基准，因此 index === 当前序号 等价于原地未动。
+  const moved = (todoId:string, next:Target) => {
+    const current = todos.find(t=>t.id===todoId);
+    if (!current) return false;
+    if (current.swimlaneId !== next.laneId) return true;
+    return (items.get(next.laneId)??[]).findIndex(t=>t.id===todoId) !== next.index;
+  };
   const end = (e:DragEndEvent) => {
-    if (e.over && active?.kind === "lane") saveSwimlanes(projectId,reorderLanes(lanes,active.id,String(e.over.id).slice(5)));
-    else if (e.over && active && !filtered) {
+    if (e.over && active?.kind === "lane") {
+      const overLaneId = String(e.over.id).slice(5);
+      // 原地放开泳道不重排（放弃拖拽不写库）
+      if (overLaneId !== active.id) saveSwimlanes(projectId,reorderLanes(lanes,active.id,overLaneId));
+    } else if (e.over && active && !filtered) {
       // 以「落下那一刻」的落点为准：onDragMove 的缓存值可能停在上一帧（布局/滚动在拖拽中变化时
       // 会把任务放进相邻泳道），拿不到新落点时才回退到缓存。
       const target = locate(e) ?? targetRef.current;
-      if (target) moveTodo(projectId,active.id,target.laneId,target.index);
+      if (target && moved(active.id, target)) moveTodo(projectId,active.id,target.laneId,target.index);
     }
     reset();
   };

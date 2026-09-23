@@ -1,5 +1,6 @@
 // CDP 验证：泳道看板拖拽（dnd-kit + 合成 PointerEvent——PointerSensor 监听 pointer 事件流，不校验 isTrusted）
-// 覆盖：跨泳道 / 落到泳道空白区 / 泳道内精确重排 / 按钮点击不误触拖拽 / 窗口 resize 后落点仍正确
+// 覆盖：跨泳道 / 落到泳道空白区 / 泳道内精确重排 / 按钮点击不误触拖拽 / 窗口 resize 后落点仍正确 /
+//       原地放弃拖拽不改顺序（按住卡片小幅移动后放开，不得被当成「移动到末尾」）
 // 前置：dev server 运行在 :1420，Chrome 以远程调试端口打开该页面（默认 9222，可用 CDP_PORT 覆盖）
 // 用法：CDP_PORT=9222 node scripts/verify-dnd.mjs
 const PORT = process.env.CDP_PORT || "9222";
@@ -119,9 +120,11 @@ function dragScript(taskId, laneId, mode) {
     const others = [...body.querySelectorAll('[data-task-id]')].filter(el => el !== src);
     const grab = src.querySelector('.tk-task-title') || src;
     const g = grab.getBoundingClientRect(), t = body.getBoundingClientRect();
-    const x0 = g.x + g.width / 2, y0 = g.y + g.height / 2, x1 = t.x + t.width / 2;
-    // empty = 最后一张卡下方的空白区；before-first = 第一张卡上沿；center = 泳道中部
-    const y1 = MODE === 'empty'
+    const x0 = g.x + g.width / 2, y0 = g.y + g.height / 2, x1 = MODE === 'self' ? x0 + 12 : t.x + t.width / 2;
+    // empty = 最后一张卡下方的空白区；before-first = 第一张卡上沿；center = 泳道中部；self = 原地小幅移动（不出卡片范围）
+    const y1 = MODE === 'self'
+      ? y0 + 12
+      : MODE === 'empty'
       ? Math.min(t.bottom - 10, (others.length ? others[others.length - 1].getBoundingClientRect().bottom : t.top) + 24)
       : MODE === 'before-first'
         ? (others.length ? others[0].getBoundingClientRect().top + 8 : t.top + 10)
@@ -239,6 +242,14 @@ async function main() {
   const s5 = await evalJs(ws, dragScript("demo-3", "swim-doing", "empty"));
   check("场景5 resize 后落点", s5.ok && s5.to === "swim-doing" && s5.order[s5.order.length - 1] === "demo-3", s5, await scenarioErrors(ws));
   await send(ws, "Emulation.clearDeviceMetricsOverride");
+
+  step("场景6 开始");
+  // 场景6：按住卡片原地小幅拖拽（指针始终在被拖卡片自身范围内）后放开 → 顺序必须不变
+  // （回归：曾被当成落到泳道空白区而直接移到末尾）
+  await openBoard(ws);
+  const s6 = await evalJs(ws, dragScript("demo-2", "swim-todo", "self"));
+  check("场景6 原地放弃拖拽不改顺序", s6.ok && s6.from === "swim-todo" && s6.to === "swim-todo" && JSON.stringify(s6.order) === JSON.stringify(["demo-1", "demo-2", "demo-3"]), s6, await scenarioErrors(ws));
+
   ws.close();
 
   step("全部场景结束");
