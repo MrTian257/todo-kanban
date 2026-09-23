@@ -110,7 +110,7 @@ SELECT/INSERT 全部收在 `core/src/svc/pomodoro.rs`，与 `workflow_state` 同
   `lib/petStore.ts`（偏好）、`pages/PomodoroPage.tsx`、`components/pomodoro/*`、`components/pet/GrokBot.tsx`。
 - **导航**：侧栏新增「番茄钟」（`/pomodoro`），顶栏新增紧凑指示器。
 - **测试**：`scripts/test-pomodoro.mjs`、`scripts/test-pet-state.mjs`（已并入 `npm run test:logic`）；
-  Rust 内联单测覆盖 `svc/pomodoro.rs`（6 例）、`db/schema.rs`（v13→v14）、`upgrade` 全链路、MCP 资源数。
+  Rust 内联单测覆盖 `svc/pomodoro.rs`（7 例）、`db/schema.rs`（v13→v14）、`upgrade` 全链路、MCP 资源数。
 
 ## 未采纳的方案
 

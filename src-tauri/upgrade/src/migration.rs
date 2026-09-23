@@ -245,8 +245,9 @@ mod tests {
         assert!(column_exists(&conn, "todos", "ai_coordinated").unwrap());
         assert!(column_exists(&conn, "todos", "custom_fields").unwrap());
         assert!(column_exists(&conn, "projects", "created_by").unwrap());
-        // v14：番茄会话表随建表就位（迁移仅推进版本）
-        assert!(table_exists(&conn, "pomodoro_sessions").unwrap());
+        // v14：番茄会话表由 core 的 create_tables 建（本 crate 不依赖 core，无法在此断言建表）；
+        // 这里只确认版本推进，建表本身由 core/src/db/schema.rs 的 migrate_v13_db_adds_pomodoro_table 覆盖。
+        assert!(read_version(&conn).unwrap() >= 14);
         // v5 泳道回填
         let lane: String = conn
             .query_row("SELECT swimlane_id FROM todos WHERE id='t1'", [], |r| {

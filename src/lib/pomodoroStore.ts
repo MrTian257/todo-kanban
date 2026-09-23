@@ -433,7 +433,8 @@ async function finishPhase(completed: boolean): Promise<void> {
     if (current.config.notify) await systemNotify(title, body);
   }
 
-  if (completed && current.config.autoStartNext) start();
+  // 自动接续下一阶段：复用同一入口，保证新建会话 id / 快照 / ticker 的初始化路径唯一
+  if (completed && current.config.autoStartNext) startPomodoro();
   await refreshPomodoro();
 }
 

@@ -26,7 +26,7 @@ core/src/
 | 附件存储 | `svc/attachments.rs`（10 单测，最多）+ `tool/`（临时文件 + rename 原子落盘） |
 | GitLab 集成 | `svc/gitlab.rs`（3 单测） |
 | Git 远程缓存 | `svc/repo_cache.rs` + `db/repo_cache.rs` |
-| 番茄专注会话 | `svc/pomodoro.rs`（v14 表 `pomodoro_sessions`：本地日历分桶 + 连续天数 + prune，6 单测） |
+| 番茄专注会话 | `svc/pomodoro.rs`（v14 表 `pomodoro_sessions`：本地日历分桶 + 连续天数 + prune，7 单测） |
 
 ## CONVENTIONS
 
