@@ -44,6 +44,10 @@ export interface RepoReport {
   key: string;
   label: string;
   url: string;
+  /** 平台标识：gitlab | github */
+  forge: string;
+  /** 是否只统计了默认分支（GitHub 列表接口不带 sha 的固有语义） */
+  defaultBranchOnly: boolean;
   /** ok | error */
   status: string;
   error: string;
@@ -116,6 +120,8 @@ export interface ReportResult {
   /** 团队活跃天数（已归类开发人员的提交按本地自然日去重） */
   activeDays: number;
   statsAvailable: boolean;
+  /** 行数统计是否只覆盖了部分提交（GitHub 超限 / 个别详情失败）→ 界面按「≈」展示 */
+  statsPartial: boolean;
   moduleStats: boolean;
   moduleStatsTruncated: boolean;
   commitsTruncated: boolean;
@@ -185,6 +191,13 @@ export function kindColor(rules: GitKindRule[], key: string): string {
 /** 生效规则：报告里带回来的（后端归一化）优先，否则内置默认（编辑对话框的初始种子） */
 export function effectiveKindRules(rules: GitKindRule[] | null | undefined): GitKindRule[] {
   return rules && rules.length > 0 ? rules : DEFAULT_KIND_RULES;
+}
+
+/** 平台展示名：gitlab → GitLab，github → GitHub，未知原样返回 */
+export function forgeLabel(forge: string): string {
+  if (forge === "github") return "GitHub";
+  if (forge === "gitlab") return "GitLab";
+  return forge;
 }
 
 /** 仓库配色（按仓库顺序取，超出循环；与主题无关的固定色板） */

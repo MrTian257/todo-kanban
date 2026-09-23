@@ -9,12 +9,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 权威文档（改动前先查；注意部分文档与实际代码有漂移，**以源码为准**）：
 - `docs/软件设计文档.md` — 整合视图（产品/架构/数据/接口/UI/流程）
 - `docs/02-development/directory-map.md` — 「去哪里改」文件地图（部分文件名仍为 todo-git 旧称，如 TodoCard.tsx、todo-git-core 已更名/移除）
-- `docs/decisions/` — ADR-001 ~ ADR-015 架构决策（文件名自描述：hash-router / system-cli-git-curl / sqlite-storage / db-config-data-source / workspace-split / global-seq-and-commit-dedupe / mcp-handwritten-protocol / single-store-write-chain / swimlane-board / swimlane-order-persistence / data-version-upgrade / fixed-db-path / custom-fields-and-automations / git-report）
+- `docs/decisions/` — ADR-001 ~ ADR-016 架构决策（文件名自描述：hash-router / system-cli-git-curl / sqlite-storage / db-config-data-source / workspace-split / global-seq-and-commit-dedupe / mcp-handwritten-protocol / single-store-write-chain / swimlane-board / swimlane-order-persistence / data-version-upgrade / fixed-db-path / custom-fields-and-automations / git-report / github-and-gitlab-forge）
 - `docs/README.md` 的文档地图已漂移（列出多份不存在的文件），只作背景参考
 
 ## 环境与常用命令
 
-环境要求：Node.js（仓库用 npm + package-lock.json，另有 bun.lock）、Rust 工具链、git ≥ 2.20 在 PATH（启动时检测，不足中文提示、不阻塞）、可选系统 curl（GitLab 远端分支）。
+环境要求：Node.js（仓库用 npm + package-lock.json，另有 bun.lock）、Rust 工具链、git ≥ 2.20 在 PATH（启动时检测，不足中文提示、不阻塞）、可选系统 curl（GitLab / GitHub 远端分支与提交检索）。
 
 ```bash
 npm install               # 前端依赖
@@ -90,9 +90,9 @@ SQLite WAL，数据源固定为**程序运行目录** `todo-kanban.db`（ADR-012
 
 ### git 集成
 
-系统 git CLI（`tool/git_cli.rs` + `proc.rs`，无 libgit2）。约定：输出格式 `%H%x1f%s%x1f%cI`、30s 超时、`--no-pager -c color.ui=false -c core.quotepath=false`；所有子进程经 `quiet_command` 构造（Windows `CREATE_NO_WINDOW` 防 release GUI 壳闪黑框——新增子进程勿绕过）。分支列表走 SQLite 持久缓存（`db/repo_cache.rs` + `svc/repo_cache.rs`：命中即回、30s 节流后台刷新、检出后失效；无数据源时退化直读 git 不落缓存）；GitLab 远端分支经系统 curl（`svc/gitlab.rs`）。
+系统 git CLI（`tool/git_cli.rs` + `proc.rs`，无 libgit2）。约定：输出格式 `%H%x1f%s%x1f%cI`、30s 超时、`--no-pager -c color.ui=false -c core.quotepath=false`；所有子进程经 `quiet_command` 构造（Windows `CREATE_NO_WINDOW` 防 release GUI 壳闪黑框——新增子进程勿绕过）。分支列表走 SQLite 持久缓存（`db/repo_cache.rs` + `svc/repo_cache.rs`：命中即回、30s 节流后台刷新、检出后失效；无数据源时退化直读 git 不落缓存）；远端分支/提交检索经系统 curl，平台由 `svc/forge.rs` 按域名识别后分发到 `svc/gitlab.rs` / `svc/github.rs`（ADR-016）。
 
-Git 报告（日报/周报/月报，ADR-015）只走 GitLab API，不读本地 git：`svc/git_report.rs` 用 `gitlab::commits_window`（`all=true&since&until&with_stats=true`，20 页 / 30s 预算，超限返回部分结果 + truncated）拉窗口内提交，按 `Workflow.gitReportDevs` 的别名（大小写不敏感，含 `@` 匹配邮箱否则姓名，支持 `*` 通配）归类，合并提交按 `parent_ids.len() > 1` 判定并默认排除；「按模块分布」是可选开关（逐提交调 `/commits/:sha/diff`，200 条 / 4 路并发 / 20s 预算）。类型规则同样按项目自定义（`Workflow.gitReportKinds`，空 = 内置 `default_kind_rules()`）：conventional 前缀优先，其次按规则顺序扫关键词（ASCII 按词边界、中文按子串），未命中落 `other`；三处比较都**忽略大小写与首尾空白**（`same_ignore_case`，前端 `sameKindKey` 同语义）。成员维度另带 `byDay`/`byHour` 分桶（日报按小时、周报/月报按天出每人一张图），月报额外渲染日历热力图（`monthGrid` + `heatLevel`）。命令 `git_report_fetch` 是纯查询：不写库、不进 `db_save_state` 写链。
+Git 报告（日报/周报/月报，ADR-015/ADR-016）走 GitLab / GitHub 官方 API，不读本地 git：平台由 `svc/forge.rs` 按域名识别（未知域名 404 兜底探测），`svc/git_report.rs` 用 `forge::report_window` 拉窗口内提交（GitLab：`all=true&since&until&with_stats=true` 全分支且自带行数；GitHub：默认分支、列表无行数，20 页 / 30s 预算，超限返回部分结果 + truncated），按 `Workflow.gitReportDevs` 的别名（大小写不敏感，含 `@` 匹配邮箱否则姓名，支持 `*` 通配）归类，合并提交按 `parent_ids.len() > 1` 判定并默认排除；「按模块分布」是可选开关；详情补全（GitLab 的文件路径 / GitHub 的行数+文件路径）统一走 `fetch_details`：300 条 / 4 路并发 / 20s 预算，超限标 `statsPartial`（界面「≈」）。类型规则同样按项目自定义（`Workflow.gitReportKinds`，空 = 内置 `default_kind_rules()`）：conventional 前缀优先，其次按规则顺序扫关键词（ASCII 按词边界、中文按子串），未命中落 `other`；三处比较都**忽略大小写与首尾空白**（`same_ignore_case`，前端 `sameKindKey` 同语义）。成员维度另带 `byDay`/`byHour` 分桶（日报按小时、周报/月报按天出每人一张图），月报额外渲染日历热力图（`monthGrid` + `heatLevel`）。命令 `git_report_fetch` 是纯查询：不写库、不进 `db_save_state` 写链。
 
 ### 附件（图片）协议（v8，ADR-013）
 
@@ -111,7 +111,7 @@ note 持久化只存 `attachment://<todoId>/<file>` 短引用；展示/编辑时
 | 想改什么 | 位置 |
 | --- | --- |
 | 新增 Tauri 命令 | core/svc 加业务函数 → `src-tauri/src/commands.rs` 加薄壳 → `src-tauri/src/lib.rs` 注册 → `src/lib/git.ts`（或新建 lib 模块）封装 invoke |
-| Git 报告（日报/周报/月报） | 后端 `core/src/svc/git_report.rs`（GitLab API 聚合，命令 `git_report_fetch`，纯查询不写库）；前端 `src/pages/GitReportPage.tsx` + `src/lib/gitReport.ts`（DTO/调用/会话缓存）+ `src/lib/gitReportPeriod.ts`（周期口径，有 node 测试）；归类表存 workflow_state 的 `gitReportDevs`；决策见 ADR-015 |
+| Git 报告（日报/周报/月报） | 平台识别与分发 `core/src/svc/forge.rs`（GitLab/GitHub 按域名自动识别）+ 实现 `svc/gitlab.rs` / `svc/github.rs`；聚合 `core/src/svc/git_report.rs`（命令 `git_report_fetch`，纯查询不写库）；前端 `src/pages/GitReportPage.tsx` + `src/lib/gitReport.ts`（DTO/调用/会话缓存）+ `src/lib/gitReportPeriod.ts`（周期口径，有 node 测试）；归类表存 workflow_state 的 `gitReportDevs`；决策见 ADR-015 |
 | 改 git 行为 | core/svc/git_cmds.rs（执行器 tool/git_cli.rs，子进程 tool/proc.rs） |
 | 改 GitLab 远端 | core/svc/gitlab.rs + svc/repo_cache.rs（缓存编排） |
 | 改存储/表结构 | core/db/schema.rs + row.rs + db/mod.rs 三处同步 + svc/db_cmds.rs |

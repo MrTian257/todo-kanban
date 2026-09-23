@@ -350,11 +350,11 @@ export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
           <details className="rounded-xl border p-4"><summary className="cursor-pointer text-sm font-semibold">代码仓库 <span className="ml-2 text-xs font-normal text-muted-foreground">可选配置</span></summary>
           <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="space-y-2">
-              <Label htmlFor="frontendRepoUrl">前端仓库地址（http(s)）</Label>
-              <Input id="frontendRepoUrl" placeholder="https://gitlab.example.com/group/web.git" {...register("frontendRepoUrl")} />
+              <Label htmlFor="frontendRepoUrl">前端仓库地址（GitLab / GitHub，http(s)）</Label>
+              <Input id="frontendRepoUrl" placeholder="https://gitlab.example.com/group/web.git 或 https://github.com/owner/web.git" {...register("frontendRepoUrl")} />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="frontendRepoToken">前端仓库 GitLab Token</Label>
+              <Label htmlFor="frontendRepoToken">前端仓库 Token（GitLab / GitHub）</Label>
               <Controller name="frontendRepoToken" control={control} render={({ field }) => (
                 <Input {...field} id="frontendRepoToken" type={showToken ? "text" : "password"}
                   value={isCredentialRef(field.value) ? "" : field.value} placeholder={tokenPlaceholder(field.value)} />
@@ -362,11 +362,11 @@ export function ProjectFormDialog({ open, onOpenChange, project }: Props) {
               {watch("frontendRepoToken") && <button type="button" className="text-xs text-muted-foreground" onClick={() => setValue("frontendRepoToken", "", { shouldDirty: true })}>清除前端 Token 关联</button>}
             </div>
             <div className="space-y-2">
-              <Label htmlFor="backendRepoUrl">后端仓库地址（http(s)）</Label>
-              <Input id="backendRepoUrl" placeholder="https://gitlab.example.com/group/server.git" {...register("backendRepoUrl")} />
+              <Label htmlFor="backendRepoUrl">后端仓库地址（GitLab / GitHub，http(s)）</Label>
+              <Input id="backendRepoUrl" placeholder="https://gitlab.example.com/group/server.git 或 https://github.com/owner/server.git" {...register("backendRepoUrl")} />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="backendRepoToken">后端仓库 GitLab Token</Label>
+              <Label htmlFor="backendRepoToken">后端仓库 Token（GitLab / GitHub）</Label>
               <Controller name="backendRepoToken" control={control} render={({ field }) => (
                 <Input {...field} id="backendRepoToken" type={showToken ? "text" : "password"}
                   value={isCredentialRef(field.value) ? "" : field.value} placeholder={tokenPlaceholder(field.value)} />

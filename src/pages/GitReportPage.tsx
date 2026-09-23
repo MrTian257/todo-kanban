@@ -1,6 +1,7 @@
 // Git 日报 / 周报 / 月报页面。
 //
-// 数据源：GitLab REST API（后端 git_report_fetch，纯查询不写库），只统计「开发人员归类」里配置的人。
+// 数据源：GitLab / GitHub 官方 REST API（按仓库域名自动识别，后端 git_report_fetch 纯查询不写库），
+// 只统计「开发人员归类」里配置的人。
 // 交互约定（按需求）：
 // - 只看**当前项目**的前端/后端仓库；切换项目时报告同步切换；
 // - **不自动生成**：进入页面、切换项目/周期后都显示空态，必须手动点「刷新」重新拉取；
@@ -33,6 +34,7 @@ import {
   cacheReport,
   effectiveKindRules,
   fetchGitReport,
+  forgeLabel,
   hasRepoConfigured,
   kindColor,
   kindLabel,
@@ -264,8 +266,8 @@ export function GitReportPage() {
     return [
       { key: "commits", label: "提交数", value: commits },
       { key: "people", label: "参与人数", value: participants },
-      { key: "additions", label: "新增行", value: result.statsAvailable ? additions : null, unit: "行" },
-      { key: "deletions", label: "删除行", value: result.statsAvailable ? deletions : null, unit: "行" },
+      { key: "additions", label: "新增行", value: result.statsAvailable ? additions : null, unit: "行", approx: result.statsPartial },
+      { key: "deletions", label: "删除行", value: result.statsAvailable ? deletions : null, unit: "行", approx: result.statsPartial },
       { key: "days", label: "活跃天数", value: result.activeDays, unit: "天" },
     ];
   }, [result]);
@@ -281,7 +283,7 @@ export function GitReportPage() {
           <div className="tk-report-header-top">
             <div className="min-w-0">
               <div className="tk-eyebrow flex items-center gap-2">
-                <GitCommitVertical className="h-3.5 w-3.5" />Git 报告 · GitLab API
+                <GitCommitVertical className="h-3.5 w-3.5" />Git 报告 · GitLab / GitHub API
               </div>
               <h1 className="tk-page-heading">Git 日报 · 周报 · 月报</h1>
               <p className="mt-2 text-sm text-muted-foreground">
@@ -365,7 +367,7 @@ export function GitReportPage() {
           <section className="tk-report-card tk-report-placeholder">
             <AlertTriangle className="h-6 w-6 text-amber-500" />
             <h2>浏览器预览无法生成报告</h2>
-            <p>Git 报告需要桌面应用：GitLab API 依赖系统 curl 与系统钥匙串里的仓库 Token。</p>
+            <p>Git 报告需要桌面应用：GitLab / GitHub 接口依赖系统 curl 与系统钥匙串里的仓库 Token。</p>
           </section>
         ) : !project ? (
           <section className="tk-report-card tk-report-placeholder">
@@ -377,7 +379,7 @@ export function GitReportPage() {
           <section className="tk-report-card tk-report-placeholder">
             <FolderCog className="h-6 w-6 text-muted-foreground" />
             <h2>「{project.name}」还没有配置仓库</h2>
-            <p>报告数据来自 GitLab API，请在项目资料里填写前端或后端仓库地址与 GitLab Token。</p>
+            <p>报告数据来自 GitLab / GitHub API，请在项目资料里填写前端或后端仓库地址与访问 Token。</p>
             <Button type="button" variant="outline" onClick={() => navigate("/projects")}>去项目资料配置</Button>
           </section>
         ) : (
@@ -385,7 +387,7 @@ export function GitReportPage() {
             {missingTokens.length > 0 ? (
               <div className="tk-report-banner tk-report-banner-warn" role="status">
                 <AlertTriangle className="h-4 w-4" />
-                <span>{missingTokens.join("、")}仓库缺少 GitLab Token，刷新时会被跳过。</span>
+                <span>{missingTokens.join("、")}仓库缺少访问 Token，刷新时会被跳过。</span>
               </div>
             ) : null}
             {error ? (
@@ -410,6 +412,20 @@ export function GitReportPage() {
               </div>
             ) : null}
 
+            {result && result.repos.some((repo) => repo.forge === "github") ? (
+              <div className="tk-report-banner tk-report-banner-warn" role="status">
+                <AlertTriangle className="h-4 w-4" />
+                <span>GitHub 官方接口只统计默认分支，未合并的功能分支提交不会出现在报告里。</span>
+              </div>
+            ) : null}
+            {result?.statsPartial ? (
+              <div className="tk-report-banner tk-report-banner-warn" role="status">
+                <AlertTriangle className="h-4 w-4" />
+                <span>
+                  行数统计仅覆盖部分提交（GitHub 需逐提交拉取，超出限额后只统计已获取部分），带「≈」的数字为近似值。
+                </span>
+              </div>
+            ) : null}
             {!result ? (
               <section className="tk-report-card tk-report-placeholder">
                 <RefreshCw className={cn("h-6 w-6 text-primary", loading && "animate-spin")} />
@@ -456,11 +472,17 @@ export function GitReportPage() {
                     <ReportMemberRanking developers={result.developers} statsAvailable={result.statsAvailable} />
                   </div>
                 ) : null}
-                <ReportDeveloperTable developers={result.developers} kinds={kinds} statsAvailable={result.statsAvailable} />
+                <ReportDeveloperTable
+                  developers={result.developers}
+                  kinds={kinds}
+                  statsAvailable={result.statsAvailable}
+                  statsPartial={result.statsPartial}
+                />
                 <ReportCommitTable commits={result.commits} kinds={kinds} truncated={result.commitsTruncated} />
                 <ReportUnmatchedCard result={result} onConfigure={() => setAliasOpen(true)} />
                 <p className="tk-report-foot">
-                  数据来源：GitLab API（{result.repos.map((repo) => repo.label).join("、") || "无"}）· 生成时间{" "}
+                  数据来源：{Array.from(new Set(result.repos.map((repo) => forgeLabel(repo.forge)))).join(" / ")} API（
+                  {result.repos.map((repo) => repo.label).join("、") || "无"}）· 生成时间{" "}
                   {new Date(result.generatedAt).toLocaleString("zh-CN")} · 报告不落库，应用重启后需重新刷新
                 </p>
               </div>

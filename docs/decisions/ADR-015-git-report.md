@@ -3,6 +3,8 @@
 - 状态：已实施
 - 日期：2026-09
 - 相关：ADR-002（系统 CLI git/curl）、ADR-008（单 store 写链）、ADR-014（配置放 workflow_state）
+- 后续扩展：**ADR-016（GitHub 与 GitLab 双平台官方接口）**——数据源由「只 GitLab」扩为「GitLab / GitHub 按域名自动识别」，
+  平台分发在 `svc/forge.rs`；本文中 GitLab 特有的接口细节（`all=true`、`with_stats`、diff 接口）仍然有效，GitHub 侧差异见 ADR-016。
 - 关联文档：docs/软件设计文档.md、AGENTS.md
 
 ## 背景
@@ -20,7 +22,7 @@
 
 ## 决策
 
-### D1 数据源是 GitLab REST API，不读本地 git
+### D1 数据源是代码平台 REST API（GitLab，后扩 GitHub 见 ADR-016），不读本地 git
 
 `GET /projects/:id/repository/commits?all=true&since=&until=&with_stats=true` 一次拿到窗口内提交、
 作者、父提交与行数统计（`with_stats` 不被老版本支持时 stats 缺失 → 前端显示「—」，不报错）。

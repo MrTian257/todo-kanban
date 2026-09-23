@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::db::{self, repo_cache};
 use crate::error::AppResult;
 use crate::models::GitInfo;
-use crate::svc::{db_cmds, git_cmds, gitlab};
+use crate::svc::{db_cmds, forge, git_cmds};
 
 const CACHE_TTL_MS: i64 = 30_000;
 
@@ -57,13 +57,14 @@ pub fn git_info_refresh(repo: &str) -> AppResult<GitInfo> {
     Ok(info)
 }
 
-/// 远端增强：本地分支 ∪ GitLab 远端分支（去重保序）；API 失败静默回退本地
+/// 远端增强：本地分支 ∪ 远端分支（GitLab / GitHub 按域名自动选择，去重保序）；API 失败静默回退本地
 pub fn git_info_remote(repo: &str, repo_url: &str, token: &str) -> AppResult<GitInfo> {
     let mut info = git_cmds::git_info(repo)?;
     if repo_url.trim().is_empty() || token.trim().is_empty() {
         return Ok(info);
     }
-    match gitlab::branch_list(repo_url, token) {
+    let platform = forge::detect_cached(repo_url);
+    match forge::branch_list(platform, repo_url, token) {
         Ok(remote) => {
             let mut seen: std::collections::HashSet<String> =
                 info.branches.iter().cloned().collect();
@@ -75,7 +76,7 @@ pub fn git_info_remote(repo: &str, repo_url: &str, token: &str) -> AppResult<Git
             Ok(info)
         }
         Err(e) => {
-            log::warn!("GitLab 远端分支拉取失败，静默回退本地：{e}");
+            log::warn!("{} 远端分支拉取失败，静默回退本地：{e}", platform.label());
             Ok(info)
         }
     }

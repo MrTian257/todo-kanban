@@ -287,7 +287,7 @@ export function SettingsPage() {
               数据由更高版本创建或版本过旧时拒绝打开并提示（见设置页顶部错误页）。
             </p>
             <p>• 浏览器预览模式无本地存储（演示数据只读），完整功能仅桌面端。</p>
-            <p>• Git 操作依赖本机 Git ≥ 2.20；GitLab 接口使用系统 curl。</p>
+            <p>• Git 操作依赖本机 Git ≥ 2.20；GitLab / GitHub 接口使用系统 curl。</p>
             {tools.map(tool => <div key={tool.name} className="rounded-lg border p-3">
               <p className="font-medium text-foreground">{tool.name} · {tool.available ? "已定位" : "路径不可用"}</p>
               <code className="block break-all text-xs">{tool.path}</code>

@@ -1,7 +1,14 @@
-//! GitLab API 桥：仓库地址解析（http(s)）、系统 curl（PRIVATE-TOKEN，系统默认 TLS 校验）、分页拉取（5×100）、本地 ∪ 远端合并。
-//! 零 HTTP crate 依赖：quiet_command("curl")，10s 超时。
+//! GitLab API 桥（平台实现之一，平台识别与分发见 `svc/forge.rs`）：
+//! 仓库地址解析（http(s)）、系统 curl（PRIVATE-TOKEN）、分页拉取（5×100）、本地 ∪ 远端合并。
+//! 零 HTTP crate 依赖：quiet_command("curl")，10s 超时；认证头与状态码错误由 `http_cache` 统一处理。
 
 use crate::error::{AppError, AppResult};
+use crate::svc::forge::matches_tag;
+use crate::svc::forge::percent_encode as percent_encode_segment;
+use crate::svc::http_cache::{self, AuthProfile};
+
+// 数据源作用域与「按目录定位项目配置」已上移到 forge（平台无关），这里再导出以兼容既有调用方。
+pub use super::forge::{database_scope, DatabaseScope};
 
 const MAX_PAGES: u32 = 10;
 const PER_PAGE: u32 = 100;
@@ -56,93 +63,6 @@ pub fn branch_list(repo_url: &str, token: &str) -> AppResult<Vec<String>> {
     Ok(all)
 }
 
-thread_local! {
-    static DATABASE: std::cell::RefCell<Option<std::path::PathBuf>> = const { std::cell::RefCell::new(None) };
-}
-
-/// MCP 的自定义数据源作用域；退出当前调用时恢复，互不污染其他线程。
-pub struct DatabaseScope(Option<std::path::PathBuf>);
-impl Drop for DatabaseScope {
-    fn drop(&mut self) {
-        DATABASE.with(|value| {
-            value.replace(self.0.take());
-        });
-    }
-}
-pub fn database_scope(path: Option<std::path::PathBuf>) -> DatabaseScope {
-    DatabaseScope(DATABASE.with(|value| value.replace(path)))
-}
-
-/// 按项目配置定位 API；路径按平台比较，重复且冲突的配置不猜测。
-pub fn configured_remote(repo: &str) -> Option<(String, String)> {
-    let path = DATABASE
-        .with(|value| value.borrow().clone())
-        .or_else(|| super::db_cmds::db_path().ok())?;
-    if !path.exists() {
-        return None;
-    }
-    let conn =
-        rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .ok()?;
-    let mut stmt = conn.prepare("SELECT frontend_dir, frontend_repo_url, frontend_repo_token, backend_dir, backend_repo_url, backend_repo_token FROM projects").ok()?;
-    let projects = stmt
-        .query_map([], |row| {
-            Ok(crate::models::DbProject {
-                frontend_dir: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
-                frontend_repo_url: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                frontend_repo_token: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
-                backend_dir: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
-                backend_repo_url: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
-                backend_repo_token: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
-                ..Default::default()
-            })
-        })
-        .ok()?
-        .collect::<Result<Vec<_>, _>>()
-        .ok()?;
-    remote_from_projects(repo, &projects)
-}
-
-fn remote_from_projects(
-    repo: &str,
-    projects: &[crate::models::DbProject],
-) -> Option<(String, String)> {
-    fn key(path: &str) -> String {
-        let path = std::fs::canonicalize(path)
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|_| path.trim().to_string());
-        if cfg!(windows) {
-            path.replace('\\', "/").trim_end_matches('/').to_lowercase()
-        } else {
-            path.trim_end_matches('/').to_string()
-        }
-    }
-    if repo.trim().is_empty() {
-        return None;
-    }
-    let target = key(repo);
-    let mut found = None;
-    for p in projects {
-        for (dir, url, token) in [
-            (
-                &p.frontend_dir,
-                &p.frontend_repo_url,
-                &p.frontend_repo_token,
-            ),
-            (&p.backend_dir, &p.backend_repo_url, &p.backend_repo_token),
-        ] {
-            if dir.trim().is_empty() || url.trim().is_empty() || key(dir) != target {
-                continue;
-            }
-            let config = (url.trim().to_string(), token.trim().to_string());
-            if found.as_ref().is_some_and(|previous| previous != &config) {
-                return None;
-            }
-            found = Some(config);
-        }
-    }
-    found
-}
 
 /// 提交行数统计（仅 `with_stats=true` 时返回；旧版本 GitLab 会忽略该参数 → 字段缺失）
 #[derive(Clone, Debug, Default, serde::Deserialize)]
@@ -199,20 +119,6 @@ impl ApiCommit {
     pub fn is_merge(&self) -> bool {
         self.parent_ids.len() > 1
     }
-}
-
-/// 标记匹配完整消息，边界与本地 Git ERE 一致，避免 todo-1 命中 todo-12。
-/// 仅字母数字视为标记字符：`-`、`_`、`/` 等均作为分隔符，
-/// 使 `feature/bif-REQ-00149`、`finance-REQ-00147` 这类分支/前缀中的标记也能命中。
-pub(crate) fn matches_tag(message: &str, tag: &str) -> bool {
-    fn word(c: char) -> bool {
-        c.is_ascii_alphanumeric()
-    }
-    !tag.is_empty()
-        && message.match_indices(tag).any(|(i, _)| {
-            !message[..i].chars().next_back().is_some_and(word)
-                && !message[i + tag.len()..].chars().next().is_some_and(word)
-        })
 }
 
 /// 分页读完整结果；达到保护上限时报错，由业务层回退本地，绝不返回截断列表。
@@ -419,58 +325,22 @@ pub fn commit_web_url(repo_url: &str, hash: &str) -> AppResult<String> {
 
 /// 解析 http(s) 仓库地址为 GitLab API 基址 + urlencoded 项目路径
 /// 例：https://gitlab.example.com/group/sub/proj.git → (https://gitlab.example.com, group%2Fsub%2Fproj)
+/// 通用校验（协议 / 内嵌凭据 / 查询串 / 路径非空）在 forge::parse_http_url 内完成，两平台共用。
 fn parse_repo_url(repo_url: &str) -> AppResult<(String, String)> {
-    let url = repo_url.trim();
-    if url.chars().any(char::is_control) {
-        return Err(AppError::invalid("仓库地址含控制字符"));
-    }
-    let (scheme, rest) = url
-        .split_once("://")
-        .ok_or_else(|| AppError::invalid("仓库地址必须为 http(s) 形式"))?;
-    if scheme != "http" && scheme != "https" {
-        log::warn!("解析 GitLab 仓库地址失败：非法协议 {scheme}");
-        return Err(AppError::invalid("仓库地址必须为 http(s) 形式"));
-    }
-    let (host, path) = rest
-        .split_once('/')
-        .ok_or_else(|| AppError::invalid("仓库地址缺少项目路径"))?;
-    if host.is_empty()
-        || host.contains('@')
-        || host.chars().any(char::is_whitespace)
-        || path.contains(['?', '#'])
-    {
-        return Err(AppError::invalid(
-            "仓库地址不能包含内嵌凭据、查询参数或片段",
-        ));
-    }
-    let clean = path.trim_end_matches('/').trim_end_matches(".git");
-    if clean.is_empty() {
-        log::warn!("解析 GitLab 仓库地址失败：缺少项目路径（host={host})");
-        return Err(AppError::invalid("仓库地址缺少项目路径"));
-    }
-    let encoded: Vec<String> = clean.split('/').map(percent_encode_segment).collect();
+    let (scheme, host, path) = super::forge::parse_http_url(repo_url)?;
+    let encoded_path = path
+        .split('/')
+        .map(percent_encode_segment)
+        .collect::<Vec<String>>()
+        .join("%2F");
     let base = format!("{scheme}://{host}");
-    let encoded_path = encoded.join("%2F");
     log::debug!("解析 GitLab 仓库地址成功：base={base}, encoded_path={encoded_path}");
     Ok((base, encoded_path))
 }
 
-/// 极简 percent-encode（保留字母数字与部分安全字符）
-fn percent_encode_segment(seg: &str) -> String {
-    let mut out = String::new();
-    for b in seg.bytes() {
-        match b {
-            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char)
-            }
-            _ => out.push_str(&format!("%{b:02X}")),
-        }
-    }
-    out
-}
-
 fn curl_json(url: &str, token: &str) -> AppResult<String> {
-    super::http_cache::get(url, token)
+    // 认证方式与状态码错误由 http_cache 按平台处理（GitLab 用 PRIVATE-TOKEN）
+    http_cache::get(url, token, AuthProfile::Gitlab)
 }
 
 #[cfg(test)]
@@ -527,20 +397,6 @@ mod tests {
         assert!(
             collect_commits("https://example.test/?all=true", None, |_| Ok("{}".into())).is_err()
         );
-    }
-
-    #[test]
-    fn remote_config_matches_directory_and_rejects_conflicts() {
-        let p = crate::models::DbProject {
-            backend_dir: "/example/backend".into(),
-            backend_repo_url: "https://example.test/group/repo".into(),
-            ..Default::default()
-        };
-        assert!(remote_from_projects("/example/backend/", std::slice::from_ref(&p)).is_some());
-        assert!(remote_from_projects("/example/other", std::slice::from_ref(&p)).is_none());
-        let mut conflict = p.clone();
-        conflict.backend_repo_url = "https://example.test/other/repo".into();
-        assert!(remote_from_projects("/example/backend", &[p, conflict]).is_none());
     }
 
     /// 报告所需字段解析：作者/行数/父提交/网页地址；旧版本缺失 stats 时必须能兜底

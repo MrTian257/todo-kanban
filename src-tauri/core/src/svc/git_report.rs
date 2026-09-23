@@ -21,23 +21,22 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, AppResult};
-use crate::svc::gitlab::{self, ApiCommit};
+use crate::svc::forge::{self, CommitStats, Forge, ForgeCommit};
 
 // ── 上限与预算（全部为「宁可标注截断也不让界面卡死」的保护值）────────────────
 /// 单次报告最多统计的仓库数（当前项目只有前端/后端两个，留出余量）
 const MAX_REPOS: usize = 8;
-/// 单仓库最多拉取的提交条数（20 页 × 100）
-const MAX_PAGES_PER_REPO: u32 = 20;
 /// 返回给前端的提交明细上限（按时间倒序截取）
 const MAX_REPORT_COMMITS: usize = 500;
 /// 未归类提交人最多返回条数
 const MAX_UNMATCHED: usize = 50;
-/// 模块统计最多逐提交拉取的条数
-const MAX_MODULE_COMMITS: usize = 200;
-/// 模块统计并发线程数
-const MODULE_WORKERS: usize = 4;
-/// 模块统计总时间预算（秒）
-const MODULE_TIME_BUDGET_SECS: u64 = 20;
+/// 详情补全（行数 / 文件路径）最多逐提交拉取的条数：
+/// GitHub 的行数只能逐提交拿，GitLab 仅在「按模块分布」开启时才需要，两边共用同一限额
+const MAX_DETAIL_COMMITS: usize = 300;
+/// 详情补全并发线程数
+const DETAIL_WORKERS: usize = 4;
+/// 详情补全总时间预算（秒）
+const DETAIL_TIME_BUDGET_SECS: u64 = 20;
 /// 模块分布最多保留的目录数（其余合并为「其它」）
 const TOP_MODULES: usize = 8;
 
@@ -171,6 +170,10 @@ pub struct RepoReport {
     pub key: String,
     pub label: String,
     pub url: String,
+    /// 平台标识：gitlab | github（前端据此显示数据来源与「仅默认分支」提示）
+    pub forge: String,
+    /// 是否只统计了默认分支（GitHub 列表接口不带 sha 时的固有语义；GitLab 为 false）
+    pub default_branch_only: bool,
     /// ok | error
     pub status: String,
     pub error: String,
@@ -255,8 +258,10 @@ pub struct ReportResult {
     pub unmatched_total: usize,
     /// 团队活跃天数：已归类开发人员的提交按本地自然日去重后的天数
     pub active_days: usize,
-    /// 是否拿到了行数统计（服务端支持 with_stats）
+    /// 是否拿到了行数统计（GitLab 由列表接口返回；GitHub 由逐提交详情补）
     pub stats_available: bool,
+    /// 行数统计是否只覆盖了部分提交（GitHub 超限 / 个别详情失败）→ 前端按「≈」展示并加警告
+    pub stats_partial: bool,
     pub module_stats: bool,
     pub module_stats_truncated: bool,
     pub commits_truncated: bool,
@@ -542,18 +547,20 @@ struct RepoFetch {
     key: String,
     label: String,
     url: String,
-    /// 凭据引用（模块统计逐提交拉 diff 时要用）
+    /// 凭据引用（逐提交拉详情时要用）
     token: String,
+    /// 平台（决定详情补全要不要拿行数、以及网页地址与「仅默认分支」标注）
+    forge: Forge,
     status: String,
     error: String,
-    commits: Vec<ApiCommit>,
+    commits: Vec<ForgeCommit>,
     truncated: bool,
 }
 
 /// 归类后的提交（build_result 的输入，便于脱网单测）
 struct Classified {
     repo_index: usize,
-    commit: ApiCommit,
+    commit: ForgeCommit,
     developer: Option<usize>,
     kind: String,
     is_merge: bool,
@@ -576,57 +583,63 @@ pub fn fetch(request: ReportRequest) -> AppResult<ReportResult> {
     let repos = fetch_repos(&request, &mut warnings);
     let mut classified = classify(&request, &repos, &developers, &kinds, &mut warnings);
 
-    let module_jobs: Vec<(usize, String, String, String)> = if request.module_stats {
-        classified
-            .iter()
-            .enumerate()
-            .filter(|(_, item)| item.counted && item.developer.is_some())
-            .take(MAX_MODULE_COMMITS)
-            .filter_map(|(index, item)| {
-                let repo = repos.get(item.repo_index)?;
-                (repo.status == "ok").then(|| {
-                    (
-                        index,
-                        repo.url.clone(),
-                        repo.token.clone(),
-                        item.commit.id.clone(),
-                    )
-                })
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
-    let module_truncated = if request.module_stats {
-        let total = classified
-            .iter()
-            .filter(|item| item.counted && item.developer.is_some())
-            .count();
-        if total > module_jobs.len() {
-            warnings.push(format!(
-                "模块统计只覆盖最近 {} 条提交，结果可能不完整",
-                module_jobs.len()
-            ));
-            true
-        } else {
-            false
+    // 详情补全：GitHub 的行数只能逐提交拿（列表接口不返回 stats）；GitLab 仅在「按模块分布」开启时才需要。
+    // 两个平台共用同一份限额（条数 / 并发 / 时间预算），超限只标注部分结果，不让界面卡死。
+    let mut detail_jobs: Vec<(usize, Forge, String, String, String)> = Vec::new();
+    for (index, item) in classified.iter().enumerate() {
+        if !item.counted || item.developer.is_none() {
+            continue;
         }
-    } else {
-        false
-    };
-    let (modules, budget_truncated) = if module_jobs.is_empty() {
+        let Some(repo) = repos.get(item.repo_index) else {
+            continue;
+        };
+        if repo.status != "ok" {
+            continue;
+        }
+        let needs_detail = if repo.forge == Forge::Github {
+            // GitHub 列表没有行数统计 → 必须逐提交补
+            item.commit.stats.is_none()
+        } else {
+            // GitLab 行数来自列表，只有要模块分布时才拉 diff
+            request.module_stats
+        };
+        if !needs_detail {
+            continue;
+        }
+        detail_jobs.push((
+            index,
+            repo.forge,
+            repo.url.clone(),
+            repo.token.clone(),
+            item.commit.hash.clone(),
+        ));
+    }
+    let detail_total = detail_jobs.len();
+    detail_jobs.truncate(MAX_DETAIL_COMMITS);
+    let (details, budget_truncated) = if detail_jobs.is_empty() {
         (HashMap::new(), false)
     } else {
-        fetch_modules(&module_jobs)
+        fetch_details(&detail_jobs)
     };
-    if budget_truncated {
-        warnings.push("模块统计超出时间预算，已返回已获取的部分结果".to_string());
+    if detail_total > MAX_DETAIL_COMMITS {
+        warnings.push(format!(
+            "详情补全只覆盖最近 {} 条提交，行数与模块统计可能不完整",
+            MAX_DETAIL_COMMITS
+        ));
     }
-    for (index, paths) in modules {
+    if budget_truncated {
+        warnings.push("详情补全超出时间预算，已返回已获取的部分结果".to_string());
+    }
+    for (index, (stats, paths)) in details {
         if let Some(item) = classified.get_mut(index) {
+            // 列表已带行数（GitLab）时不覆盖，只补缺失的那部分
+            if item.commit.stats.is_none() {
+                item.commit.stats = stats;
+            }
             item.modules = paths;
         }
     }
+    let details_truncated = detail_total > MAX_DETAIL_COMMITS || budget_truncated;
 
     Ok(build_result(
         &request,
@@ -634,7 +647,7 @@ pub fn fetch(request: ReportRequest) -> AppResult<ReportResult> {
         classified,
         developers,
         kinds,
-        module_truncated || budget_truncated,
+        details_truncated,
         warnings,
     ))
 }
@@ -654,15 +667,18 @@ fn fetch_repos(request: &ReportRequest, warnings: &mut Vec<String>) -> Vec<RepoF
             // 未配置地址的仓库直接跳过（前端通常不会传，兜底防御）
             continue;
         }
+        // 平台按域名识别（未知域名由 forge 在 404 时兜底探测并缓存判定）
+        let platform = forge::detect_cached(&url);
         let token = repo.token.trim().to_string();
         if token.is_empty() {
-            let error = "缺少 GitLab Token，已跳过该仓库".to_string();
+            let error = format!("缺少 {} Token，已跳过该仓库", platform.label());
             warnings.push(format!("{label}：{error}"));
             out.push(RepoFetch {
                 key,
                 label,
                 url,
                 token,
+                forge: platform,
                 status: "error".into(),
                 error,
                 commits: Vec::new(),
@@ -670,18 +686,18 @@ fn fetch_repos(request: &ReportRequest, warnings: &mut Vec<String>) -> Vec<RepoF
             });
             continue;
         }
-        match gitlab::commits_window(
+        match forge::report_window(
+            platform,
             &url,
             &token,
             request.since.trim(),
             request.until.trim(),
-            MAX_PAGES_PER_REPO,
         ) {
             Ok((commits, truncated)) => {
                 if truncated {
                     warnings.push(format!(
                         "{label}：提交超过 {} 条上限或超出时间预算，结果可能不完整",
-                        MAX_PAGES_PER_REPO as usize * 100
+                        forge::MAX_WINDOW_PAGES as usize * 100
                     ));
                 }
                 out.push(RepoFetch {
@@ -689,6 +705,7 @@ fn fetch_repos(request: &ReportRequest, warnings: &mut Vec<String>) -> Vec<RepoF
                     label,
                     url,
                     token,
+                    forge: platform,
                     status: "ok".into(),
                     error: String::new(),
                     commits,
@@ -703,6 +720,7 @@ fn fetch_repos(request: &ReportRequest, warnings: &mut Vec<String>) -> Vec<RepoF
                     label,
                     url,
                     token,
+                    forge: platform,
                     status: "error".into(),
                     error,
                     commits: Vec::new(),
@@ -726,7 +744,7 @@ fn classify(
     let mut out: Vec<Classified> = Vec::new();
     for (repo_index, repo) in repos.iter().enumerate() {
         for commit in &repo.commits {
-            if !seen.insert((repo_index, commit.id.clone())) {
+            if !seen.insert((repo_index, commit.hash.clone())) {
                 continue;
             }
             let is_merge = commit.is_merge();
@@ -747,7 +765,7 @@ fn classify(
                     })
                     .count();
                 if hits > 1 {
-                    let key = format!("{}/{}", repo.key, commit.id);
+                    let key = format!("{}/{}", repo.key, commit.hash);
                     let message = format!("提交 {key} 同时命中多个开发人员，已按配置顺序取首个");
                     if !warnings.contains(&message) {
                         warnings.push(message);
@@ -757,7 +775,7 @@ fn classify(
             let counted = request.include_merges || !is_merge;
             out.push(Classified {
                 repo_index,
-                kind: classify_kind_with(kinds, &commit.title, &commit.message),
+                kind: classify_kind_with(kinds, &commit.subject, &commit.message),
                 is_merge,
                 counted,
                 developer: if counted { matched } else { None },
@@ -769,14 +787,18 @@ fn classify(
     out
 }
 
-/// 模块统计：逐提交拉 diff，多线程限流 + 时间预算；失败只告警不中断。
-/// 返回 (提交下标 → 模块列表, 是否因时间预算截断)
-fn fetch_modules(jobs: &[(usize, String, String, String)]) -> (HashMap<usize, Vec<String>>, bool) {
+/// 详情补全：逐提交拉行数与文件路径（GitHub 一次调用两者都拿；GitLab 只拿路径，行数来自列表）。
+/// 多线程限流 + 时间预算；单条失败只告警不中断。
+/// 返回 (提交下标 → (行数, 模块路径), 是否因时间预算截断)
+fn fetch_details(
+    jobs: &[(usize, Forge, String, String, String)],
+) -> (HashMap<usize, (Option<CommitStats>, Vec<String>)>, bool) {
     let next = AtomicUsize::new(0);
     let truncated = AtomicBool::new(false);
-    let results: Mutex<HashMap<usize, Vec<String>>> = Mutex::new(HashMap::new());
+    let results: Mutex<HashMap<usize, (Option<CommitStats>, Vec<String>)>> =
+        Mutex::new(HashMap::new());
     let started = Instant::now();
-    let workers = MODULE_WORKERS.min(jobs.len()).max(1);
+    let workers = DETAIL_WORKERS.min(jobs.len()).max(1);
     std::thread::scope(|scope| {
         for _ in 0..workers {
             scope.spawn(|| loop {
@@ -784,18 +806,20 @@ fn fetch_modules(jobs: &[(usize, String, String, String)]) -> (HashMap<usize, Ve
                 if index >= jobs.len() {
                     break;
                 }
-                if started.elapsed() >= Duration::from_secs(MODULE_TIME_BUDGET_SECS) {
+                if started.elapsed() >= Duration::from_secs(DETAIL_TIME_BUDGET_SECS) {
                     truncated.store(true, Ordering::Relaxed);
                     break;
                 }
-                let (position, url, token, hash) = &jobs[index];
-                match gitlab::commit_diff_paths(url, token, hash) {
-                    Ok(paths) => {
+                let (position, platform, url, token, hash) = &jobs[index];
+                match forge::commit_detail(*platform, url, token, hash) {
+                    Ok(detail) => {
                         if let Ok(mut map) = results.lock() {
-                            map.insert(*position, paths);
+                            map.insert(*position, detail);
                         }
                     }
-                    Err(error) => log::warn!("提交 {hash} 文件明细拉取失败，按无模块处理：{error}"),
+                    Err(error) => {
+                        log::warn!("提交 {hash} 详情拉取失败，按无行数/无模块处理：{error}")
+                    }
                 }
             });
         }
@@ -805,7 +829,6 @@ fn fetch_modules(jobs: &[(usize, String, String, String)]) -> (HashMap<usize, Ve
         truncated.load(Ordering::Relaxed),
     )
 }
-
 /// 聚合（纯函数，脱网可测）：把归类结果组装成前端需要的报告结构
 fn build_result(
     request: &ReportRequest,
@@ -840,6 +863,9 @@ fn build_result(
             key: repo.key.clone(),
             label: repo.label.clone(),
             url: repo.url.clone(),
+            forge: repo.forge.key().to_string(),
+            // GitHub 列表接口不带 sha 时只覆盖默认分支，界面需要如实标注
+            default_branch_only: repo.forge == Forge::Github,
             status: repo.status.clone(),
             error: repo.error.clone(),
             fetched_count: repo.commits.len(),
@@ -852,7 +878,9 @@ fn build_result(
     let mut unmatched: HashMap<(String, String), (usize, String)> = HashMap::new();
     // 团队活跃天数：按本地自然日去重（个人活跃天数不能相加，会重复计同一天）
     let mut team_days: HashSet<String> = HashSet::new();
-    let mut stats_available = false;
+    // 行数统计覆盖度：全部有 → available；部分有 → partial（GitHub 超限或个别详情失败）
+    let mut stats_count = 0usize;
+    let mut counted_total = 0usize;
     let mut commits: Vec<ReportCommit> = Vec::new();
     let mut truncated_repo = false;
 
@@ -862,20 +890,26 @@ fn build_result(
 
     for item in classified {
         // 先克隆仓库标识：后面要对 repo_reports 做 get_mut，不能再持有它的不可变借用
-        let (repo_key, repo_label, repo_url) = {
+        let (repo_key, repo_label, repo_url, repo_forge) = {
             let repo = &repo_reports[item.repo_index];
-            (repo.key.clone(), repo.label.clone(), repo.url.clone())
+            let platform = if repo.forge == Forge::Github.key() {
+                Forge::Github
+            } else {
+                Forge::Gitlab
+            };
+            (repo.key.clone(), repo.label.clone(), repo.url.clone(), platform)
         };
-        let stats = item.commit.stats.clone();
-        if stats.is_some() {
-            stats_available = true;
-        }
+        let stats = item.commit.stats;
         if !item.counted {
             // 合并提交仍计入仓库维度的「合并提交数」，但不进人员统计
             if let Some(target) = repo_reports.get_mut(item.repo_index) {
                 target.merge_count += 1;
             }
             continue;
+        }
+        counted_total += 1;
+        if stats.is_some() {
+            stats_count += 1;
         }
         if let Some(target) = repo_reports.get_mut(item.repo_index) {
             target.commit_count += 1;
@@ -887,7 +921,7 @@ fn build_result(
                 target.deletions += stats.deletions;
             }
         }
-        let secs = parse_iso_to_epoch_secs(&item.commit.committed_date).unwrap_or(0);
+        let secs = parse_iso_to_epoch_secs(&item.commit.date).unwrap_or(0);
         match item.developer {
             Some(index) => {
                 let acc = &mut accounts[index];
@@ -899,12 +933,12 @@ fn build_result(
                     acc.additions += stats.additions;
                     acc.deletions += stats.deletions;
                 }
-                let day = local_day(&item.commit.committed_date, request.tz_offset_minutes);
+                let day = local_day(&item.commit.date, request.tz_offset_minutes);
                 team_days.insert(day.clone());
                 acc.days.insert(day.clone());
                 *acc.by_day.entry(day).or_default() += 1;
                 *acc.by_hour
-                    .entry(local_hour(&item.commit.committed_date, request.tz_offset_minutes))
+                    .entry(local_hour(&item.commit.date, request.tz_offset_minutes))
                     .or_default() += 1;
                 *acc.by_type.entry(item.kind.clone()).or_default() += 1;
                 *acc.by_repo.entry(repo_key.clone()).or_default() += 1;
@@ -917,33 +951,33 @@ fn build_result(
                     *acc.by_module.entry(key).or_default() += 1;
                 }
                 if acc.first.as_ref().is_none_or(|(at, _)| secs < *at) {
-                    acc.first = Some((secs, item.commit.committed_date.clone()));
+                    acc.first = Some((secs, item.commit.date.clone()));
                 }
                 if acc.last.as_ref().is_none_or(|(at, _)| secs > *at) {
-                    acc.last = Some((secs, item.commit.committed_date.clone()));
+                    acc.last = Some((secs, item.commit.date.clone()));
                 }
                 commits.push(ReportCommit {
                     repo_key: repo_key.clone(),
                     repo_label: repo_label.clone(),
-                    hash: item.commit.id.clone(),
-                    short_hash: short_hash(&item.commit.id),
-                    subject: if item.commit.title.trim().is_empty() {
+                    hash: item.commit.hash.clone(),
+                    short_hash: short_hash(&item.commit.hash),
+                    subject: if item.commit.subject.trim().is_empty() {
                         item.commit.message.lines().next().unwrap_or("").to_string()
                     } else {
-                        item.commit.title.clone()
+                        item.commit.subject.clone()
                     },
                     author_name: item.commit.author_name.clone(),
                     author_email: item.commit.author_email.clone(),
                     committer_name: item.commit.committer_name.clone(),
-                    date: item.commit.committed_date.clone(),
+                    date: item.commit.date.clone(),
                     developer_id: developers[index].id.clone(),
                     developer_name: developers[index].name.clone(),
                     kind: item.kind.clone(),
                     is_merge: item.is_merge,
-                    additions: stats.as_ref().map(|value| value.additions),
-                    deletions: stats.as_ref().map(|value| value.deletions),
+                    additions: stats.map(|value| value.additions),
+                    deletions: stats.map(|value| value.deletions),
                     modules: item.modules.clone(),
-                    web_url: web_url_for(&repo_url, &item.commit),
+                    web_url: web_url_for(repo_forge, &repo_url, &item.commit),
                 });
             }
             None => {
@@ -953,10 +987,10 @@ fn build_result(
                 );
                 let entry = unmatched
                     .entry(key)
-                    .or_insert_with(|| (0, item.commit.committed_date.clone()));
+                    .or_insert_with(|| (0, item.commit.date.clone()));
                 entry.0 += 1;
                 if secs > parse_iso_to_epoch_secs(&entry.1).unwrap_or(0) {
-                    entry.1 = item.commit.committed_date.clone();
+                    entry.1 = item.commit.date.clone();
                 }
             }
         }
@@ -1017,7 +1051,8 @@ fn build_result(
         unmatched: unmatched_list,
         unmatched_total,
         active_days: team_days.len(),
-        stats_available,
+        stats_available: stats_count > 0,
+        stats_partial: stats_count > 0 && stats_count < counted_total,
         module_stats: request.module_stats,
         module_stats_truncated: request.module_stats && module_truncated,
         commits_truncated,
@@ -1027,12 +1062,12 @@ fn build_result(
     }
 }
 
-/// 提交网页地址：优先用接口返回的 web_url，缺失时按仓库地址兜底拼装
-fn web_url_for(repo_url: &str, commit: &ApiCommit) -> String {
+/// 提交网页地址：优先用接口返回的 web_url（GitHub 的 html_url 同字段），缺失时按平台兜底拼装
+fn web_url_for(platform: Forge, repo_url: &str, commit: &ForgeCommit) -> String {
     if !commit.web_url.trim().is_empty() {
         return commit.web_url.trim().to_string();
     }
-    gitlab::commit_web_url(repo_url, &commit.id).unwrap_or_default()
+    forge::commit_web_url(platform, repo_url, &commit.hash)
 }
 
 /// BTreeMap（已按 key 升序）→ 计数项列表，保持升序（日期 / 小时）
@@ -1190,20 +1225,19 @@ fn now_ms() -> i64 {
 mod tests {
     use super::*;
 
-    fn commit(id: &str, title: &str, date: &str, name: &str, email: &str) -> ApiCommit {
-        ApiCommit {
-            id: id.to_string(),
-            title: title.to_string(),
+    fn commit(id: &str, title: &str, date: &str, name: &str, email: &str) -> ForgeCommit {
+        ForgeCommit {
+            hash: id.to_string(),
+            subject: title.to_string(),
             message: title.to_string(),
-            committed_date: date.to_string(),
-            authored_date: date.to_string(),
             author_name: name.to_string(),
             author_email: email.to_string(),
             committer_name: name.to_string(),
             committer_email: email.to_string(),
+            date: date.to_string(),
             parent_ids: vec!["p1".to_string()],
             web_url: format!("https://gitlab.test/group/proj/-/commit/{id}"),
-            stats: Some(gitlab::ApiCommitStats {
+            stats: Some(CommitStats {
                 additions: 10,
                 deletions: 2,
             }),
@@ -1240,17 +1274,19 @@ mod tests {
                 },
             ],
             developers: vec![],
+            kinds: vec![],
             include_merges: false,
             module_stats: false,
         }
     }
 
-    fn repo_fetch(key: &str, label: &str, commits: Vec<ApiCommit>) -> RepoFetch {
+    fn repo_fetch(key: &str, label: &str, commits: Vec<ForgeCommit>) -> RepoFetch {
         RepoFetch {
             key: key.into(),
             label: label.into(),
             url: format!("https://gitlab.test/group/{key}"),
             token: "t".into(),
+            forge: Forge::Gitlab,
             status: "ok".into(),
             error: String::new(),
             commits,
@@ -1624,6 +1660,7 @@ mod tests {
                 label: "后端".into(),
                 url: "https://gitlab.test/group/server".into(),
                 token: "t".into(),
+                forge: Forge::Gitlab,
                 status: "error".into(),
                 error: "GitLab 请求失败".into(),
                 commits: Vec::new(),
@@ -1646,6 +1683,74 @@ mod tests {
         // 服务端未返回行数统计：置 false 且明细为 None（前端显示「—」）
         assert!(!result.stats_available);
         assert_eq!(result.commits[0].additions, None);
+    }
+
+    /// 平台字段：GitLab 仓库 defaultBranchOnly=false；GitHub 仓库为 true 且 forge 标识正确
+    #[test]
+    fn build_result_marks_forge_and_default_branch_only() {
+        let repos = vec![
+            repo_fetch(
+                "frontend",
+                "前端",
+                vec![commit("a1", "feat: x", "2026-08-05T02:00:00Z", "田旭东", "tian@corp.com")],
+            ),
+            RepoFetch {
+                key: "backend".into(),
+                label: "后端".into(),
+                url: "https://github.test/owner/repo".into(),
+                token: "t".into(),
+                forge: Forge::Github,
+                status: "ok".into(),
+                error: String::new(),
+                commits: vec![commit("b1", "fix: y", "2026-08-06T02:00:00Z", "田旭东", "tian@corp.com")],
+                truncated: false,
+            },
+        ];
+        let request = ReportRequest {
+            developers: vec![developer("d1", "田旭东", &["tian@corp.com"])],
+            ..request()
+        };
+        let developers = normalize_developers("p1", &request.developers);
+        let kinds = normalize_kinds("p1", &request.kinds);
+        let mut warnings = Vec::new();
+        let classified = classify(&request, &repos, &developers, &kinds, &mut warnings);
+        let result = build_result(&request, &repos, classified, developers, kinds, false, warnings);
+        assert_eq!(result.repos[0].forge, "gitlab");
+        assert!(!result.repos[0].default_branch_only);
+        assert_eq!(result.repos[1].forge, "github");
+        assert!(result.repos[1].default_branch_only, "GitHub 只统计默认分支");
+        // 两条提交都有行数 → 不标 partial
+        assert!(result.stats_available);
+        assert!(!result.stats_partial);
+    }
+
+    /// 行数只覆盖部分提交（GitHub 逐提交补时超限/失败）→ statsPartial 置位，供前端按「≈」展示
+    #[test]
+    fn build_result_flags_partial_stats() {
+        let mut without_stats = commit("a2", "fix: 缺行数", "2026-08-06T02:00:00Z", "田旭东", "tian@corp.com");
+        without_stats.stats = None;
+        let repos = vec![repo_fetch(
+            "frontend",
+            "前端",
+            vec![
+                commit("a1", "feat: 有行数", "2026-08-05T02:00:00Z", "田旭东", "tian@corp.com"),
+                without_stats,
+            ],
+        )];
+        let request = ReportRequest {
+            developers: vec![developer("d1", "田旭东", &["tian@corp.com"])],
+            ..request()
+        };
+        let developers = normalize_developers("p1", &request.developers);
+        let kinds = normalize_kinds("p1", &request.kinds);
+        let mut warnings = Vec::new();
+        let classified = classify(&request, &repos, &developers, &kinds, &mut warnings);
+        let result = build_result(&request, &repos, classified, developers, kinds, false, warnings);
+        assert!(result.stats_available, "至少一条有行数");
+        assert!(result.stats_partial, "部分提交缺行数应标注 partial");
+        // 缺行数的那条明细为 None（前端显示「—」）
+        let missing = result.commits.iter().find(|item| item.hash == "a2").unwrap();
+        assert_eq!(missing.additions, None);
     }
 
     #[test]

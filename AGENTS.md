@@ -16,7 +16,7 @@
 todo-kanban/
 ├── src/              # React SPA（pages → components → lib 单向分层）
 ├── src-tauri/        # Cargo workspace：config ← upgrade ← core ← 壳 crate + mcp-server
-├── docs/             # 设计文档 + ADR-001..012（部分文档有漂移，以源码为准）
+├── docs/             # 设计文档 + ADR-001..016（部分文档有漂移，以源码为准）
 ├── scripts/          # .mjs 验证脚本（esbuild + node assert，无测试框架）
 ├── public/vendor/vditor/  # gitignored，predev/prebuild 自动同步
 ├── release/          # 打包产物（gitignored）：todo-kanban.exe + mcp-server.exe
@@ -32,7 +32,7 @@ todo-kanban/
 | 前端类型（与后端对齐） | `src/lib/types.ts` ↔ `src-tauri/core/src/models.rs`（改字段必须两端同步） |
 | 拖拽/泳道 | `src/components/board/SwimlaneBoard.tsx` + `src/lib/boardOrder.ts`（有 node 测试） |
 | Tauri 命令 | 业务函数在 `core/svc/` → 薄壳 `src-tauri/src/commands.rs` → 注册 `src-tauri/src/lib.rs` → 前端封装 `src/lib/git.ts` |
-| Git 报告（日报/周报/月报） | 后端 `core/src/svc/git_report.rs`（GitLab API 聚合，命令 `git_report_fetch`，纯查询不写库）；前端 `src/pages/GitReportPage.tsx` + `src/lib/gitReport.ts` + `src/lib/gitReportPeriod.ts`（周期口径有 node 测试）；开发人员归类存 workflow_state 的 `gitReportDevs`（页面内「开发人员归类」对话框编辑，见 ADR-015） |
+| Git 报告（日报/周报/月报） | 平台识别与分发 `core/src/svc/forge.rs`（GitLab/GitHub 按域名自动识别，ADR-016）、各平台实现 `svc/gitlab.rs` + `svc/github.rs`；聚合在 `core/src/svc/git_report.rs`（命令 `git_report_fetch`，纯查询不写库）；前端 `src/pages/GitReportPage.tsx` + `src/lib/gitReport.ts` + `src/lib/gitReportPeriod.ts`（周期口径有 node 测试）；开发人员归类存 workflow_state 的 `gitReportDevs`（页面内「开发人员归类」对话框编辑，见 ADR-015） |
 | Rust 业务逻辑 | `src-tauri/core/src/`（svc/ 编排、db/ 存储、tool/ git CLI） |
 | 数据版本升级 | `src-tauri/config/src/lib.rs` + `upgrade/` + schema.rs/row.rs/db 三处（ADR-011） |
 | MCP 工具 | `src-tauri/mcp-server/src/bridge.rs` + `protocol.rs`，业务走 core/svc |

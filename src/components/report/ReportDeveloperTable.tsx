@@ -9,14 +9,21 @@ interface Props {
   kinds: GitKindRule[];
   /** 服务端是否返回了行数统计（false 时新增/删除显示「—」） */
   statsAvailable: boolean;
+  /** 行数只覆盖部分提交（GitHub 超限）→ 数字加「≈」并在表头提示 */
+  statsPartial: boolean;
 }
 
-export function ReportDeveloperTable({ developers, kinds, statsAvailable }: Props) {
+export function ReportDeveloperTable({ developers, kinds, statsAvailable, statsPartial }: Props) {
+  /** 行数前缀：不可用显示「—」，部分覆盖加「≈」 */
+  const lines = (value: number) => (statsAvailable ? (statsPartial ? "≈" : "") + value.toLocaleString() : "—");
   return (
     <section className="tk-report-card" aria-label="成员贡献统计">
       <div className="tk-report-card-head">
         <h3>成员贡献统计</h3>
-        <span className="tk-report-hint">仅统计已归类的开发人员</span>
+        <span className="tk-report-hint">
+          仅统计已归类的开发人员
+          {statsPartial ? " · 行数仅覆盖部分提交（≈）" : ""}
+        </span>
       </div>
       <div className="tk-report-table-wrap">
         <table className="tk-report-table">
@@ -39,8 +46,8 @@ export function ReportDeveloperTable({ developers, kinds, statsAvailable }: Prop
                   {developer.commits}
                   {developer.mergeCommits > 0 ? <span className="tk-report-sub">（含 {developer.mergeCommits} 合并）</span> : null}
                 </td>
-                <td className="tk-report-add">{statsAvailable ? "+" + developer.additions.toLocaleString() : "—"}</td>
-                <td className="tk-report-del">{statsAvailable ? "-" + developer.deletions.toLocaleString() : "—"}</td>
+                <td className="tk-report-add">{statsAvailable ? "+" + lines(developer.additions) : "—"}</td>
+                <td className="tk-report-del">{statsAvailable ? "-" + lines(developer.deletions) : "—"}</td>
                 <td>{developer.activeDays}</td>
                 <td>
                   <span className="tk-report-pills">

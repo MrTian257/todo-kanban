@@ -57,7 +57,7 @@ export function ReportCommitTable({ commits, kinds, truncated }: Props) {
                       type="button"
                       className="tk-report-link"
                       onClick={() => openCommit(commit)}
-                      title={commit.webUrl ? "在 GitLab 打开该提交" : "该提交没有网页地址"}
+                      title={commit.webUrl ? "在代码平台打开该提交" : "该提交没有网页地址"}
                     >
                       {commit.shortHash}
                     </button>

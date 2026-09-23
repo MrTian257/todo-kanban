@@ -7,6 +7,8 @@ export interface KpiItem {
   /** 数值文本；null 表示不可用（显示「—」） */
   value: number | null;
   unit?: string;
+  /** 数值只覆盖部分数据（GitHub 行数统计超限）→ 前缀「≈」，避免误读为精确值 */
+  approx?: boolean;
 }
 
 export function ReportKpis({ items }: { items: KpiItem[] }) {
@@ -15,7 +17,7 @@ export function ReportKpis({ items }: { items: KpiItem[] }) {
       {items.map((item) => (
         <div className="tk-report-kpi" key={item.key}>
           <div className="tk-report-kpi-value">
-            {item.value === null ? "—" : item.value.toLocaleString()}
+            {item.value === null ? "—" : (item.approx ? "≈" : "") + item.value.toLocaleString()}
             {item.value !== null && item.unit ? <span className="tk-report-kpi-unit">{item.unit}</span> : null}
           </div>
           <div className="tk-report-kpi-label">{item.label}</div>

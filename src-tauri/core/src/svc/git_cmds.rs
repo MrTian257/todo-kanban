@@ -4,15 +4,20 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::error::{AppError, AppResult};
 use crate::models::{CommitInfo, GitInfo};
+use crate::svc::forge::Forge;
 use crate::tool::git_cli::{self, run_git};
 
 /// API 成功（包括空结果）直接返回；未配置或请求失败才回退本地。
-fn prefer_api<T>(repo: &str, query: impl FnOnce(&str, &str) -> AppResult<T>) -> Option<T> {
-    let (url, token) = super::gitlab::configured_remote(repo)?;
-    match query(&url, &token) {
+/// 平台（GitLab / GitHub）由 forge 按域名识别，调用方只描述「要查什么」。
+fn prefer_api<T>(
+    repo: &str,
+    query: impl FnOnce(Forge, &str, &str) -> AppResult<T>,
+) -> Option<T> {
+    let (forge, url, token) = super::forge::configured_remote(repo)?;
+    match query(forge, &url, &token) {
         Ok(value) => Some(value),
         Err(e) => {
-            log::warn!("提交 API 不可用，回退本地 Git：{e}");
+            log::warn!("{} 提交 API 不可用，回退本地 Git：{e}", forge.label());
             None
         }
     }
@@ -121,8 +126,8 @@ pub fn git_sync_commits(
     if let Some(b) = ref_branch {
         git_cli::validate_branch_name(b)?;
         // 按参考分支定向拉取该分支历史，避免超大仓库全量拉取超出分页/时间上限
-        if let Some(commits) = prefer_api(repo, |url, token| {
-            super::gitlab::commits(url, token, Some(b), None, Some(tag))
+        if let Some(commits) = prefer_api(repo, |forge, url, token| {
+            super::forge::search_tag_commits(forge, url, token, tag)
         }) {
             return Ok(commits);
         }
@@ -209,30 +214,41 @@ pub fn git_sync_commits_batch(
         Vec::with_capacity(api_groups.values().map(Vec::len).sum::<usize>() + local_requests.len());
     let mut warnings: Vec<String> = Vec::new();
     // 每个分支组一次定向 API 请求；整组失败回退本地，绝不截断返回。
-    if let Some((url, token)) = super::gitlab::configured_remote(repo) {
-        for (branch, group) in api_groups {
-            let tags: Vec<String> = group.iter().map(|request| request.tag.clone()).collect();
-            match super::gitlab::commits_by_branch(&url, &token, &branch, &tags) {
-                Ok(commit_groups) => {
-                    for (request, commits) in group.into_iter().zip(commit_groups) {
-                        results.push(CommitResult {
-                            id: request.id,
-                            commits,
-                            source: "api".into(),
-                            warning: None,
-                            error: None,
-                        });
+    // GitHub 无等价的批量按标记检索（搜索接口限 30 次/分钟，按待办逐个查会立刻撞配额）→ 直接本地兜底。
+    match super::forge::configured_remote(repo) {
+        Some((forge, url, token)) if super::forge::supports_batch_tag_search(forge) => {
+            for (branch, group) in api_groups {
+                let tags: Vec<String> = group.iter().map(|request| request.tag.clone()).collect();
+                match super::gitlab::commits_by_branch(&url, &token, &branch, &tags) {
+                    Ok(commit_groups) => {
+                        for (request, commits) in group.into_iter().zip(commit_groups) {
+                            results.push(CommitResult {
+                                id: request.id,
+                                commits,
+                                source: "api".into(),
+                                warning: None,
+                                error: None,
+                            });
+                        }
                     }
-                }
-                Err(error) => {
-                    warnings.push(format!("分支 {branch} 的 API 不可用，已回退本地：{error}"));
-                    local_requests.extend(group);
+                    Err(error) => {
+                        warnings.push(format!("分支 {branch} 的 API 不可用，已回退本地：{error}"));
+                        local_requests.extend(group);
+                    }
                 }
             }
         }
-    } else {
-        warnings.push("未找到唯一的仓库 API 配置，已读取本地记录".into());
-        local_requests.extend(api_groups.into_values().flatten());
+        Some((forge, _, _)) => {
+            warnings.push(format!(
+                "{} 不支持按标记的批量 API 检索，已读取本地记录",
+                forge.label()
+            ));
+            local_requests.extend(api_groups.into_values().flatten());
+        }
+        None => {
+            warnings.push("未找到唯一的仓库 API 配置，已读取本地记录".into());
+            local_requests.extend(api_groups.into_values().flatten());
+        }
     }
     if !local_requests.is_empty() {
         results.extend(local_batch_results(repo, local_requests, &warnings)?);
@@ -286,7 +302,7 @@ fn local_batch_results(
                             .iter()
                             .zip(&records)
                             .filter(|(_, (_, message))| {
-                                super::gitlab::matches_tag(message, &requests[index].tag)
+                                super::forge::matches_tag(message, &requests[index].tag)
                             })
                             .map(|(commit, _)| commit.clone())
                             .collect(),
@@ -384,13 +400,14 @@ pub fn git_commits_between(
     if !branch.is_empty() {
         git_cli::validate_branch_name(branch)?;
     }
-    if let Some(commits) = prefer_api(repo, |url, token| {
-        super::gitlab::commits(
+    if let Some(commits) = prefer_api(repo, |forge, url, token| {
+        super::forge::window_commits(
+            forge,
             url,
             token,
             (!branch.is_empty()).then_some(branch),
-            Some((since_iso, until_iso)),
-            None,
+            since_iso,
+            until_iso,
         )
     }) {
         return Ok(commits);
@@ -423,7 +440,9 @@ pub fn git_commit_info(repo: &str, short_hash: &str) -> AppResult<CommitInfo> {
     if !(4..=40).contains(&hash.len()) || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(AppError::invalid("提交 hash 必须是 4~40 位十六进制字符"));
     }
-    if let Some(commit) = prefer_api(repo, |url, token| super::gitlab::commit(url, token, hash)) {
+    if let Some(commit) = prefer_api(repo, |forge, url, token| {
+        super::forge::commit_by_hash(forge, url, token, hash)
+    }) {
         return Ok(commit);
     }
     let out = run_git(
