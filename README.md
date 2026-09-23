@@ -42,3 +42,7 @@ npm run tauri dev     # 桌面窗口开发（1440×900）
 | [docs/decisions/](docs/decisions/) | 架构决策记录 ADR-001 ~ ADR-012 |
 | [docs/01-design/prd-swimlane.md](docs/01-design/prd-swimlane.md) | 泳道看板重构 PRD（已实施） |
 | docs/01-design/ · docs/02-development/ | 设计分册与开发指南 |
+
+## 许可
+
+本项目采用 [Apache License 2.0](LICENSE) 授权，版权归 muyu257@foxmail.com 所有。分发时请随附 [LICENSE](LICENSE) 副本与第三方依赖声明。

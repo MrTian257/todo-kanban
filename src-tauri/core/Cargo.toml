@@ -2,6 +2,7 @@
 name = "todo-kanban-core"
 version = "2.0.0"
 description = "todo-kanban 纯逻辑库（无 tauri 依赖，可独立单测、可被 MCP server 复用）"
+license = "Apache-2.0"
 edition = "2021"
 
 [dependencies]

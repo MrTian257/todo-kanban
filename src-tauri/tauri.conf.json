@@ -27,6 +27,10 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "license": "Apache-2.0",
+    "licenseFile": "../LICENSE",
+    "copyright": "Copyright 2026 muyu257@foxmail.com",
+    "shortDescription": "面向开发者的桌面待办管理应用（泳道看板 + MCP server）",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

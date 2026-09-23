@@ -10,6 +10,7 @@
 #   artifacts/windows/  exe ×2 + 安装包（nsis setup / msi）
 #   artifacts/macos/    dmg + mcp-server 双架构
 #   release/            运行目录：Windows 桌面端与 mcp-server 同步更新（数据文件不动）
+#   各产物目录均随附 LICENSE 副本（Apache-2.0 §4(a)）
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -28,6 +29,15 @@ fail() { printf '\n错误：%s\n' "$*" >&2; exit 1; }
 
 # ── 平台产物目录 ─────────────────────────────────────────
 pkg_dir() { local p="$1"; mkdir -p "$ARTIFACTS/$p"; echo "$ARTIFACTS/$p"; }
+
+# ── 许可文件随包分发 ─────────────────────────────────────
+# Apache-2.0 §4(a)：向他人分发本作品时须随附一份 License 副本。
+# 安装包（nsis / msi / dmg）内嵌的许可由 tauri.conf.json 的 bundle.licenseFile 负责；
+# 这里补齐「裸 exe 目录 / release 运行目录」这类不经安装器的分发形态。
+ship_license() { # ship_license <目标目录>
+  [ -f "$ROOT/LICENSE" ] || { log "警告：未找到 $ROOT/LICENSE，跳过许可文件随包"; return 0; }
+  cp "$ROOT/LICENSE" "$1/LICENSE"
+}
 
 # ── 版本号（Cargo.toml 第一个 version 字段） ─────────────
 version() { sed -n 's/^version = "\([^"]*\)"/\1/p' "$MANIFEST" | head -1; }
@@ -61,12 +71,14 @@ build_windows_local() {
   for b in nsis msi; do
     [ -d "$td/bundle/$b" ] && cp "$td/bundle/$b/"* "$out/" || true
   done
+  ship_license "$out"
 
   # 运行目录同步（不触碰数据文件）
   mkdir -p "$RELEASE"
   cp "$td/todo-kanban.exe" "$RELEASE/todo-kanban.exe"
   cp "$td/mcp-server.exe" "$RELEASE/mcp-server.exe"
-  log "Windows 产物就绪：$out（release/ 运行目录已同步）"
+  ship_license "$RELEASE"
+  log "Windows 产物就绪：$out（release/ 运行目录已同步，含 LICENSE）"
 }
 
 # ── macOS 本机构建（在 macOS 上执行时） ──────────────────
@@ -86,7 +98,8 @@ build_macos_local() {
   cp "$t/release/bundle/dmg/"*.dmg "$out/"
   cp "$t/aarch64-apple-darwin/release/mcp-server" "$out/mcp-server-aarch64-apple-darwin"
   cp "$t/x86_64-apple-darwin/release/mcp-server" "$out/mcp-server-x86_64-apple-darwin"
-  log "macOS 产物就绪：$out"
+  ship_license "$out"
+  log "macOS 产物就绪：$out（含 LICENSE）"
 }
 
 # ── GitHub 凭据（GITHUB_TOKEN → gh auth token → git credential，绝不回显） ──
@@ -179,7 +192,8 @@ build_macos_remote() {
   out="$(pkg_dir macos)"
   unzip -o -q "$tmp/macos.zip" -d "$out"
   rm -rf "$tmp"
-  log "macOS 产物就绪：$out"
+  ship_license "$out"
+  log "macOS 产物就绪：$out（含 LICENSE）"
 }
 
 # ── 入口 ─────────────────────────────────────────────────

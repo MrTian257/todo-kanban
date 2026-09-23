@@ -3,6 +3,7 @@ name = "todo-kanban"
 version = "2.0.0"
 description = "面向开发者的泳道看板待办管理（Tauri 2）"
 authors = ["todo-kanban"]
+license = "Apache-2.0"
 edition = "2021"
 
 [lib]

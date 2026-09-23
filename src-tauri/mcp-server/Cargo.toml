@@ -2,6 +2,7 @@
 name = "mcp-server"
 version = "2.0.0"
 description = "todo-kanban MCP server（stdio，零 tauri/MCP-SDK 依赖）"
+license = "Apache-2.0"
 edition = "2021"
 
 [[bin]]
