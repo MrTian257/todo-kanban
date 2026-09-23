@@ -162,16 +162,24 @@ export const DEFAULT_KIND_RULES: GitKindRule[] = [
   { id: "kind-revert", projectId: "", key: "revert", label: "回滚", color: "#78716c", keywords: ["回滚", "revert"], enabled: true },
 ];
 
+/**
+ * 规则 key 相等判定：**忽略大小写与首尾空白**（与后端 same_ignore_case 同语义）。
+ * 规则 key 可能被改成 "Feat"，而会话缓存里的旧报告仍带 "feat" —— 精确比较会退化成裸 key + 中性灰。
+ */
+export function sameKindKey(left: string, right: string): boolean {
+  return left.trim().toLowerCase() === right.trim().toLowerCase();
+}
+
 /** 规则 key → 展示名（未知 key 用 key 本身；兜底类型固定显示「其它」） */
 export function kindLabel(rules: GitKindRule[], key: string): string {
-  if (key === OTHER_KIND) return "其它";
-  return rules.find((rule) => rule.key === key)?.label ?? key;
+  if (sameKindKey(key, OTHER_KIND)) return "其它";
+  return rules.find((rule) => sameKindKey(rule.key, key))?.label ?? key;
 }
 
 /** 规则 key → 颜色（未知 key 用中性灰） */
 export function kindColor(rules: GitKindRule[], key: string): string {
-  if (key === OTHER_KIND) return "#94a3b8";
-  return rules.find((rule) => rule.key === key)?.color ?? "#94a3b8";
+  if (sameKindKey(key, OTHER_KIND)) return "#94a3b8";
+  return rules.find((rule) => sameKindKey(rule.key, key))?.color ?? "#94a3b8";
 }
 
 /** 生效规则：报告里带回来的（后端归一化）优先，否则内置默认（编辑对话框的初始种子） */

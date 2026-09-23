@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
-import { DEFAULT_KIND_RULES, GitKindRule, KIND_PALETTE, kindColor } from "@/lib/gitReport";
+import { DEFAULT_KIND_RULES, GitKindRule, KIND_PALETTE, kindColor, sameKindKey } from "@/lib/gitReport";
 import { useEditingGuard } from "@/lib/editingGuard";
 import { cn, newId } from "@/lib/utils";
 
@@ -57,6 +57,12 @@ export function KindRuleDialog({ open, projectId, projectName, rules, observed, 
     }
     wasOpen.current = open;
   }, [open, projectId, rules]);
+
+  /** 报告里出现过的类型 key（忽略大小写，用于标注「本次有提交」） */
+  const observedKeys = React.useMemo(
+    () => observed.map((key) => key.trim()),
+    [observed],
+  );
 
   const patch = (id: string, changes: Partial<GitKindRule>) =>
     setDraft((current) => current.map((rule) => (rule.id === id ? { ...rule, ...changes } : rule)));
@@ -119,8 +125,9 @@ export function KindRuleDialog({ open, projectId, projectName, rules, observed, 
         setError("类型 key 不能为空");
         return;
       }
+      // key 唯一性同样忽略大小写（后端 normalize_kinds 也会按小写去重）
       if (keys.has(key.toLowerCase())) {
-        setError("类型 key 不能重复：" + key);
+        setError("类型 key 不能重复（忽略大小写）：" + key);
         return;
       }
       keys.add(key.toLowerCase());
@@ -147,12 +154,13 @@ export function KindRuleDialog({ open, projectId, projectName, rules, observed, 
           <DialogTitle>提交类型规则 · {projectName}</DialogTitle>
           <DialogDescription>
             类型由提交信息推断：先看标题的 conventional 前缀（feat(ui)!: x），再按下面的顺序匹配关键词。
-            ASCII 关键词按单词边界匹配（ci 不会命中 special），含中文的关键词按子串匹配；都没命中显示「其它」。
+            ASCII 关键词按单词边界匹配（ci 不会命中 special），含中文的关键词按子串匹配；
+            前缀、key 与关键词都忽略大小写（FEAT: 与 feat: 等价）；都没命中显示「其它」。
           </DialogDescription>
 
           <div className="tk-report-kind-list">
             {draft.map((rule, index) => {
-              const used = observed.includes(rule.key);
+              const used = observedKeys.some((key) => sameKindKey(key, rule.key));
               return (
                 <div className={cn("tk-report-kind-item", !rule.enabled && "is-off")} key={rule.id}>
                   <div className="tk-report-kind-order">

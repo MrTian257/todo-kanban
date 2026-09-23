@@ -92,16 +92,16 @@ pub fn default_kind_rules() -> Vec<GitKindRule> {
         ("feat", "新增功能", "#3b82f6", &["新增", "添加", "实现", "支持", "feat", "feature"]),
         ("fix", "缺陷修复", "#ef4444", &["修复", "解决", "bug", "fix", "hotfix"]),
         ("refactor", "重构优化", "#8b5cf6", &["重构", "优化", "抽取", "整理", "统一", "refactor"]),
+        ("merge", "合并", "#78716c", &["合并", "merge"]),
+        ("revert", "回滚", "#78716c", &["回滚", "revert"]),
+        ("reapply", "重新应用", "#78716c", &["重新应用", "reapply"]),
+        ("style", "样式", "#a855f7", &["样式", "style", "格式化"]),
         ("docs", "文档", "#10b981", &["文档", "docs", "doc"]),
         ("test", "测试", "#14b8a6", &["测试", "test"]),
         ("perf", "性能", "#f59e0b", &["性能", "perf"]),
         ("build", "构建", "#0ea5e9", &["构建", "build"]),
         ("ci", "CI", "#6366f1", &["ci", "pipeline"]),
-        ("style", "样式", "#a855f7", &["样式", "style", "格式化"]),
         ("chore", "杂项", "#64748b", &["杂项", "chore"]),
-        ("merge", "合并", "#78716c", &["合并", "merge"]),
-        ("revert", "回滚", "#78716c", &["回滚", "revert"]),
-        ("reapply", "回滚", "#78716c", &["重新应用", "reapply"]),
     ];
     TABLE
         .iter()
@@ -325,30 +325,39 @@ pub fn classify_kind(subject: &str, message: &str) -> String {
 /// 1. **conventional 前缀优先**：标题冒号前的 ASCII 词（`feat(ui)!: x` → `feat`）等于某规则 key 或关键词 → 该规则；
 /// 2. 否则按规则顺序扫关键词：先只看标题（信息量最大），标题没命中再看「标题 + 完整信息」；
 /// 3. 都没命中 → `other`（前端显示「其它」）。禁用规则直接跳过。
+///
+/// **所有比较都忽略大小写与首尾空白**（`FEAT:`、`Feat`、` feat ` 等价），统一走 `same_ignore_case`；
+/// 返回值是规则 key 的 trim 形态（保留配置里的大小写，供前端按 key 上色）。
 pub fn classify_kind_with(rules: &[GitKindRule], subject: &str, message: &str) -> String {
     let subject = subject.trim();
     let prefix = conventional_prefix(subject);
     if !prefix.is_empty() {
         if let Some(rule) = rules.iter().find(|rule| {
             rule.enabled
-                && (rule.key.eq_ignore_ascii_case(&prefix)
+                && (same_ignore_case(&rule.key, &prefix)
                     || rule
                         .keywords
                         .iter()
-                        .any(|keyword| keyword.eq_ignore_ascii_case(&prefix)))
+                        .any(|keyword| same_ignore_case(keyword, &prefix)))
         }) {
-            return rule.key.clone();
+            return rule.key.trim().to_string();
         }
     }
     if let Some(rule) = match_rule(rules, subject) {
-        return rule.key.clone();
+        return rule.key.trim().to_string();
     }
     if !message.trim().is_empty() {
         if let Some(rule) = match_rule(rules, &format!("{subject} {message}")) {
-            return rule.key.clone();
+            return rule.key.trim().to_string();
         }
     }
     OTHER_KIND.to_string()
+}
+
+/// 忽略大小写与首尾空白的相等比较（Unicode 折叠）：前缀、规则 key、关键词三处比较统一走这里，
+/// 保证 `FEAT:` / `Feat` / ` feat ` 等价。中文没有大小写，折叠是幂等的空操作。
+fn same_ignore_case(left: &str, right: &str) -> bool {
+    left.trim().to_lowercase() == right.trim().to_lowercase()
 }
 
 /// 首个关键词命中的启用规则（顺序即优先级）
@@ -380,8 +389,8 @@ fn conventional_prefix(subject: &str) -> String {
     word.to_lowercase()
 }
 
-/// 关键词匹配：纯 ASCII 关键词按**词边界**匹配（字母数字为词字符），避免 `ci` 命中 `special`；
-/// 含非 ASCII 的关键词按不区分大小写的子串匹配（中文没有词边界概念）。
+/// 关键词匹配（**忽略大小写**，两侧都先折叠）：纯 ASCII 关键词按**词边界**匹配（字母数字为词字符），
+/// 避免 `ci` 命中 `special`（大小写不影响词边界判定）；含非 ASCII 的关键词按子串匹配（中文没有词边界概念）。
 fn contains_keyword(text: &str, keyword: &str) -> bool {
     let keyword = keyword.trim();
     if keyword.is_empty() {
@@ -1329,6 +1338,36 @@ mod tests {
         assert_eq!(classify_kind_with(&rules, "legacy 代码清理", ""), OTHER_KIND);
         // 未配置规则 → 全部 other
         assert_eq!(classify_kind_with(&[], "feat: 新增", ""), OTHER_KIND);
+    }
+
+    /// 类型匹配忽略大小写：前缀、规则 key、关键词三条路径，且不影响词边界判定
+    #[test]
+    fn kind_matching_ignores_case() {
+        // 默认词表：前缀大小写混写都命中
+        assert_eq!(classify_kind("FEAT: 新增导出", ""), "feat");
+        assert_eq!(classify_kind("Feat(ui)!: 组件", ""), "feat");
+        assert_eq!(classify_kind("FIX: 修复", ""), "fix");
+        // 关键词大小写混写都命中
+        assert_eq!(classify_kind("修复 BUG 列表", ""), "fix");
+        assert_eq!(classify_kind("CI PIPELINE 失败", ""), "ci");
+        // 词边界不受大小写影响："SPECIAL" 里的 "ci" 仍不算命中
+        assert_eq!(classify_kind("SPECIAL 处理", ""), OTHER_KIND);
+        // 自定义规则：key 带首尾空白 + 大小写混写、关键词大写，都能命中；返回值 trim 但保留配置大小写
+        let rules = vec![GitKindRule {
+            id: "k".into(),
+            project_id: "p1".into(),
+            key: "  Feat  ".into(),
+            label: "需求".into(),
+            color: "#3b82f6".into(),
+            keywords: vec!["新增".into(), "FEATURE".into()],
+            enabled: true,
+        }];
+        assert_eq!(classify_kind_with(&rules, "feat: x", ""), "Feat");
+        assert_eq!(classify_kind_with(&rules, "FEAT(ui): x", ""), "Feat");
+        assert_eq!(classify_kind_with(&rules, "新增导出", ""), "Feat");
+        assert_eq!(classify_kind_with(&rules, "feature 支持", ""), "Feat");
+        assert_eq!(classify_kind_with(&rules, "FEATURE 支持", ""), "Feat");
+        assert_eq!(classify_kind_with(&rules, "无关内容", ""), OTHER_KIND);
     }
 
     /// ASCII 关键词按词边界匹配，避免 "ci" 命中 "special"；中文关键词按子串
