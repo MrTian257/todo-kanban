@@ -35,7 +35,7 @@ export function ProjectContextSwitcher({ collapsed }: { collapsed: boolean }) {
           )}
         >
           <span className={cn("shrink-0 rounded-lg p-1.5", active ? "bg-primary text-primary-foreground" : "bg-primary/10 text-primary")}>
-            <FolderKanban className="h-4 w-4" />
+            <FolderKanban className="tk-sidebar-icon h-4 w-4" />
           </span>
           {!collapsed && (
             <span className="min-w-0 flex-1">

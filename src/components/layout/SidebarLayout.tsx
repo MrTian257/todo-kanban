@@ -208,7 +208,7 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
               aria-label={collapsed ? "展开侧栏" : "收起侧栏"}
               onClick={toggleCollapsed}
             >
-              {collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+              {collapsed ? <PanelLeftOpen className="tk-sidebar-icon h-4 w-4" /> : <PanelLeftClose className="tk-sidebar-icon h-4 w-4" />}
             </Button>
           </TooltipTrigger>
           <TooltipContent>{collapsed ? "展开侧栏" : "收起侧栏"}</TooltipContent>
@@ -310,7 +310,7 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
                     )
                   }
                 >
-                  <Icon className="h-4 w-4 shrink-0" />
+                  <Icon className="tk-sidebar-icon h-4 w-4 shrink-0" />
                   {!collapsed && <span className="truncate">{label}</span>}
                 </NavLink>
               );
@@ -334,7 +334,7 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
                   aria-label="切换明暗"
                   onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
                 >
-                  {resolvedTheme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+                  {resolvedTheme === "dark" ? <Sun className="tk-sidebar-icon h-4 w-4" /> : <Moon className="tk-sidebar-icon h-4 w-4" />}
                 </Button>
               </TooltipTrigger>
               <TooltipContent>切换明暗</TooltipContent>
@@ -349,7 +349,7 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
                   aria-label="设置"
                   onClick={() => navigate("/settings")}
                 >
-                  <Settings className="h-4 w-4" />
+                  <Settings className="tk-sidebar-icon h-4 w-4" />
                 </Button>
               </TooltipTrigger>
               <TooltipContent>设置</TooltipContent>
