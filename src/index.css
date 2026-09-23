@@ -163,8 +163,12 @@
   --tk-density: 0.7;
   --tk-heading: 0.88;
   --tk-content-max: none;
-  --tk-lane-min: 220px;
-  --tk-lane-max: 320px;
+  /* 撑满档泳道最小宽度 = 全屏的 1/5（20vw 按视口宽算，不扣侧栏）：一屏最多并排 5 条，
+     再多就横向滚动，避免泳道被挤得过窄。
+     上限必须 ≥ 下限——min-width 与 max-width 冲突时 min-width 生效、上限会静默失效，
+     所以这里取 2 倍下限，既允许泳道撑开、又不让单条铺满整屏。 */
+  --tk-lane-min: 20vw;
+  --tk-lane-max: 40vw;
 }
 /* 内容区最大宽度：小 / 大 居中收窄，撑满 铺满（none）。 */
 .tk-content-cap { max-width: var(--tk-content-max); margin-inline: auto; }
