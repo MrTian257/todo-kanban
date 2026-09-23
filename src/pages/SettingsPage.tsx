@@ -21,7 +21,7 @@ import { ArrowRight, Bot, Braces, Eye, EyeOff, Paperclip, SquareKanban } from "l
 import { toast } from "sonner";
 import { gcOrphanAttachments, migrateInlineImages } from "@/lib/attachments";
 import { DEFAULT_MCP_TOKEN, mcpGetConfig, mcpSetConfig } from "@/lib/mcp";
-import { useSkin, SKINS } from "@/lib/theme";
+import { useSkin, SKINS, useDisplaySize, DISPLAY_SIZES } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import { toolPaths, type ToolPath } from "@/lib/git";
 import { dbCheckVersion, type VersionReport } from "@/lib/version";
@@ -29,6 +29,7 @@ import { dbCheckVersion, type VersionReport } from "@/lib/version";
 export function SettingsPage() {
   const { theme, setTheme } = useTheme();
   const [skin, setSkin] = useSkin();
+  const [displaySize, setDisplaySize] = useDisplaySize();
   const [mcpEnabled, setMcpEnabled] = React.useState(true);
   const [mcpToken, setMcpToken] = React.useState(DEFAULT_MCP_TOKEN);
   const [mcpShowToken, setMcpShowToken] = React.useState(false);
@@ -121,7 +122,7 @@ export function SettingsPage() {
   };
 
   return (
-    <div className="h-full w-full overflow-y-auto bg-background p-6">
+    <div className="tk-content-cap h-full w-full overflow-y-auto bg-background p-6">
       <h1 className="mb-4 text-xl font-semibold">设置</h1>
       <div className="grid w-full gap-5">
         <Card>
@@ -139,7 +140,7 @@ export function SettingsPage() {
         <Card>
           <CardHeader>
             <CardTitle>外观</CardTitle>
-            <CardDescription>明暗模式 × 主题皮肤（正交叠加）</CardDescription>
+            <CardDescription>明暗模式 × 主题皮肤 × 展示尺寸（三者正交叠加）</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
@@ -165,6 +166,24 @@ export function SettingsPage() {
                     className={cn(
                       "rounded-md border px-3 py-2 text-left text-sm transition-colors hover:bg-accent",
                       skin === s.id && "border-primary bg-accent",
+                    )}
+                  >
+                    <div className="font-medium">{s.name}</div>
+                    <div className="text-xs text-muted-foreground">{s.desc}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="space-y-2">
+              <span className="text-sm font-medium">展示尺寸</span>
+              <div className="flex flex-wrap gap-2">
+                {DISPLAY_SIZES.map((s) => (
+                  <button
+                    key={s.id}
+                    onClick={() => setDisplaySize(s.id)}
+                    className={cn(
+                      "rounded-md border px-3 py-2 text-left text-sm transition-colors hover:bg-accent",
+                      displaySize === s.id && "border-primary bg-accent",
                     )}
                   >
                     <div className="font-medium">{s.name}</div>
@@ -277,6 +296,7 @@ export function SettingsPage() {
             <div>
               • 软件版本 <Badge variant="secondary">{version?.softwareVersion ?? "2.0.0"}</Badge>（泳道看板） 当前主题皮肤：
               <Badge variant="outline" className="ml-1">{SKINS.find((s) => s.id === skin)?.name}</Badge>
+              展示尺寸：<Badge variant="outline" className="ml-1">{DISPLAY_SIZES.find((s) => s.id === displaySize)?.name}</Badge>
             </div>
             <div className="space-y-1">
               <p>• 依赖版本（未知项显示 —，不再用占位版本号）：</p>

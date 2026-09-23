@@ -1,5 +1,6 @@
-// 主题机制：明暗（next-themes） × 5 套皮肤（与明暗正交叠加）
-// 持久化：localStorage todo-git.skin.v1（App.tsx 启动即 applySkin）
+// 主题机制：明暗（next-themes） × 5 套皮肤 × 3 档展示尺寸（三者正交叠加）
+// 持久化：localStorage todo-git.skin.v1 / todo-git.display-size.v1
+// （App.tsx 启动即 applySkin / applyDisplaySize）
 
 import { useEffect, useState } from "react";
 
@@ -57,4 +58,71 @@ export function useSkin(): [string, (id: string) => void] {
     setSkinState(id);
   };
   return [skin, change];
+}
+
+// ── 展示尺寸（密度档）：小 / 大 / 撑满，与明暗、皮肤正交叠加 ─────────────
+// 只改表现层（间距 / 控件尺寸 / 标题字号 / 内容区最大宽度），不落库。
+// 三档的具体取值集中在 src/index.css 的 :root[data-display-size] 令牌块。
+
+export const DISPLAY_SIZE_KEY = "todo-git.display-size.v1";
+
+export type DisplaySizeId = "small" | "large" | "full";
+
+export interface DisplaySize {
+  id: DisplaySizeId;
+  name: string;
+  desc: string;
+}
+
+export const DISPLAY_SIZES: DisplaySize[] = [
+  { id: "small", name: "小", desc: "居中窄内容区 · 间距收紧 · 标题略小" },
+  { id: "large", name: "大", desc: "居中宽内容区 · 间距放宽 · 标题略大" },
+  { id: "full", name: "撑满", desc: "铺满窗口 · 间距最小 · 尽量多放内容" },
+];
+
+/** 默认档位：撑满（最紧凑、内容铺满） */
+export const DEFAULT_DISPLAY_SIZE: DisplaySizeId = "full";
+
+function isDisplaySizeId(value: string | null): value is DisplaySizeId {
+  return value === "small" || value === "large" || value === "full";
+}
+
+export function getDisplaySize(): DisplaySizeId {
+  try {
+    const raw = localStorage.getItem(DISPLAY_SIZE_KEY);
+    return isDisplaySizeId(raw) ? raw : DEFAULT_DISPLAY_SIZE;
+  } catch {
+    return DEFAULT_DISPLAY_SIZE;
+  }
+}
+
+export function setDisplaySize(id: DisplaySizeId) {
+  applyDisplaySize(id);
+  try {
+    localStorage.setItem(DISPLAY_SIZE_KEY, id);
+  } catch {
+    /* ignore */
+  }
+}
+
+export function applyDisplaySize(id: DisplaySizeId) {
+  document.documentElement.dataset.displaySize = id;
+}
+
+/** 启动时应用持久化展示尺寸 */
+export function initDisplaySize() {
+  applyDisplaySize(getDisplaySize());
+}
+
+/** React 钩子：展示尺寸状态 + 切换 */
+export function useDisplaySize(): [DisplaySizeId, (id: DisplaySizeId) => void] {
+  const [size, setSizeState] = useState<DisplaySizeId>(getDisplaySize());
+  useEffect(() => {
+    applyDisplaySize(size);
+  }, [size]);
+  const change = (id: DisplaySizeId) => {
+    setDisplaySize(id);
+    setSizeState(id);
+  };
+  return [size, change];
 }

@@ -14,7 +14,7 @@ import { SidebarLayout } from "@/components/layout/SidebarLayout";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { VersionBlockedPage } from "@/components/version/VersionBlockedPage";
 import { useAppStore, startExternalSync, startGitCacheWarm } from "@/lib/store";
-import { initSkin } from "@/lib/theme";
+import { initDisplaySize, initSkin } from "@/lib/theme";
 import { dbCheckVersion, type VersionReport } from "@/lib/version";
 const WorkflowPage = lazy(() => import("@/pages/WorkflowPage").then(module => ({default:module.WorkflowPage})));
 const BoardPage = lazy(() => import("@/pages/BoardPage").then(module => ({ default: module.BoardPage })));
@@ -68,6 +68,7 @@ function Application() {
     let stopSync: (() => void) | undefined;
     let stopWarm: (() => void) | undefined;
     initSkin();
+    initDisplaySize();
     void (async () => {
       try {
         const report = await (startupVersionCheck ??= dbCheckVersion());

@@ -130,6 +130,47 @@
   --primary-foreground: oklch(0.2 0 0);
 }
 
+/* ── 展示尺寸（密度档）：小 / 大 / 撑满，与明暗、皮肤正交叠加（data-display-size） ──
+   --spacing 驱动 Tailwind 数值间距与控件尺寸（p-* / gap-* / h-* / w-* 编译为
+   calc(var(--spacing) * N)），--tk-density 驱动 .tk-* 的内边距，--tk-heading 只驱动
+   标题字号，--tk-content-max 为内容区最大宽度（none = 铺满）。默认撑满 = 最紧凑。
+   三档数值只在这里定义，微调改这一处即可。 */
+:root {
+  --tk-density: 1;
+  --tk-heading: 1;
+  --tk-content-max: none;
+  --tk-lane-min: 280px;
+  --tk-lane-max: 380px;
+}
+:root[data-display-size="small"] {
+  --spacing: 0.225rem; /* 3.6px（默认 0.25rem 的 ×0.9） */
+  --tk-density: 0.9;
+  --tk-heading: 0.95;
+  --tk-content-max: 1400px;
+  --tk-lane-min: 260px;
+  --tk-lane-max: 360px;
+}
+:root[data-display-size="large"] {
+  --spacing: 0.3125rem; /* 5px（×1.25） */
+  --tk-density: 1.15;
+  --tk-heading: 1.12;
+  --tk-content-max: 1800px;
+  --tk-lane-min: 300px;
+  --tk-lane-max: 420px;
+}
+:root[data-display-size="full"] {
+  --spacing: 0.1875rem; /* 3px，最小档 */
+  --tk-density: 0.7;
+  --tk-heading: 0.88;
+  --tk-content-max: none;
+  --tk-lane-min: 220px;
+  --tk-lane-max: 320px;
+}
+/* 内容区最大宽度：小 / 大 居中收窄，撑满 铺满（none）。 */
+.tk-content-cap { max-width: var(--tk-content-max); margin-inline: auto; }
+/* 窗口外框属系统级 chrome：展示尺寸只作用于内容，不缩小标题栏与窗口按钮。 */
+:root[data-display-size] .tk-desktop-toolbar { height: 40px; }
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -308,13 +349,13 @@ body {
   button:not(:disabled), [role="button"]:not([aria-disabled="true"]) { cursor: pointer; }
   h1 { letter-spacing: -.035em; }
 }
-.tk-page { padding: 30px 32px; }
-.tk-page-heading { font-size: 30px; font-weight: 650; line-height: 1.35; letter-spacing: -.035em; }
-.tk-eyebrow { font-size: 12px; color: var(--muted-foreground); margin-bottom: 14px; }
+.tk-page { padding: calc(30px * var(--tk-density)) calc(32px * var(--tk-density)); max-width: var(--tk-content-max); margin-inline: auto; }
+.tk-page-heading { font-size: calc(30px * var(--tk-heading)); font-weight: 650; line-height: 1.35; letter-spacing: -.035em; }
+.tk-eyebrow { font-size: 12px; color: var(--muted-foreground); margin-bottom: calc(14px * var(--tk-density)); }
 .tk-panel { background: var(--card); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 2px 8px #18234c03; }
-.tk-task-card { position: relative; border: 1px solid var(--border); border-radius: 12px; background: var(--card); padding: 17px; box-shadow: 0 2px 3px #18234c05; transition: box-shadow .16s, border-color .16s; }
+.tk-task-card { position: relative; border: 1px solid var(--border); border-radius: 12px; background: var(--card); padding: calc(17px * var(--tk-density)); box-shadow: 0 2px 3px #18234c05; transition: box-shadow .16s, border-color .16s; }
 .tk-task-card:hover { border-color: color-mix(in oklch, var(--primary) 30%, var(--border)); box-shadow: 0 5px 16px #18234c09; }
-.tk-task-row { display:flex; align-items:flex-start; gap:12px; padding:19px 20px; border-bottom:1px solid var(--border); }
+.tk-task-row { display:flex; align-items:flex-start; gap:calc(12px * var(--tk-density)); padding:calc(19px * var(--tk-density)) calc(20px * var(--tk-density)); border-bottom:1px solid var(--border); }
 .tk-task-row:last-child { border-bottom:0; }
 .tk-panel [role="listitem"] + [role="listitem"] { border-top: 1px solid var(--border); }
 .tk-task-row:hover { background:color-mix(in oklch, var(--muted) 45%, transparent); }
@@ -325,15 +366,15 @@ body {
 .tk-task-card .tk-task-actions { border-top:1px solid var(--border); margin-top:14px; padding-top:10px; }
 .tk-task-actions { display:flex; align-items:center; gap:2px; }
 .tk-task-row .tk-task-actions { margin-left:auto; flex-shrink:0; }
-.tk-lane { display:flex; flex-direction:column; width:300px; min-width:280px; flex:1 0 280px; max-width:380px; height:100%; border-radius:14px; background:color-mix(in oklch, var(--muted) 65%, var(--background)); position:relative; }
-.tk-lane-header { display:flex; align-items:center; gap:8px; padding:16px 12px 14px; }
-.tk-lane-scroll { min-height:100px; flex:1; overflow-y:auto; padding:0 10px 16px; }
+.tk-lane { display:flex; flex-direction:column; width:calc(300px * var(--tk-density)); min-width:var(--tk-lane-min); flex:1 0 var(--tk-lane-min); max-width:var(--tk-lane-max); height:100%; border-radius:14px; background:color-mix(in oklch, var(--muted) 65%, var(--background)); position:relative; }
+.tk-lane-header { display:flex; align-items:center; gap:calc(8px * var(--tk-density)); padding:calc(16px * var(--tk-density)) calc(12px * var(--tk-density)) calc(14px * var(--tk-density)); }
+.tk-lane-scroll { min-height:100px; flex:1; overflow-y:auto; padding:0 calc(10px * var(--tk-density)) calc(16px * var(--tk-density)); }
 .tk-drop-line { height:3px; border-radius:2px; background:var(--primary); margin:5px 2px; box-shadow:0 0 0 3px color-mix(in oklch,var(--primary) 10%,transparent); }
 .tk-lane-target::before { content:""; position:absolute; left:-9px; top:8px; bottom:8px; width:3px; background:var(--primary); border-radius:3px; }
-.tk-field-section { display:grid; gap:16px; }
+.tk-field-section { display:grid; gap:calc(16px * var(--tk-density)); }
 .tk-section-title { display:flex; align-items:center; gap:9px; font-size:14px; font-weight:600; }
-.tk-editor-layout { display:grid; grid-template-columns:minmax(0,1fr) 330px; gap:24px; flex:1; min-height:0; }
-.tk-editor-props { overflow-y:auto; padding:22px; background:var(--card); border:1px solid var(--border); border-radius:14px; }
+.tk-editor-layout { display:grid; grid-template-columns:minmax(0,1fr) calc(330px * var(--tk-density)); gap:calc(24px * var(--tk-density)); flex:1; min-height:0; }
+.tk-editor-props { overflow-y:auto; padding:calc(22px * var(--tk-density)); background:var(--card); border:1px solid var(--border); border-radius:14px; }
 .tk-editor-document { display:flex; flex-direction:column; min-height:0; background:var(--card); border:1px solid var(--border); border-radius:14px; overflow:hidden; }
 @media(max-width:1050px) { .tk-editor-layout { grid-template-columns:minmax(0,1fr); overflow-y:auto; } .tk-editor-document { min-height:430px; } .tk-editor-props { overflow:visible; } .tk-page { padding:24px; } }
 @media(max-width:700px) { .tk-page { padding:10px 12px; } .tk-page-heading { font-size:23px; } .tk-task-row { flex-wrap:wrap; padding:16px; } .tk-task-row .tk-task-actions { margin-left:26px; } }
@@ -381,10 +422,10 @@ input, textarea, select, button { font-family: inherit; }
   background: color-mix(in oklch, var(--primary) 14%, var(--sidebar)); color: var(--primary);
 }
 :root[data-platform="macos"] .tk-desktop-content { background: var(--background); }
-:root[data-platform="macos"] .tk-page { padding: 30px 32px; }
-:root[data-platform="macos"] .tk-page-heading { font-size: 30px; letter-spacing: -.025em; }
+:root[data-platform="macos"] .tk-page { padding: calc(30px * var(--tk-density)) calc(32px * var(--tk-density)); }
+:root[data-platform="macos"] .tk-page-heading { font-size: calc(30px * var(--tk-heading)); letter-spacing: -.025em; }
 :root[data-platform="macos"] .tk-panel { border-radius: 12px; box-shadow: 0 2px 8px #18234c03; }
-:root[data-platform="macos"] .tk-task-row { padding: 15px 18px; }
+:root[data-platform="macos"] .tk-task-row { padding: calc(15px * var(--tk-density)) calc(18px * var(--tk-density)); }
 :root[data-platform="macos"] [role="dialog"] {
   border-radius: 14px; max-height: calc(100dvh - 40px); width: calc(100vw - 40px);
   box-shadow: 0 18px 60px #00000028, 0 0 0 1px #00000008;
@@ -406,17 +447,17 @@ input, textarea, select, button { font-family: inherit; }
 .tk-desktop-sidebar nav a[data-selected="true"] { box-shadow: inset 3px 0 0 var(--primary); }
 .tk-desktop-sidebar nav a:focus-visible,
 .tk-focus-completed:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
-.tk-focus-content { max-width: 1400px; margin-inline: auto; padding-bottom: 12px; }
+.tk-focus-content { max-width: var(--tk-content-max); margin-inline: auto; padding-bottom: 12px; }
 .tk-focus-header { margin-bottom: 30px; }
-.tk-focus-header .tk-page-heading { font-size: 34px; letter-spacing: -.04em; }
+.tk-focus-header .tk-page-heading { font-size: calc(34px * var(--tk-heading)); letter-spacing: -.04em; }
 .tk-focus-header .tk-eyebrow { margin-bottom: 12px; }
 .tk-focus-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; align-items: start; }
-.tk-focus-section-heading { display: flex; align-items: center; gap: 10px; padding: 18px 20px; border-bottom: 1px solid var(--border); font-size: 15px; font-weight: 600; }
+.tk-focus-section-heading { display: flex; align-items: center; gap: calc(10px * var(--tk-density)); padding: calc(18px * var(--tk-density)) calc(20px * var(--tk-density)); border-bottom: 1px solid var(--border); font-size: 15px; font-weight: 600; }
 .tk-focus-count { display: inline-flex; align-items: center; justify-content: center; min-width: 23px; height: 23px; padding-inline: 6px; border-radius: 7px; background: color-mix(in oklch, var(--primary) 8%, var(--card)); color: var(--primary); font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; }
 .tk-focus-blocked .tk-focus-count { background: color-mix(in oklch, var(--node-doing) 12%, var(--card)); color: var(--foreground); }
-.tk-focus-completed { display: flex; align-items: center; gap: 10px; width: 100%; padding: 19px 20px; text-align: left; font-size: 14px; font-weight: 600; transition: background .15s; }
+.tk-focus-completed { display: flex; align-items: center; gap: calc(10px * var(--tk-density)); width: 100%; padding: calc(19px * var(--tk-density)) calc(20px * var(--tk-density)); text-align: left; font-size: 14px; font-weight: 600; transition: background .15s; }
 .tk-focus-completed:hover { background: color-mix(in oklch, var(--muted) 50%, var(--card)); }
-.tk-focus-list .tk-task-row { padding: 18px 20px; }
+.tk-focus-list .tk-task-row { padding: calc(18px * var(--tk-density)) calc(20px * var(--tk-density)); }
 .tk-focus-list .tk-task-body > .tk-task-meta:first-of-type { display: inline-flex; margin-right: 12px; margin-top: 7px; }
 .tk-focus-list .tk-task-branch { display: inline-flex; vertical-align: middle; margin-top: 7px; }
 .tk-focus-list .tk-task-body > .tk-task-meta:last-child { display: inline-flex; margin-top: 7px; margin-left: 12px; color: var(--primary); }
