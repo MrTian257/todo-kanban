@@ -13,12 +13,15 @@ import { ContextMenuOverlay } from "@/components/layout/ContextMenuOverlay";
 import { SidebarLayout } from "@/components/layout/SidebarLayout";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { VersionBlockedPage } from "@/components/version/VersionBlockedPage";
+import { GrokBot } from "@/components/pet/GrokBot";
 import { useAppStore, startExternalSync, startGitCacheWarm } from "@/lib/store";
+import { initPomodoro } from "@/lib/pomodoroStore";
 import { initDisplaySize, initSkin } from "@/lib/theme";
 import { dbCheckVersion, type VersionReport } from "@/lib/version";
 const WorkflowPage = lazy(() => import("@/pages/WorkflowPage").then(module => ({default:module.WorkflowPage})));
 const BoardPage = lazy(() => import("@/pages/BoardPage").then(module => ({ default: module.BoardPage })));
 const FocusPage = lazy(() => import("@/pages/FocusPage").then(module => ({ default: module.FocusPage })));
+const PomodoroPage = lazy(() => import("@/pages/PomodoroPage").then(module => ({ default: module.PomodoroPage })));
 const ProjectListPage = lazy(() => import("@/pages/ProjectListPage").then(module => ({ default: module.ProjectListPage })));
 const SettingsPage = lazy(() => import("@/pages/SettingsPage").then(module => ({ default: module.SettingsPage })));
 const TodoDetailPage = lazy(() => import("@/pages/TodoDetailPage").then(module => ({ default: module.TodoDetailPage })));
@@ -94,6 +97,8 @@ function Application() {
       if (!cancelled) {
         stopSync = startExternalSync();
         stopWarm = startGitCacheWarm();
+        // 番茄运行态恢复（崩溃补记 + 统计拉取）：与业务数据加载解耦，失败不影响主界面
+        void initPomodoro();
       }
     })();
     return () => { cancelled = true; stopSync?.(); stopWarm?.(); };
@@ -122,6 +127,8 @@ function Application() {
               {/* Git 报告（日报/周报/月报）：跟随当前活跃项目，手动刷新才生成 */}
               <Route path="/report" element={<GitReportPage />} />
               <Route path="/focus" element={<FocusPage />} />
+              {/* 番茄钟：独立计时器（不绑定任务），会话落库并可查看统计 */}
+              <Route path="/pomodoro" element={<PomodoroPage />} />
               <Route path="/todos" element={<TodoListPage />} />
               <Route path="/projects" element={<ProjectListPage />} />
               {/* 项目看板：菜单落在稳定路径 /board，再解析到当前活跃项目的看板 */}
@@ -137,6 +144,8 @@ function Application() {
             </Suspense></div>
             {loaded && <PersistenceStatus />}
           </SidebarLayout>
+          {/* GrokBot 宠物：应用内浮层，挂在壳之外以便覆盖整个窗口（内部自行控制显隐与位置） */}
+          {loaded && <GrokBot />}
         </>
         )}
       </TooltipProvider>

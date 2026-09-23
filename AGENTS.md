@@ -16,7 +16,7 @@
 todo-kanban/
 ├── src/              # React SPA（pages → components → lib 单向分层）
 ├── src-tauri/        # Cargo workspace：config ← upgrade ← core ← 壳 crate + mcp-server
-├── docs/             # 设计文档 + ADR-001..016（部分文档有漂移，以源码为准）
+├── docs/             # 设计文档 + ADR-001..017（部分文档有漂移，以源码为准）
 ├── scripts/          # .mjs 验证脚本（esbuild + node assert，无测试框架）
 ├── public/vendor/vditor/  # gitignored，predev/prebuild 自动同步
 ├── release/          # 打包产物（gitignored）：todo-kanban.exe + mcp-server.exe
@@ -38,6 +38,7 @@ todo-kanban/
 | MCP 工具 | `src-tauri/mcp-server/src/bridge.rs` + `protocol.rs`，业务走 core/svc |
 | 自定义字段 / 自动脚本 | 定义与规则 `core/src/svc/workflow.rs`（fieldDefs / automations）+ `svc/fields.rs` + `svc/automation.rs`；值 `todos.custom_fields`（v11）；执行点 `db/mod.rs::save_state_inner`；前端词表 `src/lib/customFields.ts` + `src/components/workflow/*Panel.tsx`；UI 入口为设置页 `/settings/fields`（`src/pages/FieldSettingsPage.tsx`），存量任务补写走 `automation_backfill` |
 | 主题/皮肤 | `src/lib/theme.ts` + `src/index.css` |
+| 番茄钟 / GrokBot 宠物 | 前端纯逻辑 `src/lib/pomodoro.ts` + 运行态 `src/lib/pomodoroStore.ts` + 宠物 `src/lib/petState.ts` / `petStore.ts`；页面 `src/pages/PomodoroPage.tsx` + `src/components/pomodoro/` + `src/components/pet/GrokBot.tsx`；后端 `core/src/svc/pomodoro.rs`（v14 表 `pomodoro_sessions`）+ `commands.rs` 三个 `pomodoro_*` 命令；MCP 只读资源 `todo-kanban://pomodoro`；决策 ADR-017 |
 
 ## CODE MAP
 
@@ -49,11 +50,11 @@ todo-kanban/
 | `startGitCacheWarm` | fn | `src/lib/store.ts:386` | 启动后预热 git 分支缓存 |
 | `Project` / `Todo` | type | `src/lib/types.ts:56/76` | 前后端 serde rename 强对齐契约 |
 | `GitInfo` | type | `src/lib/types.ts:19` | **唯一 snake_case 例外**（models.rs 头部注释） |
-| `commands.rs` 32 命令 | module | `src-tauri/src/commands.rs` | 薄壳：一行转调 core::svc，map_err 中文 |
+| `commands.rs` 35 命令 | module | `src-tauri/src/commands.rs` | 薄壳：一行转调 core::svc，map_err 中文 |
 | `core/src/lib.rs` | barrel | `src-tauri/core/src/lib.rs` | 导出 db/error/models/svc/tool |
 | `db_cmds.rs` | svc | `src-tauri/core/src/svc/` | 读写编排 + DB_RW_LOCK（外部改动由 state_poll 轮询） |
 | `git_cmds.rs` | svc | `src-tauri/core/src/svc/` | git 行为（执行器在 tool/git_cli.rs） |
-| `mcp-server/main.rs` | bin | `src-tauri/mcp-server/src/` | stdio JSON-RPC 循环，11 tools + 5 resources（含 fields） |
+| `mcp-server/main.rs` | bin | `src-tauri/mcp-server/src/` | stdio JSON-RPC 循环，11 tools + 6 resources（含 fields / pomodoro） |
 
 ## CONVENTIONS（与 CLAUDE.md 不同或补充）
 
@@ -73,6 +74,8 @@ cargo test -p todo-kanban-core   # 核心库单测（src-tauri/ 下）
 cargo test -p mcp-server         # MCP 单测
 node scripts/test-board-order.mjs  # 泳道排序纯逻辑测试
 node scripts/test-day-clock.mjs    # 跨天刷新（本地零点间隔/通知）
+node scripts/test-pomodoro.mjs     # 番茄纯逻辑（阶段流转/读数/统计口径）
+node scripts/test-pet-state.mjs    # GrokBot 状态机（心情优先级/事件 TTL/偏好归一化）
 CDP_PORT=9222 node scripts/verify-dnd.mjs  # 浏览器：看板拖拽（需 dev server + 远程调试端口）
 bash build.sh               # 发布打包 → ./release/
 ```

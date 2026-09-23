@@ -5,16 +5,16 @@
 pub const SOFTWARE_VERSION: &str = "v2.0.0";
 
 /// 软件支持的当前（最高）数据版本（schema user_version 目标值）
-pub const CURRENT_DATA_VERSION: i64 = 13;
+pub const CURRENT_DATA_VERSION: i64 = 14;
 
 /// 软件能兼容升级的最低数据版本（未来删除/改写某段迁移时提升；低于此 → TooOld 拒绝）
 pub const MIN_SUPPORTED_DATA_VERSION: i64 = 1;
 
 /// 数据版本支持范围（展示用）
-pub const DATA_VERSION_RANGE: &str = "v1 ~ v13";
+pub const DATA_VERSION_RANGE: &str = "v1 ~ v14";
 
 /// 迁移步骤描述（下标 j（0-based）对应 v{j+1}→v{j+2}；供升级报告/前端提示）
-pub const MIGRATION_STEPS: [(&str, &str); 12] = [
+pub const MIGRATION_STEPS: [(&str, &str); 13] = [
     ("v1→v2", "建 app_meta；存量数字标记清洗"),
     ("v2→v3", "建 git_repo_cache"),
     ("v3→v4", "projects 补 GitLab Token 两列"),
@@ -45,6 +45,10 @@ pub const MIGRATION_STEPS: [(&str, &str); 12] = [
         "v12→v13",
         "项目列表手工排序：projects.sort_order + 存量按插入顺序回填",
     ),
+    (
+        "v13→v14",
+        "番茄专注会话记录：建 pomodoro_sessions 表（独立计时器，不绑定任务）",
+    ),
 ];
 
 /// 更新日志（文本形式，逐版本摘要）
@@ -60,6 +64,8 @@ pub const CHANGELOG: &str = "2.0.0（当前）：
   并用声明式规则在拖拽换道等事件上自动记录信息（todos.custom_fields）
 - 资料库手工排序（v12）：卡片可拖拽排序并持久化（resources.sort_order），新建资料默认排在最前
 - 项目列表手工排序（v13）：项目卡片可拖拽排序并持久化（projects.sort_order），新建项目默认排在最前
+- 番茄专注会话（v14）：独立番茄计时器（专注/短休/长休），每次会话落库 pomodoro_sessions，
+  支持今日/近 7 天统计与 MCP 只读资源；配置与宠物偏好为本机界面偏好，存 localStorage
 ";
 
 /// 依赖关系信息（数组形式）：workspace 分包职责

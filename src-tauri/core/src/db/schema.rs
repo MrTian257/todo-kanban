@@ -1,8 +1,8 @@
-//! DDL + 迁移。USER_VERSION = 13。
+//! DDL + 迁移。USER_VERSION = 14。
 //! 注意：SQLite 列序是硬契约——schema ↔ row ↔ mod 的 SELECT/INSERT 三处同步。
 //! 版本号必须与 config::CURRENT_DATA_VERSION 一致：open_existing 用它做跨进程版本门禁。
 
-pub const USER_VERSION: i64 = 13;
+pub const USER_VERSION: i64 = 14;
 
 /// 建表（新库直接完整 v6 形态；旧库缺列由 migrate 补）
 pub fn create_tables(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
@@ -113,6 +113,19 @@ CREATE TABLE IF NOT EXISTS resources (
   sort_order INTEGER NOT NULL DEFAULT 0   -- v12：资料库手工排序（升序展示，新在前）
 );
 CREATE INDEX IF NOT EXISTS idx_resources_project ON resources(project_id);
+-- v14：番茄专注会话（独立计时器，不绑定任务）。只记录**已结束**的会话：
+-- 运行中的计时不落库（运行态快照在本机 localStorage），因此不存在 ended_at 为空的行。
+CREATE TABLE IF NOT EXISTS pomodoro_sessions (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,                      -- focus | short_break | long_break
+  started_at INTEGER NOT NULL,             -- 会话开始（epoch ms）
+  ended_at INTEGER NOT NULL,               -- 会话结束（epoch ms）
+  planned_ms INTEGER NOT NULL,             -- 计划时长
+  actual_ms INTEGER NOT NULL,              -- 实际计时毫秒（暂停不计入）
+  completed INTEGER NOT NULL DEFAULT 0,    -- 1=自然走完，0=中断（跳过 / 重置 / 关闭）
+  interruptions INTEGER NOT NULL DEFAULT 0 -- 本轮暂停次数
+);
+CREATE INDEX IF NOT EXISTS idx_pomodoro_started ON pomodoro_sessions(started_at DESC);
 ",
     )
 }
@@ -563,5 +576,36 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, USER_VERSION);
+    }
+
+    #[test]
+    fn migrate_v13_db_adds_pomodoro_table() {
+        let conn = open_in_memory().unwrap();
+        // 模拟 v13 库：业务表齐全但无 pomodoro_sessions
+        conn.execute_batch(
+            "CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL,
+               project_dir TEXT NOT NULL DEFAULT '', frontend_dir TEXT, backend_dir TEXT,
+               frontend_repo_url TEXT, backend_repo_url TEXT, production_branch TEXT,
+               branch_rule TEXT, archived INTEGER, created_at INTEGER, updated_at INTEGER,
+               frontend_repo_token TEXT, backend_repo_token TEXT, swimlanes TEXT,
+               created_by TEXT NOT NULL DEFAULT 'human', sort_order INTEGER NOT NULL DEFAULT 0);
+             CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             PRAGMA user_version = 13;",
+        )
+        .unwrap();
+        crate::db::init(&conn).unwrap();
+        assert!(
+            table_exists(&conn, "pomodoro_sessions").unwrap(),
+            "v13→v14 应补建 pomodoro_sessions 表"
+        );
+        let v: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, USER_VERSION);
+        // 新表为空：迁移不做任何回填，专注历史从升级后开始累积
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM pomodoro_sessions", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
     }
 }

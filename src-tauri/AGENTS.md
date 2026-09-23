@@ -6,11 +6,11 @@
 
 | Crate | 角色 | 关键路径 |
 | --- | --- | --- |
-| `todo-kanban`（壳） | 生命周期 + invoke 注册（38 命令） | `src/main.rs`、`src/lib.rs`、`src/commands.rs` |
+| `todo-kanban`（壳） | 生命周期 + invoke 注册（44 命令） | `src/main.rs`、`src/lib.rs`、`src/commands.rs` |
 | `todo-kanban-core` | 纯业务逻辑，无 tauri 依赖，可独立单测 | `core/src/`（详见 core/src/AGENTS.md） |
 | `todo-kanban-upgrade` | 数据版本迁移引擎（备份/逐级迁移/报告） | `upgrade/src/` |
 | `todo-kanban-config` | 版本常量（SOFTWARE_VERSION、CURRENT_DATA_VERSION=13、迁移表、changelog） | `config/src/lib.rs` |
-| `mcp-server` | 独立 stdio JSON-RPC 进程（11 tools + 4 resources） | `mcp-server/src/` |
+| `mcp-server` | 独立 stdio JSON-RPC 进程（11 tools + 6 resources） | `mcp-server/src/` |
 
 ## WHERE TO LOOK
 
@@ -19,7 +19,8 @@
 | 新增/修改命令 | 逻辑写 `core/src/svc/` → 薄壳 `src/commands.rs`（一行转调 + map_err 中文）→ 注册 `src/lib.rs` invoke_handler |
 | 数据模型字段 | `core/src/models.rs` ↔ 前端 `src/lib/types.ts` **两端同步**（serde rename 对齐） |
 | 数据版本升级 | ADR-011：`config/src/lib.rs` 常量 + `upgrade/src/` 迁移 + `core/src/db/` schema.rs/row.rs/db 三处 |
-| MCP 工具/资源 | `mcp-server/src/bridge.rs`（工具映射）+ `protocol.rs`，业务复用 core/svc |
+| MCP 工具/资源 | `mcp-server/src/bridge.rs`（工具映射 + `RESOURCES`）+ `protocol.rs`，业务复用 core/svc |
+| 番茄专注（v14） | 业务 `core/src/svc/pomodoro.rs`（表 `pomodoro_sessions`，SQL 收在本模块，不动 row.rs）+ `src/commands.rs` 的 `pomodoro_*`；版本五处同步见 ADR-011 / ADR-017 |
 | 权限 | `capabilities/default.json`（Tauri 2 capability） |
 
 ## CONVENTIONS

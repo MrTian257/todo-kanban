@@ -643,3 +643,97 @@ input, textarea, select, button { font-family: inherit; }
 .tk-report-rank-fill { display: block; height: 100%; border-radius: 4px; background: var(--primary); }
 @media (max-width: 1100px) { .tk-report-month-grid { grid-template-columns: minmax(0, 1fr); } }
 
+/* ── 番茄钟：页面 / 卡片 / 统计 / 设置 / 顶栏指示器 ─────────────────────────
+   颜色全部走既有令牌（--primary / --node-done / --node-doing），因此 5 套皮肤与明暗自动叠加生效。 */
+.tk-pomodoro-header { margin-bottom: calc(24px * var(--tk-density)); }
+.tk-pomodoro-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 360px); gap: calc(20px * var(--tk-density)); align-items: start; }
+.tk-pomodoro-card { display: flex; flex-direction: column; gap: 14px; padding: calc(24px * var(--tk-density)); }
+.tk-pomodoro-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.tk-pomodoro-phase { display: inline-flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; }
+.tk-pomodoro-status { font-size: 12px; color: var(--muted-foreground); }
+/* 大号读数：等宽数字避免每秒跳动时宽度抖动 */
+.tk-pomodoro-clock { font-size: clamp(46px, 8vw, 80px); font-weight: 650; line-height: 1.05; letter-spacing: -.04em; font-variant-numeric: tabular-nums; color: var(--primary); }
+.tk-pomodoro-card[data-phase="short_break"] .tk-pomodoro-clock,
+.tk-pomodoro-card[data-phase="long_break"] .tk-pomodoro-clock { color: var(--node-done); }
+.tk-pomodoro-track { height: 8px; border-radius: 999px; background: var(--muted); overflow: hidden; }
+.tk-pomodoro-fill { display: block; height: 100%; border-radius: 999px; background: var(--primary); transition: width .25s linear; }
+.tk-pomodoro-card[data-phase="short_break"] .tk-pomodoro-fill,
+.tk-pomodoro-card[data-phase="long_break"] .tk-pomodoro-fill { background: var(--node-done); }
+.tk-pomodoro-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.tk-pomodoro-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; font-size: 12px; color: var(--muted-foreground); }
+.tk-pomodoro-dots { display: inline-flex; gap: 5px; }
+.tk-pomodoro-dots i { width: 9px; height: 9px; border-radius: 999px; border: 1px solid var(--border); }
+.tk-pomodoro-dots i[data-done="1"] { background: var(--primary); border-color: var(--primary); }
+
+.tk-pomodoro-settings { padding-bottom: calc(8px * var(--tk-density)); }
+.tk-pomodoro-form { display: flex; flex-direction: column; gap: 14px; padding: calc(16px * var(--tk-density)) calc(20px * var(--tk-density)) calc(20px * var(--tk-density)); }
+.tk-pomodoro-field { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.tk-pomodoro-field-hint { font-size: 11.5px; color: var(--muted-foreground); }
+.tk-pomodoro-toggle { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+
+.tk-pomodoro-stats { grid-column: 1 / -1; padding-bottom: calc(6px * var(--tk-density)); }
+.tk-pomodoro-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; padding: calc(16px * var(--tk-density)) calc(20px * var(--tk-density)); }
+.tk-pomodoro-kpi { display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: color-mix(in oklch, var(--muted) 22%, var(--card)); }
+.tk-pomodoro-kpi-value { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.tk-pomodoro-kpi-label { font-size: 11.5px; color: var(--muted-foreground); }
+/* 复用 Git 报告的 ReportBars：嵌在面板里时去掉自身边框，避免双层卡片 */
+.tk-pomodoro-stats .tk-report-card { padding: 0 calc(20px * var(--tk-density)) calc(10px * var(--tk-density)); border: 0; border-radius: 0; box-shadow: none; background: transparent; }
+.tk-pomodoro-recent { padding: calc(6px * var(--tk-density)) calc(20px * var(--tk-density)) calc(18px * var(--tk-density)); }
+.tk-pomodoro-recent h3 { margin-bottom: 8px; font-size: 13px; font-weight: 600; }
+.tk-pomodoro-recent li { display: grid; grid-template-columns: 64px minmax(0, 1fr) auto auto; align-items: center; gap: 10px; padding: 7px 2px; border-top: 1px solid var(--border); font-size: 12.5px; }
+.tk-pomodoro-recent-kind { font-weight: 600; }
+.tk-pomodoro-recent-time,
+.tk-pomodoro-recent-duration { color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+.tk-pomodoro-empty { font-size: 12.5px; color: var(--muted-foreground); }
+.tk-pomodoro-error { margin: 0 calc(20px * var(--tk-density)) 10px; font-size: 12.5px; color: var(--destructive); }
+
+/* 顶栏指示器：高度固定 28px，与搜索框同一行不撑高工具栏 */
+.tk-pomodoro-indicator { position: relative; display: inline-flex; align-items: center; gap: 6px; flex: none; height: 28px; padding: 0 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); font-size: 12px; font-variant-numeric: tabular-nums; overflow: hidden; }
+.tk-pomodoro-indicator:hover { background: var(--accent); }
+.tk-pomodoro-indicator-text { position: relative; z-index: 1; }
+.tk-pomodoro-indicator-bar { position: absolute; left: 0; bottom: 0; height: 2px; background: var(--primary); opacity: .7; }
+.tk-pomodoro-indicator[data-phase="short_break"] .tk-pomodoro-indicator-bar,
+.tk-pomodoro-indicator[data-phase="long_break"] .tk-pomodoro-indicator-bar { background: var(--node-done); }
+.tk-pomodoro-indicator-running { border-color: color-mix(in oklch, var(--primary) 45%, var(--border)); color: var(--primary); }
+
+/* ── GrokBot 宠物：应用内浮层（固定定位，不随内容滚动） ─────────────────── */
+.tk-pet-layer { position: fixed; z-index: 40; pointer-events: none; }
+.tk-pet { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 100%; height: 100%; border: 1px solid var(--border); border-radius: 999px; background: color-mix(in oklch, var(--card) 90%, transparent); box-shadow: 0 6px 18px #18234c1f; pointer-events: auto; cursor: grab; user-select: none; touch-action: none; transition: transform .15s, box-shadow .15s; }
+.tk-pet:hover { transform: translateY(-2px); box-shadow: 0 10px 24px #18234c2b; }
+.tk-pet:active { cursor: grabbing; }
+.tk-pet:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.tk-pet[data-mood="focus"] { border-color: color-mix(in oklch, var(--primary) 55%, var(--border)); }
+.tk-pet[data-mood="break"] { border-color: color-mix(in oklch, var(--node-done) 55%, var(--border)); }
+.tk-pet[data-mood="worried"] { border-color: color-mix(in oklch, var(--node-doing) 60%, var(--border)); }
+.tk-pet[data-mood="sleepy"] { opacity: .78; }
+.tk-pet[data-mood="cheer"],
+.tk-pet[data-mood="happy"] { animation: tk-pet-pop .6s ease-out; }
+@keyframes tk-pet-pop {
+  0% { transform: scale(.86); }
+  55% { transform: scale(1.12); }
+  100% { transform: scale(1); }
+}
+/* 气泡贴边：宠物在右边缘时右对齐，在左边缘时左对齐，避免飘出窗口 */
+.tk-pet-bubble { position: absolute; max-width: 220px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--popover); color: var(--popover-foreground); font-size: 12.5px; line-height: 1.5; box-shadow: 0 8px 20px #18234c26; pointer-events: none; }
+.tk-pet-layer[data-edge="right"] .tk-pet-bubble { right: 0; }
+.tk-pet-layer[data-edge="left"] .tk-pet-bubble { left: 0; }
+
+/* 减少动态效果：关掉进度条过渡与宠物弹跳（功能不受影响） */
+@media (prefers-reduced-motion: reduce) {
+  .tk-pomodoro-fill,
+  .tk-pet { transition: none; }
+  .tk-pet[data-mood="cheer"],
+  .tk-pet[data-mood="happy"] { animation: none; }
+}
+
+@media (max-width: 1100px) {
+  .tk-pomodoro-layout { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 860px) {
+  .tk-pomodoro-clock { font-size: 52px; }
+  .tk-pomodoro-recent li { grid-template-columns: 56px minmax(0, 1fr) auto; }
+  .tk-pomodoro-recent-duration { display: none; }
+  .tk-pomodoro-indicator-text { display: none; }
+}
+
+

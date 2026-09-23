@@ -1,11 +1,11 @@
-//! 32 个 Tauri 命令薄壳：一行转调 core::svc，错误 map_err 转中文 String（命令内不 panic）。
+//! 35 个 Tauri 命令薄壳：一行转调 core::svc，错误 map_err 转中文 String（命令内不 panic）。
 //! 契约见 docs/02-development（backend-contract）与 CLAUDE.md「新增 Tauri 命令」。
 
 use todo_kanban_core::db::VersionReport;
 use todo_kanban_core::models::{
     AttachmentInfo, CommitInfo, DbState, GcSummary, GitInfo, McpSettings, MigrateSummary,
 };
-use todo_kanban_core::svc::{attachments, db_cmds, git_cmds, git_report, repo_cache};
+use todo_kanban_core::svc::{attachments, db_cmds, git_cmds, git_report, pomodoro, repo_cache};
 
 async fn blocking<T: Send + 'static>(
     work: impl FnOnce() -> Result<T, String> + Send + 'static,
@@ -286,4 +286,25 @@ pub async fn git_report_fetch(
     payload: git_report::ReportRequest,
 ) -> Result<git_report::ReportResult, String> {
     blocking(move || git_report::fetch(payload).map_err(err_str)).await
+}
+
+/// 番茄专注：写入一条已结束的会话（同 id 覆盖；写入时顺带收敛表大小）。
+/// 运行中的计时是前端状态，只有阶段结束才落库，因此这里没有"开始/更新"两条命令。
+#[tauri::command]
+pub async fn pomodoro_record(
+    payload: pomodoro::PomodoroSession,
+) -> Result<pomodoro::PomodoroSession, String> {
+    blocking(move || pomodoro::record(payload).map_err(err_str)).await
+}
+
+/// 番茄专注：最近会话（倒序，limit 上限 500）
+#[tauri::command]
+pub async fn pomodoro_recent(limit: usize) -> Result<Vec<pomodoro::PomodoroSession>, String> {
+    blocking(move || pomodoro::recent(limit).map_err(err_str)).await
+}
+
+/// 番茄专注：近 N 天统计（纯查询，不写库、不进 db_save_state 写链）
+#[tauri::command]
+pub async fn pomodoro_stats(days: i64) -> Result<pomodoro::PomodoroStats, String> {
+    blocking(move || pomodoro::stats(days).map_err(err_str)).await
 }

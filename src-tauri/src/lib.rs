@@ -1,4 +1,4 @@
-// 应用入口：注册 40 个 handler（commands 32 + native_workflow 5 + desktop 3）
+// 应用入口：注册 44 个 handler（commands 35 + native_workflow 6 + desktop 3）
 // + attachment:// 自定义协议（附件供图）+ opener/log/clipboard-manager/dialog/window-state 插件 + 启动自举。
 // 日志：数据目录 kanban.log（追加写，超限轮转只保留一份）。
 // 可选能力（菜单栏/全局快捷键）安装失败只降级为可见错误，不影响启动。
@@ -159,6 +159,7 @@ pub fn run() {
             native_workflow::desktop_enable_notifications,
             native_workflow::desktop_status,
             native_workflow::desktop_update_tasks,
+            native_workflow::desktop_notify,
             desktop::finish_quit,
             desktop::cancel_quit,
             desktop::arm_quit_protection,
@@ -194,6 +195,9 @@ pub fn run() {
             commands::attachment_migrate_inline,
             commands::attachment_gc_orphans,
             commands::git_report_fetch,
+            commands::pomodoro_record,
+            commands::pomodoro_recent,
+            commands::pomodoro_stats,
         ])
         .build(tauri::generate_context!())
         .expect("应用初始化失败")

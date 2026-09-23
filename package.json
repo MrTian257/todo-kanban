@@ -8,7 +8,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "test:logic": "node scripts/test-board-order.mjs && node scripts/test-day-clock.mjs && node scripts/test-state-optimizations.mjs && node scripts/test-list-performance.mjs",
+    "test:logic": "node scripts/test-board-order.mjs && node scripts/test-day-clock.mjs && node scripts/test-state-optimizations.mjs && node scripts/test-list-performance.mjs && node scripts/test-pomodoro.mjs && node scripts/test-pet-state.mjs",
     "tauri": "tauri",
     "predev": "node scripts/sync-vditor-assets.mjs",
     "prebuild": "node scripts/sync-vditor-assets.mjs"

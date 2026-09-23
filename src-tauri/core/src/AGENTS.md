@@ -11,6 +11,7 @@ core/src/
 ├── db/           # SQLite：mod(open/init/open_and_init/load_state/save_state/is_pristine/next_seq/repair)
 │                 #   schema.rs(列序硬契约) + row.rs(行映射) + legacy.rs(旧 JSON 参考) + repo_cache.rs
 ├── svc/          # 服务编排：db_cmds / git_cmds / gitlab / branch_rule / repo_cache / attachments
+│                 #   + workflow(任务关系/提醒) / fields / automation / pomodoro(v14 番茄会话)
 └── tool/         # git_cli.rs（git 命令执行器）+ proc.rs（进程封装）
 ```
 
@@ -25,6 +26,7 @@ core/src/
 | 附件存储 | `svc/attachments.rs`（10 单测，最多）+ `tool/`（临时文件 + rename 原子落盘） |
 | GitLab 集成 | `svc/gitlab.rs`（3 单测） |
 | Git 远程缓存 | `svc/repo_cache.rs` + `db/repo_cache.rs` |
+| 番茄专注会话 | `svc/pomodoro.rs`（v14 表 `pomodoro_sessions`：本地日历分桶 + 连续天数 + prune，6 单测） |
 
 ## CONVENTIONS
 

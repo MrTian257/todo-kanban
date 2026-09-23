@@ -9,7 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 权威文档（改动前先查；注意部分文档与实际代码有漂移，**以源码为准**）：
 - `docs/软件设计文档.md` — 整合视图（产品/架构/数据/接口/UI/流程）
 - `docs/02-development/directory-map.md` — 「去哪里改」文件地图（部分文件名仍为 todo-git 旧称，如 TodoCard.tsx、todo-git-core 已更名/移除）
-- `docs/decisions/` — ADR-001 ~ ADR-016 架构决策（文件名自描述：hash-router / system-cli-git-curl / sqlite-storage / db-config-data-source / workspace-split / global-seq-and-commit-dedupe / mcp-handwritten-protocol / single-store-write-chain / swimlane-board / swimlane-order-persistence / data-version-upgrade / fixed-db-path / custom-fields-and-automations / git-report / github-and-gitlab-forge）
+- `docs/decisions/` — ADR-001 ~ ADR-017 架构决策（文件名自描述：hash-router / system-cli-git-curl / sqlite-storage / db-config-data-source / workspace-split / global-seq-and-commit-dedupe / mcp-handwritten-protocol / single-store-write-chain / swimlane-board / swimlane-order-persistence / data-version-upgrade / fixed-db-path / custom-fields-and-automations / git-report / github-and-gitlab-forge / pomodoro-and-pet）
 - `docs/README.md` 的文档地图已漂移（列出多份不存在的文件），只作背景参考
 
 ## 环境与常用命令
@@ -35,7 +35,7 @@ cargo test -p todo-kanban-core   # 核心库单测（db / git 解析 / 缓存 / 
 cargo test -p mcp-server         # MCP 单测（握手 / 工具清单 / 映射 / 只读门禁）
 ```
 
-前端纯逻辑无测试框架，用 esbuild 打包后跑 node 断言：`node scripts/test-board-order.mjs`、`node scripts/test-day-clock.mjs`（跨天刷新）。
+前端纯逻辑无测试框架，用 esbuild 打包后跑 node 断言：`node scripts/test-board-order.mjs`、`node scripts/test-day-clock.mjs`（跨天刷新）、`node scripts/test-pomodoro.mjs`（番茄阶段流转与统计口径）、`node scripts/test-pet-state.mjs`（宠物心情优先级）；四条都已并入 `npm run test:logic`。
 
 需要真实浏览器的验证脚本（CDP，先起 `npm run dev` 并用 `--remote-debugging-port` 打开页面，端口用 `CDP_PORT` 覆盖，默认 9222）：
 `node scripts/verify-dnd.mjs`（跨泳道/空白区落点/泳道内重排/按钮不误触/resize 后落点）、`verify-project-steps.mjs`（分支规则步骤编辑与回显）、`verify-daterange.mjs`（日期范围两击选择）、`probe-daterange.mjs`。
@@ -45,7 +45,7 @@ cargo test -p mcp-server         # MCP 单测（握手 / 工具清单 / 映射 /
 ## 架构：三进程位面
 
 ```
-React SPA ──Tauri invoke（32 个命令）──> Rust 壳 crate（src-tauri/src/）
+React SPA ──Tauri invoke（35 个命令）──> Rust 壳 crate（src-tauri/src/）
                                             └─ 转调 todo-kanban-core（纯逻辑，无 tauri 依赖）
 mcp-server（独立 stdio 进程，复用同一个 core）
 ```
@@ -56,7 +56,7 @@ mcp-server（独立 stdio 进程，复用同一个 core）
 
 ### 数据版本升级框架（ADR-011）
 
-- 版本常量集中在 `src-tauri/config/src/lib.rs`：`CURRENT_DATA_VERSION = 13`、`MIN_SUPPORTED_DATA_VERSION`、`MIGRATION_STEPS`（v1→v13 逐级）、`CHANGELOG`。
+- 版本常量集中在 `src-tauri/config/src/lib.rs`：`CURRENT_DATA_VERSION = 14`、`MIN_SUPPORTED_DATA_VERSION`、`MIGRATION_STEPS`（v1→v14 逐级）、`CHANGELOG`。
 - `todo-kanban-upgrade::upgrade::ensure()` 编排：版本判定 →（兼容升级时）硬备份到运行目录 `backup/` → 逐级迁移 → 报告。语义：v=0（新库）不备份直接迁到最新；TooNew / TooOld 拒绝；调用方负责开连接 + 幂等建表。
 - 前端启动门禁：`db_check_version` 命令 → `src/lib/version.ts` → 不兼容时全屏 `VersionBlockedPage`（`src/components/version/`），升级成功 toast 提示。
 - **新增数据版本时**：提升 config 常量 → upgrade 写迁移 → 更新 MIGRATION_STEPS / CHANGELOG → 前端 `PREVIEW_REPORT` 同步。schema 变更需同步 `schema.rs`（DDL）、`row.rs`（行映射）、`db/mod.rs`（SELECT/INSERT）三处——**SQLite 列序是硬契约**（见 schema.rs 头部注释）。
@@ -79,7 +79,7 @@ SQLite WAL，数据源固定为**程序运行目录** `todo-kanban.db`（ADR-012
 
 外部同步（MCP 侧改动经 `startExternalSync` 轮询）仅在无待保存变更时应用；`reloadRemoteState` 必须显式弃改。浏览器预览走 `sessionStorage` + demoState（`storage.ts` 的 `isTauri()` 双轨）。
 
-前端 lib 层职责速览：`normalize.ts`（数据归一化**唯一入口**，旧数据补字段 + 泳道回退 + 提交去重兜底）、`todo.ts`（紧急度/提交唯一归属）、`completeTodo.ts`（完成时自动补录 [createdAt~doneAt] 提交）、`deleteWithUndo.ts`（延迟真删 + 撤销）、`boardOrder.ts`（泳道内排序纯函数，有 node 测试）、`git.ts`（9 个 invoke 封装 + 60s TTL 单飞缓存）、`theme.ts`（明暗 × 5 套皮肤，localStorage `todo-git.skin.v1`）、`mcp.ts`（MCP 设置）、`customFields.ts`（v11 自定义字段与自动脚本词表：取值强转 / 格式化 / 内置属性求值 / 默认值 / 校验，与后端 fields.rs + automation.rs 同规则）、`attachments.ts`（图片引用协议）、`context-menu.ts` / `input-suggestions.ts`（全局接管，见下）、`version.ts`（版本门禁）。
+前端 lib 层职责速览：`normalize.ts`（数据归一化**唯一入口**，旧数据补字段 + 泳道回退 + 提交去重兜底）、`todo.ts`（紧急度/提交唯一归属）、`completeTodo.ts`（完成时自动补录 [createdAt~doneAt] 提交）、`deleteWithUndo.ts`（延迟真删 + 撤销）、`boardOrder.ts`（泳道内排序纯函数，有 node 测试）、`git.ts`（9 个 invoke 封装 + 60s TTL 单飞缓存）、`theme.ts`（明暗 × 5 套皮肤，localStorage `todo-git.skin.v1`）、`mcp.ts`（MCP 设置）、`customFields.ts`（v11 自定义字段与自动脚本词表：取值强转 / 格式化 / 内置属性求值 / 默认值 / 校验，与后端 fields.rs + automation.rs 同规则）、`attachments.ts`（图片引用协议）、`context-menu.ts` / `input-suggestions.ts`（全局接管，见下）、`version.ts`（版本门禁）、`pomodoro.ts`（番茄纯逻辑：阶段流转 / 配置钳制 / 本地日期分桶与统计汇总）、`pomodoroStore.ts`（番茄运行态：绝对结束时间戳计时 + 崩溃快照恢复 + 阶段结束落库/通知/提示音）、`petState.ts`（GrokBot 心情状态机 + 偏好归一化）、`petStore.ts`（宠物偏好单例，设置页与浮层共享）。
 
 类型对齐契约：`src/lib/types.ts` camelCase 与 Rust `models.rs` 的 Db* 经 serde rename 强对齐；**`GitInfo` 是唯一 snake_case 例外**（models.rs 头部注释）。改字段必须两端 + normalize 同步。
 
@@ -100,7 +100,7 @@ note 持久化只存 `attachment://<todoId>/<file>` 短引用；展示/编辑时
 
 ### MCP server（`src-tauri/mcp-server/`）
 
-手写 stdio JSON-RPC（无框架，ADR-007）：11 tools + 5 resources（`todo-kanban://state|projects|todos|resources|fields`；fields = v11 自定义字段定义与自动脚本，AI 登记任务前可先读），复用 core。配置解析（`config.rs`）：`--db-config` / `MCP_TODO_DB_CONFIG` 覆盖数据源目录（库文件固定为 `<dir>/todo-kanban.db`，不存在时不自动创建）→ 回退 app exe 目录；`--token` / `MCP_TODO_TOKEN`；`MCP_TODO_READONLY=1` 只读。启动校验（`bridge::verify_startup`，任一不满足即退出）：数据源可用 + 设置页「MCP 集成」启用 + Token 匹配（默认 `sk-GLOBAl_MCP_BY_ADMIN`，设置存 app_meta）。错误映射：AppError::Invalid→-32602、其余→-32603。写工具共 7 个（含 `db_save_state`，**唯一数据写入口**，必须携带修改前 `db_load_state` 返回值作 expected，禁止直接覆盖）；MCP 的 git_info 保持直读语义（不经 app 侧缓存），`git_info_refresh` / `git_info_remote` 为 app 专属不暴露。
+手写 stdio JSON-RPC（无框架，ADR-007）：11 tools + 6 resources（`todo-kanban://state|projects|todos|resources|fields|pomodoro`；fields = v11 自定义字段定义与自动脚本，AI 登记任务前可先读；pomodoro = v14 番茄专注统计），复用 core。配置解析（`config.rs`）：`--db-config` / `MCP_TODO_DB_CONFIG` 覆盖数据源目录（库文件固定为 `<dir>/todo-kanban.db`，不存在时不自动创建）→ 回退 app exe 目录；`--token` / `MCP_TODO_TOKEN`；`MCP_TODO_READONLY=1` 只读。启动校验（`bridge::verify_startup`，任一不满足即退出）：数据源可用 + 设置页「MCP 集成」启用 + Token 匹配（默认 `sk-GLOBAl_MCP_BY_ADMIN`，设置存 app_meta）。错误映射：AppError::Invalid→-32602、其余→-32603。写工具共 7 个（含 `db_save_state`，**唯一数据写入口**，必须携带修改前 `db_load_state` 返回值作 expected，禁止直接覆盖）；MCP 的 git_info 保持直读语义（不经 app 侧缓存），`git_info_refresh` / `git_info_remote` 为 app 专属不暴露。
 
 ### 项目 skill
 
@@ -119,6 +119,7 @@ note 持久化只存 `attachment://<todoId>/<file>` 短引用；展示/编辑时
 | 改看板拖拽/泳道管理 | components/board/SwimlaneBoard.tsx（排序纯逻辑在 lib/boardOrder.ts，有测试） |
 | 改 Markdown 备注 | components/todo/MarkdownEditor.tsx（WYSIWYG，markdown-it + turndown）+ MarkdownRenderer/View |
 | 改主题皮肤 | src/lib/theme.ts（SKINS）+ src/index.css（[data-theme] 变量） |
+| 番茄钟 / GrokBot 宠物 | 前端纯逻辑 `src/lib/pomodoro.ts`（阶段流转/统计口径，有 node 测试）+ 运行态 `src/lib/pomodoroStore.ts`；宠物 `src/lib/petState.ts`（心情状态机，有 node 测试）+ `src/lib/petStore.ts` + `src/components/pet/GrokBot.tsx`；页面 `src/pages/PomodoroPage.tsx` + `src/components/pomodoro/`；后端 `core/src/svc/pomodoro.rs`（v14 `pomodoro_sessions`）+ `commands.rs` 的 `pomodoro_record/recent/stats`；MCP 资源 `todo-kanban://pomodoro`；决策见 ADR-017 |
 | 自定义字段 / 自动脚本 | 词表与纯逻辑：`src/lib/customFields.ts` ↔ `core/src/svc/fields.rs` + `svc/automation.rs`（同规则，后端为准）；定义与规则存 workflow_state（`core/src/svc/workflow.rs` 的 fieldDefs / automations）；值存 `todos.custom_fields`（schema v11）；执行点 `db::save_state_inner`；UI 在设置页 `/settings/fields`（`src/pages/FieldSettingsPage.tsx` + `src/components/workflow/` 的 FieldDefsPanel / AutomationsPanel / CustomFieldInputs，ADR-014）；存量任务补写命令 `automation_backfill` |
 | 新增/改 MCP 工具 | mcp-server/src/bridge.rs（映射）+ protocol.rs（tools 表/inputSchema），业务仍走 core/svc |
 

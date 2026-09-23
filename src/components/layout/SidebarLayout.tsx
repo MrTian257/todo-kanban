@@ -21,6 +21,7 @@ import {
   Settings,
   Square,
   Sun,
+  Timer,
   FolderKanban,
   BookOpen,
   X,
@@ -33,6 +34,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ProjectContextSwitcher } from "@/components/layout/ProjectContextSwitcher";
+import { PomodoroIndicator } from "@/components/pomodoro/PomodoroIndicator";
 
 interface NavItem {
   to: string;
@@ -53,6 +55,8 @@ const NAV_ITEMS: NavItem[] = [
     match: (pathname) => pathname.startsWith("/board") || pathname.startsWith("/project/"),
   },
   { to: "/focus", label: "今日焦点", icon: CalendarDays },
+  // 番茄钟：独立计时器（不绑定任务），顶栏另有紧凑指示器
+  { to: "/pomodoro", label: "番茄钟", icon: Timer },
   { to: "/todos", label: "全部待办", icon: ListTodo },
   { to: "/library", label: "资料库", icon: BookOpen },
   // 项目资料只负责项目列表本身（看板已由「项目看板」承担）
@@ -221,6 +225,9 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
           <Input ref={searchRef} aria-label="全局搜索" value={search} onChange={event => setSearch(event.target.value)} placeholder={`搜索任务 · ${(isMacOS ? "⌘⇧F" : shortcutLabel("K"))}`} className="h-7 min-w-0 text-xs" />
           <Button type="submit" variant="ghost" size="icon" className="h-7 w-7" aria-label="搜索"><Search className="h-3.5 w-3.5" /></Button>
         </form>
+
+        {/* 番茄钟紧凑指示器：计时中显示读数，点击进入番茄钟页面 */}
+        <PomodoroIndicator />
 
         {/* 拖动区：点击穿透到窗口移动；双击切换最大化（Tauri 内建） */}
         <div data-tauri-drag-region className={cn("h-full min-w-0 flex-1", isMacOS && "hidden")} />

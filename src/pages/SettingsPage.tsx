@@ -1,4 +1,4 @@
-// 设置：明暗、主题皮肤（5 套）、MCP 集成、附件维护、数据说明
+// 设置：明暗、主题皮肤（5 套）、番茄钟与 GrokBot、MCP 集成、附件维护、数据说明
 
 import * as React from "react";
 import { Link } from "react-router-dom";
@@ -17,18 +17,22 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { ArrowRight, Bot, Braces, Eye, EyeOff, Paperclip, SquareKanban } from "lucide-react";
+import { ArrowRight, Bot, Braces, Eye, EyeOff, Paperclip, SquareKanban, Timer } from "lucide-react";
 import { toast } from "sonner";
 import { gcOrphanAttachments, migrateInlineImages } from "@/lib/attachments";
 import { DEFAULT_MCP_TOKEN, mcpGetConfig, mcpSetConfig } from "@/lib/mcp";
 import { useSkin, SKINS, useDisplaySize, DISPLAY_SIZES } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import { toolPaths, type ToolPath } from "@/lib/git";
+import { PET_SCALES } from "@/lib/petState";
+import { resetPetPosition, setPetPrefs, usePetPrefs } from "@/lib/petStore";
 import { dbCheckVersion, type VersionReport } from "@/lib/version";
 
 export function SettingsPage() {
   const { theme, setTheme } = useTheme();
   const [skin, setSkin] = useSkin();
+  // GrokBot 偏好与浮层共享同一份状态（lib/petStore.ts）
+  const petPrefs = usePetPrefs();
   const [displaySize, setDisplaySize] = useDisplaySize();
   const [mcpEnabled, setMcpEnabled] = React.useState(true);
   const [mcpToken, setMcpToken] = React.useState(DEFAULT_MCP_TOKEN);
@@ -193,6 +197,65 @@ export function SettingsPage() {
                   </button>
                 ))}
               </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Timer className="h-4 w-4 text-primary" />
+              番茄钟与 GrokBot
+            </CardTitle>
+            <CardDescription>
+              番茄钟是独立计时器（不绑定任务），时长与长休节奏在番茄钟页面调整；这里管理桌面宠物 GrokBot 的显示方式。
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <span className="text-sm font-medium">显示 GrokBot</span>
+                <p className="text-xs text-muted-foreground">在窗口右下角显示表情宠物；隐藏后可在这里重新开启。</p>
+              </div>
+              <Switch checked={petPrefs.enabled} onCheckedChange={(checked) => setPetPrefs({ enabled: checked })} />
+            </div>
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <span className="text-sm font-medium">自动气泡</span>
+                <p className="text-xs text-muted-foreground">完成专注或任务时自动说一句；关闭后仅点击时显示。</p>
+              </div>
+              <Switch
+                checked={petPrefs.bubbleEnabled}
+                onCheckedChange={(checked) => setPetPrefs({ bubbleEnabled: checked })}
+              />
+            </div>
+            <div className="space-y-2">
+              <span className="text-sm font-medium">宠物大小</span>
+              <div className="flex flex-wrap gap-2">
+                {PET_SCALES.map((scale) => (
+                  <button
+                    key={scale}
+                    type="button"
+                    onClick={() => setPetPrefs({ scale })}
+                    className={cn(
+                      "rounded-md border px-3 py-2 text-sm transition-colors hover:bg-accent",
+                      petPrefs.scale === scale && "border-primary bg-accent",
+                    )}
+                  >
+                    {scale === 1 ? "标准" : scale < 1 ? "小" : "大"}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button variant="outline" onClick={resetPetPosition}>
+                重置宠物位置
+              </Button>
+              <Button asChild variant="outline">
+                <Link to="/pomodoro">
+                  打开番茄钟<ArrowRight className="h-4 w-4" />
+                </Link>
+              </Button>
             </div>
           </CardContent>
         </Card>

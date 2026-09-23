@@ -157,6 +157,11 @@ pub fn migrate(conn: &Connection) -> UpgradeResult<MigrateOutcome> {
         }
     }
 
+    if from < 14 {
+        // v13 → v14：pomodoro_sessions 表由 core 幂等建表（CREATE TABLE IF NOT EXISTS，
+        // 新库直接完整形态）；此处仅推进版本，无存量数据需要回填。
+    }
+
     tx.execute_batch(&format!("PRAGMA user_version = {CURRENT_VERSION};"))?;
     tx.commit().map_err(UpgradeError::from)?;
     // 同步写入 app_meta，便于外部诊断
@@ -240,6 +245,8 @@ mod tests {
         assert!(column_exists(&conn, "todos", "ai_coordinated").unwrap());
         assert!(column_exists(&conn, "todos", "custom_fields").unwrap());
         assert!(column_exists(&conn, "projects", "created_by").unwrap());
+        // v14：番茄会话表随建表就位（迁移仅推进版本）
+        assert!(table_exists(&conn, "pomodoro_sessions").unwrap());
         // v5 泳道回填
         let lane: String = conn
             .query_row("SELECT swimlane_id FROM todos WHERE id='t1'", [], |r| {

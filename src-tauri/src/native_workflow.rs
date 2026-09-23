@@ -83,6 +83,18 @@ pub fn desktop_enable_notifications(app: tauri::AppHandle) -> Result<(), String>
     Ok(())
 }
 
+/// 系统通知（番茄阶段结束等即时提示）：权限未授予时返回中文错误，由前端降级为仅应用内 toast。
+/// 与提醒不同，这里不落库、不重试——一次性的界面反馈，失败不影响计时。
+#[tauri::command]
+pub fn desktop_notify(app: tauri::AppHandle, title: String, body: String) -> Result<(), String> {
+    app.notification()
+        .builder()
+        .title(title)
+        .body(body)
+        .show()
+        .map_err(|error| format!("系统通知发送失败：{error}"))
+}
+
 #[tauri::command]
 pub fn desktop_status() -> serde_json::Value {
     let read = |slot: &Mutex<String>| slot.lock().map(|value| value.clone()).unwrap_or_default();

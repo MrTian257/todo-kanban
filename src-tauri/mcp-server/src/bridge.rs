@@ -1,4 +1,4 @@
-//! MCP bridge：11 tools + 5 resources ↔ core::svc。
+//! MCP bridge：11 tools + 6 resources ↔ core::svc。
 //! 参数错误返回 JSON-RPC 错误；执行失败返回 MCP isError；只读模式隐藏并拒绝写工具。
 //! 数据源固定为程序运行目录 todo-kanban.db；--db-config 仍支持覆盖到指定目录。
 //! MCP 的 git_info 保持直读语义（不经 app 侧缓存）；git_info_refresh / git_info_remote 为 app 专属不暴露。
@@ -16,7 +16,7 @@ use todo_kanban_core::svc::{db_cmds, git_cmds};
 
 use crate::config;
 
-pub const RESOURCES: [(&str, &str); 5] = [
+pub const RESOURCES: [(&str, &str); 6] = [
     ("todo-kanban://state", "全部状态（项目 + 待办 + 资料）JSON"),
     ("todo-kanban://projects", "项目列表 JSON"),
     ("todo-kanban://todos", "待办列表 JSON"),
@@ -24,6 +24,10 @@ pub const RESOURCES: [(&str, &str); 5] = [
     (
         "todo-kanban://fields",
         "自定义字段定义与自动脚本配置 JSON（值来源：manual/builtin/rule）",
+    ),
+    (
+        "todo-kanban://pomodoro",
+        "番茄专注统计 JSON（近 7 天分日汇总 + 连续天数 + 最近会话，只读）",
     ),
 ];
 
@@ -283,6 +287,12 @@ fn read_resource(uri: &str) -> AppResult<Value> {
                 "fieldDefs": workflow.field_defs,
                 "automations": workflow.automations,
             }))?
+        }
+        // 番茄专注（v14）：独立计时器的会话历史。只读聚合，配置在本机 localStorage 里，不对外暴露。
+        "todo-kanban://pomodoro" => {
+            let stats = todo_kanban_core::svc::pomodoro::stats_from_conn(&tx, 7)?;
+            let recent = todo_kanban_core::svc::pomodoro::recent_from_conn(&tx, 20)?;
+            serde_json::to_value(json!({ "stats": stats, "recent": recent }))?
         }
         "todo-kanban://projects" => serde_json::to_value(db::row::load_projects_from_conn(&tx)?)?,
         "todo-kanban://todos" => serde_json::to_value(db::row::load_todos_from_conn(&tx)?)?,

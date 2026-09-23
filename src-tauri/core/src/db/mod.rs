@@ -116,7 +116,7 @@ pub fn init_and_migrate(conn: &Connection, json_path: &Path) -> AppResult<bool> 
 /// 而播种走的是差集写：传入快照里没有的行会被删除，等于直接清掉用户数据。
 /// 派生缓存表（git_repo_cache）与设置表（app_meta）不参与判定。
 pub fn is_pristine(conn: &Connection) -> AppResult<bool> {
-    const BUSINESS_TABLES: [&str; 8] = [
+    const BUSINESS_TABLES: [&str; 9] = [
         "projects",
         "todos",
         "resources",
@@ -125,6 +125,8 @@ pub fn is_pristine(conn: &Connection) -> AppResult<bool> {
         "change_history",
         "change_proposals",
         "workflow_state",
+        // v14：番茄专注历史也算「用户已有数据」——否则只跑过番茄钟的库会被判成空库而灌入演示数据
+        "pomodoro_sessions",
     ];
     for table in BUSINESS_TABLES {
         let exists: bool =
