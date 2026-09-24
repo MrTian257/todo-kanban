@@ -1,30 +1,44 @@
 // GrokBot 宠物状态机（纯逻辑）：心情判定 + 气泡文案 + 偏好读写。
 // 无 React 依赖，可被 scripts/test-pet-state.mjs 直接断言。
 //
-// 设计取舍（ADR-017）：
-// - 表情用 emoji + CSS 绘制，不引入任何图片/品牌素材，也不额外打包资源。
+// 设计取舍（ADR-017 + grokbot 模块包）：
+// - 表情由 src/grokbot/ 模块包渲染（SVG 轮廓形变），这里只负责**业务策略**：
+//   心情怎么判定（moodOf）、每种心情该用哪个 GrokBot 状态（GROKBOT_STATE_BY_MOOD）、说什么话（bubbleFor）。
+//   这样"什么心情"和"怎么画"解耦，宠物包可以整包迁移到别的项目。
 // - 心情优先级：**事件（完成，带 TTL）> 阻塞 > 番茄阶段 > 打盹 > 待机**。
 //   事件排最前是因为"刚发生的事"比持续状态更值得反馈；阻塞排阶段前是因为它更需要被注意。
-// - 偏好（开关 / 坐标 / 缩放）属本机界面偏好，存 localStorage，不进 SQLite 与 MCP 快照。
+// - 偏好（开关 / 坐标 / 缩放 / 配色）属本机界面偏好，存 localStorage，不进 SQLite 与 MCP 快照。
 
 import type { PomodoroPhase } from "./pomodoro";
+// 只取类型：esbuild 打包时会直接抹掉，测试脚本无需解析包内实现
+import type { GrokBotTheme } from "../grokbot/types";
 
 export type PetMood = "idle" | "focus" | "break" | "cheer" | "happy" | "worried" | "sleepy";
 
-export interface PetFace {
-  emoji: string;
-  label: string;
-}
+/** 每种心情的展示名（无障碍标签 / 设置页文案） */
+export const MOOD_LABEL: Record<PetMood, string> = {
+  idle: "待机",
+  focus: "专注中",
+  break: "休息中",
+  cheer: "庆祝",
+  happy: "开心",
+  worried: "有阻塞",
+  sleepy: "打盹",
+};
 
-/** 每种心情的正面表情与无障碍标签 */
-export const PET_FACES: Record<PetMood, PetFace> = {
-  idle: { emoji: "🤖", label: "待机" },
-  focus: { emoji: "🧑‍💻", label: "专注中" },
-  break: { emoji: "☕", label: "休息中" },
-  cheer: { emoji: "🎉", label: "庆祝" },
-  happy: { emoji: "😄", label: "开心" },
-  worried: { emoji: "😟", label: "有阻塞" },
-  sleepy: { emoji: "😴", label: "打盹" },
+/**
+ * 心情 → GrokBot 状态（模块包的内置状态 id）。
+ * 刻意放在应用侧而不是包里：包只认识"状态"，"什么心情对应什么状态"是业务策略。
+ * 映射到的 id 都来自 BUILTIN_STATES（idle / working / humming / celebrate / happy / suspicious / drowsy）。
+ */
+export const GROKBOT_STATE_BY_MOOD: Record<PetMood, string> = {
+  idle: "idle",
+  focus: "working",
+  break: "humming",
+  cheer: "celebrate",
+  happy: "happy",
+  worried: "suspicious",
+  sleepy: "drowsy",
 };
 
 export type PetEventKind = "focus_done" | "task_done";
@@ -157,6 +171,12 @@ export interface PetPrefs {
   scale: number;
   /** 是否自动弹出气泡 */
   bubbleEnabled: boolean;
+  /** 待机漂浮动画 */
+  float: boolean;
+  /** 上次选中的配色预设 id；"custom" = 用户手改了颜色 */
+  themePreset: string;
+  /** 颜色覆盖（只存与预设不同的项，切换预设时整体替换） */
+  theme: Partial<GrokBotTheme>;
 }
 
 export const DEFAULT_PET_PREFS: PetPrefs = {
@@ -165,7 +185,37 @@ export const DEFAULT_PET_PREFS: PetPrefs = {
   y: null,
   scale: 1,
   bubbleEnabled: true,
+  float: true,
+  themePreset: "blue",
+  theme: {},
 };
+
+/** 允许持久化的主题键：挡住旧版本或手改 localStorage 塞进来的奇怪字段 */
+const THEME_KEYS: (keyof GrokBotTheme)[] = [
+  "body",
+  "highlight",
+  "eye",
+  "eyeGlow",
+  "shadow",
+  "bubbleBg",
+  "bubbleText",
+  "bubbleBorder",
+  "accent",
+];
+
+/** 主题归一化：颜色值最终会进 style 属性，脏值会直接让样式失效，因此只收短字符串 */
+function normalizeTheme(raw: unknown): Partial<GrokBotTheme> {
+  if (!raw || typeof raw !== "object") return {};
+  const source = raw as Record<string, unknown>;
+  const theme: Partial<GrokBotTheme> = {};
+  for (const key of THEME_KEYS) {
+    const value = source[key];
+    if (typeof value === "string" && value.trim().length > 0 && value.length <= 64) {
+      theme[key] = value.trim();
+    }
+  }
+  return theme;
+}
 
 /** 偏好归一化：坐标必须是有限数，缩放必须落在档位内，否则回退默认 */
 export function normalizePetPrefs(raw: unknown): PetPrefs {
@@ -186,6 +236,10 @@ export function normalizePetPrefs(raw: unknown): PetPrefs {
     y: coordinate(value.y),
     scale,
     bubbleEnabled: value.bubbleEnabled !== false,
+    float: value.float !== false,
+    themePreset:
+      typeof value.themePreset === "string" && value.themePreset ? value.themePreset : "blue",
+    theme: normalizeTheme(value.theme),
   };
 }
 

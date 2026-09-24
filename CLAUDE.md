@@ -35,7 +35,7 @@ cargo test -p todo-kanban-core   # 核心库单测（db / git 解析 / 缓存 / 
 cargo test -p mcp-server         # MCP 单测（握手 / 工具清单 / 映射 / 只读门禁）
 ```
 
-前端纯逻辑无测试框架，用 esbuild 打包后跑 node 断言：`node scripts/test-board-order.mjs`、`node scripts/test-day-clock.mjs`（跨天刷新）、`node scripts/test-pomodoro.mjs`（番茄阶段流转与统计口径）、`node scripts/test-pet-state.mjs`（宠物心情优先级）；四条都已并入 `npm run test:logic`。
+前端纯逻辑无测试框架，用 esbuild 打包后跑 node 断言：`node scripts/test-board-order.mjs`、`node scripts/test-day-clock.mjs`（跨天刷新）、`node scripts/test-pomodoro.mjs`（番茄阶段流转与统计口径）、`node scripts/test-pet-state.mjs`（宠物心情优先级）、`node scripts/test-grokbot.mjs`（宠物模块包的数据自洽与形变纯函数）；五条都已并入 `npm run test:logic`。
 
 需要真实浏览器的验证脚本（CDP，先起 `npm run dev` 并用 `--remote-debugging-port` 打开页面，端口用 `CDP_PORT` 覆盖，默认 9222）：
 `node scripts/verify-dnd.mjs`（跨泳道/空白区落点/泳道内重排/按钮不误触/resize 后落点）、`verify-project-steps.mjs`（分支规则步骤编辑与回显）、`verify-daterange.mjs`（日期范围两击选择）、`probe-daterange.mjs`。
@@ -79,7 +79,7 @@ SQLite WAL，数据源固定为**程序运行目录** `todo-kanban.db`（ADR-012
 
 外部同步（MCP 侧改动经 `startExternalSync` 轮询）仅在无待保存变更时应用；`reloadRemoteState` 必须显式弃改。浏览器预览走 `sessionStorage` + demoState（`storage.ts` 的 `isTauri()` 双轨）。
 
-前端 lib 层职责速览：`normalize.ts`（数据归一化**唯一入口**，旧数据补字段 + 泳道回退 + 提交去重兜底）、`todo.ts`（紧急度/提交唯一归属）、`completeTodo.ts`（完成时自动补录 [createdAt~doneAt] 提交）、`deleteWithUndo.ts`（延迟真删 + 撤销）、`boardOrder.ts`（泳道内排序纯函数，有 node 测试）、`git.ts`（9 个 invoke 封装 + 60s TTL 单飞缓存）、`theme.ts`（明暗 × 5 套皮肤，localStorage `todo-git.skin.v1`）、`mcp.ts`（MCP 设置）、`customFields.ts`（v11 自定义字段与自动脚本词表：取值强转 / 格式化 / 内置属性求值 / 默认值 / 校验，与后端 fields.rs + automation.rs 同规则）、`attachments.ts`（图片引用协议）、`context-menu.ts` / `input-suggestions.ts`（全局接管，见下）、`version.ts`（版本门禁）、`pomodoro.ts`（番茄纯逻辑：阶段流转 / 配置钳制 / 本地日期分桶与统计汇总）、`pomodoroStore.ts`（番茄运行态：绝对结束时间戳计时 + 崩溃快照恢复 + 阶段结束落库/通知/提示音）、`petState.ts`（GrokBot 心情状态机 + 偏好归一化）、`petStore.ts`（宠物偏好单例，设置页与浮层共享）。
+前端 lib 层职责速览：`normalize.ts`（数据归一化**唯一入口**，旧数据补字段 + 泳道回退 + 提交去重兜底）、`todo.ts`（紧急度/提交唯一归属）、`completeTodo.ts`（完成时自动补录 [createdAt~doneAt] 提交）、`deleteWithUndo.ts`（延迟真删 + 撤销）、`boardOrder.ts`（泳道内排序纯函数，有 node 测试）、`git.ts`（9 个 invoke 封装 + 60s TTL 单飞缓存）、`theme.ts`（明暗 × 5 套皮肤，localStorage `todo-git.skin.v1`）、`mcp.ts`（MCP 设置）、`customFields.ts`（v11 自定义字段与自动脚本词表：取值强转 / 格式化 / 内置属性求值 / 默认值 / 校验，与后端 fields.rs + automation.rs 同规则）、`attachments.ts`（图片引用协议）、`context-menu.ts` / `input-suggestions.ts`（全局接管，见下）、`version.ts`（版本门禁）、`pomodoro.ts`（番茄纯逻辑：阶段流转 / 配置钳制 / 本地日期分桶与统计汇总）、`pomodoroStore.ts`（番茄运行态：绝对结束时间戳计时 + 崩溃快照恢复 + 阶段结束落库/通知/提示音）、`petState.ts`（GrokBot 心情状态机 + 偏好归一化）、`petStore.ts`（宠物偏好单例，含配色解析，设置页与浮层共享）、`grokbot/`（可迁移的宠物渲染模块包：自包含、零框架依赖，颜色/动作/表情自定义 API 见包内 README）。
 
 类型对齐契约：`src/lib/types.ts` camelCase 与 Rust `models.rs` 的 Db* 经 serde rename 强对齐；**`GitInfo` 是唯一 snake_case 例外**（models.rs 头部注释）。改字段必须两端 + normalize 同步。
 
@@ -119,6 +119,7 @@ note 持久化只存 `attachment://<todoId>/<file>` 短引用；展示/编辑时
 | 改看板拖拽/泳道管理 | components/board/SwimlaneBoard.tsx（排序纯逻辑在 lib/boardOrder.ts，有测试） |
 | 改 Markdown 备注 | components/todo/MarkdownEditor.tsx（WYSIWYG，markdown-it + turndown）+ MarkdownRenderer/View |
 | 改主题皮肤 | src/lib/theme.ts（SKINS）+ src/index.css（[data-theme] 变量） |
+| GrokBot 宠物渲染 / 颜色 / 动作 / 表情 | 模块包 `src/grokbot/`（自包含可迁移，先看包内 `README.md`）：`core/engine.ts` 渲染循环与交互、`core/morph.ts` 形变纯函数、`data/` 表情点集/状态/动作/配色；应用侧 `src/components/pet/GrokBot.tsx`（浮层定位与拖拽）+ `src/lib/petState.ts`（心情 → 状态映射）+ `src/lib/petStore.ts`（偏好与配色）；设置页 `src/pages/SettingsPage.tsx` 有取色器 / 状态 / 动作 / 表情预览 |
 | 番茄钟 / GrokBot 宠物 | 前端纯逻辑 `src/lib/pomodoro.ts`（阶段流转/统计口径，有 node 测试）+ 运行态 `src/lib/pomodoroStore.ts`；宠物 `src/lib/petState.ts`（心情状态机，有 node 测试）+ `src/lib/petStore.ts` + `src/components/pet/GrokBot.tsx`；页面 `src/pages/PomodoroPage.tsx` + `src/components/pomodoro/`；后端 `core/src/svc/pomodoro.rs`（v14 `pomodoro_sessions`）+ `commands.rs` 的 `pomodoro_record/recent/stats`；MCP 资源 `todo-kanban://pomodoro`；决策见 ADR-017 |
 | 自定义字段 / 自动脚本 | 词表与纯逻辑：`src/lib/customFields.ts` ↔ `core/src/svc/fields.rs` + `svc/automation.rs`（同规则，后端为准）；定义与规则存 workflow_state（`core/src/svc/workflow.rs` 的 fieldDefs / automations）；值存 `todos.custom_fields`（schema v11）；执行点 `db::save_state_inner`；UI 在设置页 `/settings/fields`（`src/pages/FieldSettingsPage.tsx` + `src/components/workflow/` 的 FieldDefsPanel / AutomationsPanel / CustomFieldInputs，ADR-014）；存量任务补写命令 `automation_backfill` |
 | 新增/改 MCP 工具 | mcp-server/src/bridge.rs（映射）+ protocol.rs（tools 表/inputSchema），业务仍走 core/svc |

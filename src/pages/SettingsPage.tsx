@@ -1,4 +1,4 @@
-// 设置：明暗、主题皮肤（5 套）、番茄钟与 GrokBot、MCP 集成、附件维护、数据说明
+// 设置：明暗、主题皮肤（5 套）、番茄钟与 GrokBot（含颜色/动作/表情自定义）、MCP 集成、附件维护、数据说明
 
 import * as React from "react";
 import { Link } from "react-router-dom";
@@ -25,7 +25,20 @@ import { useSkin, SKINS, useDisplaySize, DISPLAY_SIZES } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import { toolPaths, type ToolPath } from "@/lib/git";
 import { PET_SCALES } from "@/lib/petState";
-import { resetPetPosition, setPetPrefs, usePetPrefs } from "@/lib/petStore";
+import { applyPetThemePreset, resetPetPosition, resolvePetTheme, setPetThemeColor, setPetPrefs, usePetPrefs } from "@/lib/petStore";
+// GrokBot 模块包：设置页直接枚举包内置的表情/状态/动作来做"试玩"预览
+import {
+  BUILTIN_ACTIONS,
+  BUILTIN_EXPRESSIONS,
+  BUILTIN_GROUPS,
+  BUILTIN_STATES,
+  THEME_PRESETS,
+  VIEW_BOX,
+  ringToPath,
+  type GrokBotEngine,
+  type GrokBotTheme,
+} from "@/grokbot";
+import { GrokBotPet } from "@/grokbot/react";
 import { dbCheckVersion, type VersionReport } from "@/lib/version";
 
 export function SettingsPage() {
@@ -33,6 +46,14 @@ export function SettingsPage() {
   const [skin, setSkin] = useSkin();
   // GrokBot 偏好与浮层共享同一份状态（lib/petStore.ts）
   const petPrefs = usePetPrefs();
+  // 设置页预览实例：直接对引擎调 setExpression/playAction，所见即所得
+  const previewEngine = React.useRef<GrokBotEngine | null>(null);
+  const [previewState, setPreviewState] = React.useState("idle");
+  // 预览主题：避免在 25 个表情缩略图的 map 里反复解析同一份配色
+  const previewTheme = React.useMemo(
+    () => resolvePetTheme(petPrefs),
+    [petPrefs.themePreset, petPrefs.theme],
+  );
   const [displaySize, setDisplaySize] = useDisplaySize();
   const [mcpEnabled, setMcpEnabled] = React.useState(true);
   const [mcpToken, setMcpToken] = React.useState(DEFAULT_MCP_TOKEN);
@@ -211,42 +232,167 @@ export function SettingsPage() {
               番茄钟是独立计时器（不绑定任务），时长与长休节奏在番茄钟页面调整；这里管理桌面宠物 GrokBot 的显示方式。
             </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <span className="text-sm font-medium">显示 GrokBot</span>
-                <p className="text-xs text-muted-foreground">在窗口右下角显示表情宠物；隐藏后可在这里重新开启。</p>
+          <CardContent className="space-y-5">
+            {/* ── 预览 + 显示开关 ─────────────────────────────── */}
+            <div className="flex flex-wrap items-start gap-5">
+              {/* 设置页自带一个预览实例：改配色/表情/动作立即看到效果，不依赖浮层是否开启 */}
+              <div className="flex h-[132px] w-[132px] shrink-0 items-center justify-center rounded-xl border bg-muted/30">
+                <GrokBotPet
+                  size={108}
+                  state={previewState}
+                  theme={previewTheme}
+                  contextMenu={false}
+                  onReady={(engine) => {
+                    previewEngine.current = engine;
+                  }}
+                />
               </div>
-              <Switch checked={petPrefs.enabled} onCheckedChange={(checked) => setPetPrefs({ enabled: checked })} />
-            </div>
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <span className="text-sm font-medium">自动气泡</span>
-                <p className="text-xs text-muted-foreground">完成专注或任务时自动说一句；关闭后仅点击时显示。</p>
+              <div className="min-w-[260px] flex-1 space-y-3">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <span className="text-sm font-medium">显示 GrokBot</span>
+                    <p className="text-xs text-muted-foreground">在窗口右下角显示宠物；隐藏后可在这里重新开启。</p>
+                  </div>
+                  <Switch checked={petPrefs.enabled} onCheckedChange={(checked) => setPetPrefs({ enabled: checked })} />
+                </div>
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <span className="text-sm font-medium">自动气泡</span>
+                    <p className="text-xs text-muted-foreground">完成专注或任务时自动说一句；关闭后仅点击时显示。</p>
+                  </div>
+                  <Switch
+                    checked={petPrefs.bubbleEnabled}
+                    onCheckedChange={(checked) => setPetPrefs({ bubbleEnabled: checked })}
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <span className="text-sm font-medium">待机漂浮</span>
+                    <p className="text-xs text-muted-foreground">静止时轻微上下浮动；系统「减少动态效果」开启时自动停用。</p>
+                  </div>
+                  <Switch checked={petPrefs.float} onCheckedChange={(checked) => setPetPrefs({ float: checked })} />
+                </div>
+                <div className="space-y-2">
+                  <span className="text-sm font-medium">宠物大小</span>
+                  <div className="flex flex-wrap gap-2">
+                    {PET_SCALES.map((scale) => (
+                      <button
+                        key={scale}
+                        type="button"
+                        onClick={() => setPetPrefs({ scale })}
+                        className={cn(
+                          "rounded-md border px-3 py-2 text-sm transition-colors hover:bg-accent",
+                          petPrefs.scale === scale && "border-primary bg-accent",
+                        )}
+                      >
+                        {scale === 1 ? "标准" : scale < 1 ? "小" : "大"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
-              <Switch
-                checked={petPrefs.bubbleEnabled}
-                onCheckedChange={(checked) => setPetPrefs({ bubbleEnabled: checked })}
-              />
             </div>
-            <div className="space-y-2">
-              <span className="text-sm font-medium">宠物大小</span>
-              <div className="flex flex-wrap gap-2">
-                {PET_SCALES.map((scale) => (
+
+            {/* ── 颜色自定义 ───────────────────────────────────── */}
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-medium">配色</span>
+                {THEME_PRESETS.map((preset) => (
                   <button
-                    key={scale}
+                    key={preset.id}
                     type="button"
-                    onClick={() => setPetPrefs({ scale })}
+                    onClick={() => applyPetThemePreset(preset.id)}
                     className={cn(
-                      "rounded-md border px-3 py-2 text-sm transition-colors hover:bg-accent",
-                      petPrefs.scale === scale && "border-primary bg-accent",
+                      "flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs transition-colors hover:bg-accent",
+                      petPrefs.themePreset === preset.id && "border-primary bg-accent",
                     )}
                   >
-                    {scale === 1 ? "标准" : scale < 1 ? "小" : "大"}
+                    <span className="h-3 w-3 rounded-full" style={{ background: preset.theme.body }} />
+                    {preset.label}
                   </button>
                 ))}
+                {petPrefs.themePreset === "custom" && (
+                  <span className="rounded-md border border-primary/40 bg-primary/10 px-2 py-1 text-xs text-primary">
+                    自定义
+                  </span>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-4">
+                {PET_COLOR_FIELDS.map(([key, label]) => (
+                  <label key={key} className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Input
+                      type="color"
+                      aria-label={label}
+                      className="h-8 w-12 cursor-pointer p-0.5"
+                      value={toHexColor(previewTheme[key])}
+                      onChange={(event) => setPetThemeColor(key, event.target.value)}
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                颜色以 CSS 变量下发，模块包里的全部外观（主体 / 柔光 / 投影 / 气泡）都能改；改任一项即切换为「自定义」。
+              </p>
+            </div>
+
+            {/* ── 动作 / 表情自定义 ────────────────────────────── */}
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-medium">状态</span>
+                <select
+                  className="h-8 rounded-md border bg-background px-2 text-xs"
+                  value={previewState}
+                  onChange={(event) => setPreviewState(event.target.value)}
+                >
+                  {BUILTIN_GROUPS.map((group) => (
+                    <optgroup key={group.id} label={group.label ?? group.id}>
+                      {group.states.map((id) => (
+                        <option key={id} value={id}>
+                          {petStateLabel(id)}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+                <span className="text-xs text-muted-foreground">每个状态自带表情池、动作与换表情节奏</span>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-medium">动作</span>
+                {BUILTIN_ACTIONS.map((action) => (
+                  <Button
+                    key={action.id}
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => previewEngine.current?.playAction(action.id)}
+                  >
+                    {action.label ?? action.id}
+                  </Button>
+                ))}
+              </div>
+              <div className="space-y-2">
+                <span className="text-sm font-medium">表情</span>
+                <div className="grid max-h-44 grid-cols-[repeat(auto-fill,minmax(38px,1fr))] gap-1.5 overflow-y-auto rounded-lg border p-2">
+                  {BUILTIN_EXPRESSIONS.map((expression) => (
+                    <button
+                      key={expression.id}
+                      type="button"
+                      title={expression.label ?? expression.id}
+                      aria-label={expression.label ?? expression.id}
+                      onClick={() => previewEngine.current?.setExpression(expression.id)}
+                      className="flex aspect-square items-center justify-center rounded-md border transition-colors hover:bg-accent"
+                    >
+                      <svg viewBox={VIEW_BOX} className="h-7 w-7" aria-hidden="true">
+                        <path d={ringToPath(expression.eyes[0])} fill={previewTheme.body} />
+                        <path d={ringToPath(expression.eyes[1])} fill={previewTheme.body} />
+                      </svg>
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
+
             <div className="flex flex-wrap items-center gap-2">
               <Button variant="outline" onClick={resetPetPosition}>
                 重置宠物位置
@@ -405,3 +551,44 @@ export function SettingsPage() {
     </div>
   );
 }
+
+// ── GrokBot 设置页：颜色项与取值工具 ─────────────────────────────
+
+/** 设置页暴露的 4 个颜色项（其余 5 个走 createGrokBot API / 直接写 CSS 变量） */
+const PET_COLOR_FIELDS: readonly (readonly [keyof GrokBotTheme, string])[] = [
+  ["body", "主体"],
+  ["eye", "眼睛"],
+  ["bubbleBg", "气泡背景"],
+  ["bubbleText", "气泡文字"],
+];
+
+/** 状态 id → 中文名（下拉展示用） */
+function petStateLabel(id: string): string {
+  return BUILTIN_STATES.find((state) => state.id === id)?.label ?? id;
+}
+
+/**
+ * 转成 <input type="color"> 能吃的 #rrggbb。
+ * 主题里的气泡背景是 rgba(...)，直接塞给颜色输入会被浏览器重置成 #000000，
+ * 所以这里统一解析： #rrggbb / #rgb / rgb() / rgba() 都能转，解析不了则回退白色。
+ */
+function toHexColor(value: string): string {
+  const input = value.trim().toLowerCase();
+  if (/^#[0-9a-f]{6}$/.test(input)) return input;
+  if (/^#[0-9a-f]{3}$/.test(input)) {
+    return "#" + input[1] + input[1] + input[2] + input[2] + input[3] + input[3];
+  }
+  const match = input.match(/^rgba?\(([^)]+)\)$/);
+  if (match) {
+    const parts = match[1].split(",").map((part) => Number.parseFloat(part));
+    if (parts.length >= 3 && parts.slice(0, 3).every((part) => Number.isFinite(part))) {
+      const hex = parts
+        .slice(0, 3)
+        .map((part) => Math.max(0, Math.min(255, Math.round(part))).toString(16).padStart(2, "0"))
+        .join("");
+      return "#" + hex;
+    }
+  }
+  return "#ffffff";
+}
+

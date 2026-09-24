@@ -696,34 +696,17 @@ input, textarea, select, button { font-family: inherit; }
 .tk-pomodoro-indicator[data-phase="long_break"] .tk-pomodoro-indicator-bar { background: var(--node-done); }
 .tk-pomodoro-indicator-running { border-color: color-mix(in oklch, var(--primary) 45%, var(--border)); color: var(--primary); }
 
-/* ── GrokBot 宠物：应用内浮层（固定定位，不随内容滚动） ─────────────────── */
-.tk-pet-layer { position: fixed; z-index: 40; pointer-events: none; }
-.tk-pet { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 100%; height: 100%; border: 1px solid var(--border); border-radius: 999px; background: color-mix(in oklch, var(--card) 90%, transparent); box-shadow: 0 6px 18px #18234c1f; pointer-events: auto; cursor: grab; user-select: none; touch-action: none; transition: transform .15s, box-shadow .15s; }
-.tk-pet:hover { transform: translateY(-2px); box-shadow: 0 10px 24px #18234c2b; }
-.tk-pet:active { cursor: grabbing; }
-.tk-pet:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
-.tk-pet[data-mood="focus"] { border-color: color-mix(in oklch, var(--primary) 55%, var(--border)); }
-.tk-pet[data-mood="break"] { border-color: color-mix(in oklch, var(--node-done) 55%, var(--border)); }
-.tk-pet[data-mood="worried"] { border-color: color-mix(in oklch, var(--node-doing) 60%, var(--border)); }
-.tk-pet[data-mood="sleepy"] { opacity: .78; }
-.tk-pet[data-mood="cheer"],
-.tk-pet[data-mood="happy"] { animation: tk-pet-pop .6s ease-out; }
-@keyframes tk-pet-pop {
-  0% { transform: scale(.86); }
-  55% { transform: scale(1.12); }
-  100% { transform: scale(1); }
-}
-/* 气泡贴边：宠物在右边缘时右对齐，在左边缘时左对齐，避免飘出窗口 */
-.tk-pet-bubble { position: absolute; max-width: 220px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--popover); color: var(--popover-foreground); font-size: 12.5px; line-height: 1.5; box-shadow: 0 8px 20px #18234c26; pointer-events: none; }
-.tk-pet-layer[data-edge="right"] .tk-pet-bubble { right: 0; }
-.tk-pet-layer[data-edge="left"] .tk-pet-bubble { left: 0; }
+/* ── GrokBot 宠物：只放"应用侧"的定位修正 ──────────────────────────────────
+   宠物的全部外观（主体/眼睛/气泡/动作关键帧）由 src/grokbot 模块包自注入
+   （选择器带实例作用域前缀），因此这里不再重复定义样式。
+   这两条是必要的覆盖：包内气泡默认居中在宠物上方，贴到窗口边缘时会飘出去。 */
+.tk-pet-host[data-edge="right"] .gb-bubble { left: auto; right: 0; transform: none; }
+.tk-pet-host[data-edge="right"] .gb-bubble[hidden] { transform: translateY(6px); }
+.tk-pet-host:focus-visible { outline: 2px solid var(--ring); outline-offset: 4px; border-radius: 999px; }
 
-/* 减少动态效果：关掉进度条过渡与宠物弹跳（功能不受影响） */
+/* 减少动态效果：只关掉进度条过渡（宠物的动效由模块包按同一个媒体查询自行处理） */
 @media (prefers-reduced-motion: reduce) {
-  .tk-pomodoro-fill,
-  .tk-pet { transition: none; }
-  .tk-pet[data-mood="cheer"],
-  .tk-pet[data-mood="happy"] { animation: none; }
+  .tk-pomodoro-fill { transition: none; }
 }
 
 @media (max-width: 1100px) {

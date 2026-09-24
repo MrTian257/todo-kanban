@@ -1,36 +1,36 @@
-// GrokBot 小表情宠物：应用内右下角浮层。
+// GrokBot 浮层（应用集成层）：位置/尺寸/配色/右键菜单 + 心情 → 状态映射。
 //
-// 取舍（ADR-017）：
-// - 用应用内浮层而不是独立置顶窗口：跨平台一致、不需要新 Tauri 窗口/权限配置，
-//   也不会在用户不想要的时候霸占桌面；代价是随主窗口一起最小化。
-// - 表情用 emoji + CSS，不引入任何图片或品牌素材；"GrokBot"只作为功能名称。
-// - 拖拽用 Pointer Events + setPointerCapture（与侧栏拖宽同模式），松手吸附到左右边缘。
-// - 无障碍：本体是带 aria-label 的按钮，气泡是 role="status" 区域，方向键可微调位置。
+// 渲染完全交给 src/grokbot 模块包（可整包迁移），这里只负责"应用特有"的部分：
+// - 浮层定位与拖动吸附（引擎回调 onDragMove/onDragEnd，坐标存本机偏好）
+// - 键盘可达性与无障碍语义（包装节点是 role=button，方向键微调位置）
+// - 业务策略：番茄/任务 → 心情（lib/petState）→ GrokBot 状态（GROKBOT_STATE_BY_MOOD）
 
 import * as React from "react";
 import { useNavigate } from "react-router-dom";
 import { EyeOff, RotateCcw } from "lucide-react";
+import { GrokBotPet } from "@/grokbot/react";
+import type { GrokBotEngine } from "@/grokbot";
 import { useAppStore } from "@/lib/store";
 import { usePomodoro, todayFocusCount } from "@/lib/pomodoroStore";
-import { usePetPrefs, setPetPrefs, resetPetPosition } from "@/lib/petStore";
+import { usePetPrefs, setPetPrefs, resetPetPosition, resolvePetTheme } from "@/lib/petStore";
 import {
-  PET_FACES,
-  PET_MARGIN,
+  GROKBOT_STATE_BY_MOOD,
+  MOOD_LABEL,
   PET_EVENT_TTL_MS,
+  PET_MARGIN,
   bubbleFor,
   moodOf,
   pushEvent,
   type PetEvent,
 } from "@/lib/petState";
 import { useContextMenu } from "@/lib/context-menu";
-import { cn } from "@/lib/utils";
 
-/** 宠物基础尺寸（px），实际渲染 = BASE_SIZE * 缩放档位 */
-const BASE_SIZE = 64;
+/** 缩放 1 时的渲染尺寸（px）。果冻球比之前的 emoji 需要更大的画布 */
+const BASE_SIZE = 96;
 /** 与右下角 toast 区域保持距离：默认位置往上让开一条 */
 const TOAST_CLEARANCE = 168;
-/** 气泡自动收起时长 */
-const BUBBLE_TTL_MS = 6_000;
+/** 方向键每次移动的像素 */
+const KEY_STEP = 8;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -52,17 +52,18 @@ export function GrokBot() {
   const projects = useAppStore((state) => state.projects);
 
   const size = Math.round(BASE_SIZE * prefs.scale);
+  const engineRef = React.useRef<GrokBotEngine | null>(null);
   const [position, setPosition] = React.useState<{ x: number; y: number } | null>(() =>
     prefs.x !== null && prefs.y !== null ? { x: prefs.x, y: prefs.y } : null,
   );
   const [events, setEvents] = React.useState<PetEvent[]>([]);
-  const [bubble, setBubble] = React.useState<string | null>(null);
   /** 每 2s 推进一次"现在"：事件 TTL 与打盹判定都需要时间前进，但不值得每秒重渲染 */
   const [nowTick, setNowTick] = React.useState(() => Date.now());
   const activityRef = React.useRef(Date.now());
-  const dragRef = React.useRef<{ dx: number; dy: number } | null>(null);
-  const movedRef = React.useRef(false);
-  const bubbleTimer = React.useRef<number | null>(null);
+  const dragOrigin = React.useRef({ x: 0, y: 0 });
+
+  // 配色：预设打底 + 用户覆盖（见 lib/petStore 的 resolvePetTheme）
+  const theme = React.useMemo(() => resolvePetTheme(prefs), [prefs.themePreset, prefs.theme]);
 
   // 位置兜底：首次挂载 / 重置位置后按窗口尺寸算默认值；窗口变化时收回可视区
   React.useEffect(() => {
@@ -85,7 +86,7 @@ export function GrokBot() {
     return () => window.clearInterval(timer);
   }, []);
 
-  // 事件 → 表情：专注轮数增加 = 完成一轮；已完成任务数增加 = 完成一条任务
+  // 事件 → 心情：专注轮数增加 = 完成一轮；已完成任务数增加 = 完成一条任务
   const focusRef = React.useRef(completedFocusCount);
   React.useEffect(() => {
     if (completedFocusCount > focusRef.current) {
@@ -130,24 +131,22 @@ export function GrokBot() {
     lastActivityAt: activityRef.current,
     now: nowTick,
   });
-  const face = PET_FACES[mood];
 
-  const showBubble = React.useCallback(
-    (text: string) => {
-      setBubble(text);
-      if (bubbleTimer.current !== null) window.clearTimeout(bubbleTimer.current);
-      bubbleTimer.current = window.setTimeout(() => setBubble(null), BUBBLE_TTL_MS);
-    },
-    [],
-  );
-
-  // 完成类事件自动弹一次气泡（开关关闭时不打扰）。
-  // 只依赖 mood：进入"完成"心情的那一帧弹一次，随后即使上下文数字变化也不重复弹。
+  // 完成类事件自动说一句（开关关闭时不打扰）。只对"进入该心情"反应，数字变化不重复弹。
   React.useEffect(() => {
     if (!prefs.bubbleEnabled) return;
     if (mood !== "cheer" && mood !== "happy") return;
-    showBubble(bubbleFor(mood, { blockedCount, doingCount, todayFocusCount: todayFocusCount() }, Date.now()));
-  }, [mood, prefs.bubbleEnabled, blockedCount, doingCount, showBubble]);
+    engineRef.current?.say(
+      bubbleFor(mood, { blockedCount, doingCount, todayFocusCount: todayFocusCount() }, Date.now()),
+    );
+  }, [mood, prefs.bubbleEnabled, blockedCount, doingCount]);
+
+  // 事件 TTL 到期后清掉队列：避免事件数组无界增长（也保证表情能落回持续状态）
+  React.useEffect(() => {
+    if (events.length === 0) return;
+    if (events.some((event) => nowTick - event.at <= PET_EVENT_TTL_MS)) return;
+    setEvents((prev) => prev.filter((event) => nowTick - event.at <= PET_EVENT_TTL_MS));
+  }, [events, nowTick]);
 
   // 偏好里的坐标是共享状态（设置页也能改）：外部改动时跟随，重置为 null 时回到默认位置
   const previousCoords = React.useRef<{ x: number | null; y: number | null }>({ x: prefs.x, y: prefs.y });
@@ -161,110 +160,78 @@ export function GrokBot() {
     if (previous.x !== null || previous.y !== null) setPosition(null);
   }, [prefs.x, prefs.y]);
 
-  React.useEffect(
-    () => () => {
-      if (bubbleTimer.current !== null) window.clearTimeout(bubbleTimer.current);
-    },
-    [],
-  );
-
-  // 位置持久化：拖动结束 / 重置后写回（拖动过程中不写，避免高频 localStorage 写入）
-  const persistPosition = React.useCallback((next: { x: number; y: number }) => {
-    setPetPrefs({ x: Math.round(next.x), y: Math.round(next.y) });
-  }, []);
-
-  const onPointerDown = (event: React.PointerEvent<HTMLButtonElement>) => {
-    if (event.button !== 0 || !position) return;
-    dragRef.current = { dx: event.clientX - position.x, dy: event.clientY - position.y };
-    movedRef.current = false;
-    event.currentTarget.setPointerCapture(event.pointerId);
-  };
-
-  const onPointerMove = (event: React.PointerEvent<HTMLButtonElement>) => {
-    const drag = dragRef.current;
-    if (!drag) return;
-    movedRef.current = true;
+  /** 拖动中：按引擎给的位移量移动（拖动过程中不写 localStorage，避免高频写入） */
+  const onDragMove = (dx: number, dy: number) => {
+    const origin = dragOrigin.current;
     setPosition({
-      x: clamp(event.clientX - drag.dx, PET_MARGIN, Math.max(PET_MARGIN, window.innerWidth - size - PET_MARGIN)),
-      y: clamp(event.clientY - drag.dy, PET_MARGIN, Math.max(PET_MARGIN, window.innerHeight - size - PET_MARGIN)),
+      x: clamp(origin.x + dx, PET_MARGIN, Math.max(PET_MARGIN, window.innerWidth - size - PET_MARGIN)),
+      y: clamp(origin.y + dy, PET_MARGIN, Math.max(PET_MARGIN, window.innerHeight - size - PET_MARGIN)),
     });
   };
 
-  const onPointerUp = (event: React.PointerEvent<HTMLButtonElement>) => {
-    if (!dragRef.current) return;
-    dragRef.current = null;
-    event.currentTarget.releasePointerCapture?.(event.pointerId);
+  /** 拖动结束：吸附到最近的左右边缘并落库 */
+  const onDragEnd = () => {
     activityRef.current = Date.now();
     setPosition((current) => {
       if (!current) return current;
-      // 吸附到最近的左右边缘：贴边不挡内容，也不会停在中间碍事
       const snappedX =
         current.x + size / 2 < window.innerWidth / 2
           ? PET_MARGIN
           : Math.max(PET_MARGIN, window.innerWidth - size - PET_MARGIN);
       const next = { x: snappedX, y: current.y };
-      persistPosition(next);
+      setPetPrefs({ x: Math.round(next.x), y: Math.round(next.y) });
       return next;
     });
   };
 
-  const toggleBubble = () => {
+  const onClick = () => {
     activityRef.current = Date.now();
-    if (bubble) {
-      setBubble(null);
+    const engine = engineRef.current;
+    if (!engine) return;
+    // 问引擎的真实状态：气泡有自动收起计时，本地标记会与实际显示脱节
+    if (engine.isBubbleVisible()) {
+      engine.hideBubble();
       return;
     }
-    showBubble(bubbleFor(mood, { blockedCount, doingCount, todayFocusCount: todayFocusCount() }, Date.now()));
+    engine.say(bubbleFor(mood, { blockedCount, doingCount, todayFocusCount: todayFocusCount() }, Date.now()));
   };
 
-  const onClick = (event: React.MouseEvent<HTMLButtonElement>) => {
-    activityRef.current = Date.now();
-    // 拖动结束的那一次 click 不应触发气泡
-    if (movedRef.current) {
-      movedRef.current = false;
-      return;
-    }
-    // 双击的第二下不再切换气泡（双击的语义是"打开番茄钟"）
-    if (event.detail > 1) return;
-    toggleBubble();
-  };
-
-  const onKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
+  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.key === "Escape") {
-      setBubble(null);
+      engineRef.current?.hideBubble();
       return;
     }
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
-      toggleBubble();
+      onClick();
       return;
     }
-    const step = 8;
-    const delta =
+    const step =
       event.key === "ArrowLeft"
-        ? { x: -step, y: 0 }
+        ? { x: -KEY_STEP, y: 0 }
         : event.key === "ArrowRight"
-          ? { x: step, y: 0 }
+          ? { x: KEY_STEP, y: 0 }
           : event.key === "ArrowUp"
-            ? { x: 0, y: -step }
+            ? { x: 0, y: -KEY_STEP }
             : event.key === "ArrowDown"
-              ? { x: 0, y: step }
+              ? { x: 0, y: KEY_STEP }
               : null;
-    if (!delta) return;
+    if (!step) return;
     event.preventDefault();
     activityRef.current = Date.now();
     setPosition((current) => {
       if (!current) return current;
       const next = {
-        x: clamp(current.x + delta.x, PET_MARGIN, Math.max(PET_MARGIN, window.innerWidth - size - PET_MARGIN)),
-        y: clamp(current.y + delta.y, PET_MARGIN, Math.max(PET_MARGIN, window.innerHeight - size - PET_MARGIN)),
+        x: clamp(current.x + step.x, PET_MARGIN, Math.max(PET_MARGIN, window.innerWidth - size - PET_MARGIN)),
+        y: clamp(current.y + step.y, PET_MARGIN, Math.max(PET_MARGIN, window.innerHeight - size - PET_MARGIN)),
       };
-      persistPosition(next);
+      setPetPrefs({ x: Math.round(next.x), y: Math.round(next.y) });
       return next;
     });
   };
 
-  useContextMenu(".tk-pet", () => [
+  // 右键菜单：注册在包装节点上（全局捕获阶段拦截默认菜单后弹自定义菜单）
+  useContextMenu(".tk-pet-host", () => [
     {
       label: "隐藏 GrokBot",
       icon: EyeOff,
@@ -282,60 +249,47 @@ export function GrokBot() {
 
   if (!prefs.enabled || !position) return null;
 
+  // 气泡默认居中在宠物上方；贴右边缘时改成右对齐，避免飘出窗口（见 index.css 的覆盖规则）
+  const edge = position.x + size / 2 < window.innerWidth / 2 ? "left" : "right";
+
   return (
     <div
-      className="tk-pet-layer"
-      // 贴哪一边决定气泡往哪边展开，避免飘出窗口
-      data-edge={position.x + size / 2 < window.innerWidth / 2 ? "left" : "right"}
-      style={{ width: size, height: size, left: position.x, top: position.y }}
+      className="tk-pet-host"
+      data-edge={edge}
+      style={{ position: "fixed", left: position.x, top: position.y, width: size, height: size, zIndex: 40 }}
+      role="button"
+      tabIndex={0}
+      aria-label={"GrokBot：" + MOOD_LABEL[mood] + "。回车查看提示，双击打开番茄钟，拖拽调整位置"}
+      onKeyDown={onKeyDown}
+      onPointerDownCapture={() => {
+        activityRef.current = Date.now();
+      }}
+      onPointerDown={() => {
+        // 记录拖动起点：引擎给的是相对位移，这里换算成绝对坐标。
+        // 直接读 position 而不是写进 setState 更新函数——更新函数必须是纯函数（StrictMode 会重复调用）。
+        if (position) dragOrigin.current = position;
+      }}
     >
-      {bubble && (
-        <p
-          className="tk-pet-bubble"
-          role="status"
-          aria-live="polite"
-          style={{ bottom: size + 10 }}
-        >
-          {bubble}
-        </p>
-      )}
-      <button
-        type="button"
-        className={cn("tk-pet", `tk-pet-${mood}`)}
-        style={{ width: size, height: size, fontSize: Math.round(size * 0.52) }}
-        data-mood={mood}
-        aria-label={`GrokBot：${face.label}。点击查看提示，双击打开番茄钟，可拖动位置`}
-        title={`GrokBot · ${face.label}`}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerCancel={onPointerUp}
+      <GrokBotPet
+        // 稳定类名：宿主用来看/定位宠物（外观由模块包注入的 .gb-* 负责）
+        className="tk-pet"
+        size={size}
+        float={prefs.float}
+        state={GROKBOT_STATE_BY_MOOD[mood]}
+        theme={theme}
+        interactive
+        // 引擎侧不注册右键：交给应用的全局右键菜单系统统一处理
+        contextMenu={false}
+        onReady={(engine) => {
+          engineRef.current = engine;
+          // 首帧打一次招呼：让用户确认宠物确实活着（气泡 2.6s 后自动收起）
+          engine.say("你好呀，我是 GrokBot");
+        }}
         onClick={onClick}
         onDoubleClick={() => navigate("/pomodoro")}
-        onKeyDown={onKeyDown}
-      >
-        <span aria-hidden="true">{face.emoji}</span>
-      </button>
-      {/* 事件 TTL 到期后清掉队列：避免事件数组无界增长（也保证表情能落回持续状态） */}
-      <EventSweeper events={events} now={nowTick} onChange={setEvents} />
+        onDragMove={onDragMove}
+        onDragEnd={onDragEnd}
+      />
     </div>
   );
-}
-
-/** 纯副作用组件：定期把过期事件从队列里摘掉（放这里是为了不改动主组件的状态更新顺序） */
-function EventSweeper({
-  events,
-  now,
-  onChange,
-}: {
-  events: PetEvent[];
-  now: number;
-  onChange: React.Dispatch<React.SetStateAction<PetEvent[]>>;
-}) {
-  React.useEffect(() => {
-    if (events.length === 0) return;
-    if (events.some((event) => now - event.at <= PET_EVENT_TTL_MS)) return;
-    onChange((prev) => prev.filter((event) => now - event.at <= PET_EVENT_TTL_MS));
-  }, [events, now, onChange]);
-  return null;
 }

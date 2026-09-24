@@ -70,7 +70,7 @@ SELECT/INSERT 全部收在 `core/src/svc/pomodoro.rs`，与 `workflow_state` 同
 这与 D4 的「解耦」一致：不存在「任务状态回滚了但专注历史还在」的不一致，因为两者本就不相关。
 该行为是显式决定，不是遗漏。
 
-### D6 宠物是应用内浮层，表情用 emoji + CSS
+### D6 宠物是应用内浮层，渲染交给可迁移的 grokbot 模块包
 
 不新增 Tauri 窗口：跨平台一致、不需要额外的 window 配置与 capabilities，
 也不会在用户不想要的时候霸占桌面；代价是随主窗口一起最小化（接受）。
@@ -78,11 +78,29 @@ SELECT/INSERT 全部收在 `core/src/svc/pomodoro.rs`，与 `workflow_state` 同
 - 心情优先级（`lib/petState.ts::moodOf`，纯函数）：
   **完成事件（TTL 8s）> 有阻塞任务 > 番茄阶段 > 打盹（空闲 10 分钟且无进行中任务）> 待机**。
   事件排最前是因为「刚发生的事」比持续状态更值得反馈；阻塞排阶段前是因为它更需要被注意。
-- 表情全部是 emoji + CSS 动画，**不引入任何图片或品牌素材**；「GrokBot」只作为功能名称使用。
+- 渲染交给自研模块包 `src/grokbot/`（见 D6.1）：SVG 果冻球 + 两根眼睛轮廓做**弹簧形变**，
+  表情 = 轮廓点集、动作 = 可注册的关键帧、颜色 = CSS 变量；**不引入任何图片或品牌素材**。
 - 拖拽用 Pointer Events + `setPointerCapture`（与侧栏拖宽同模式），松手吸附左右边缘；
   坐标、缩放、显隐经 `lib/petStore.ts` 单例共享（设置页与浮层同一份状态）。
 - 无障碍：本体是带 `aria-label` 的按钮，气泡是 `role="status"` 区域，方向键微调位置，Esc 收起气泡；
   动画与过渡全部包在 `@media (prefers-reduced-motion: reduce)` 的关闭分支内。
+
+### D6.1 宠物渲染做成可迁移的模块包（`src/grokbot/`）
+
+需求是「方便未来迁移到其他项目」且要支持**颜色 / 动作 / 表情自定义**，因此把渲染与业务策略彻底分开：
+
+- **包内**只认识「表情 / 状态 / 动作 / 主题」四类数据：不 import 应用代码、不依赖 React、不碰 zustand 与 Tauri；
+  React 只出现在可选的 `react.tsx` 适配层，核心入口 `index.ts` 不导出它，保证核心零框架依赖。
+- **应用侧**保留业务策略：`lib/petState.ts` 的 `moodOf`（心情判定）与 `GROKBOT_STATE_BY_MOOD`（心情 → 状态）、
+  `lib/petStore.ts`（配色与显示偏好）、`components/pet/GrokBot.tsx`（浮层定位、拖拽吸附、键盘可达）。
+  换项目时整目录拷走 `src/grokbot/`，业务侧重写几十行映射即可复用。
+- **三类自定义能力**（都有 API，且设置页有对应 UI）：`theme`（9 个颜色令牌 + 6 套预设 + 取色器）、
+  `registerAction`（关键帧 + 作用目标 body/eyes + 时长）、`registerExpression`（48 点轮廓，按同索引插值）、
+  `registerState`（表情池 + 动作 + 换表情节奏 + 眨眼）。
+- **样式隔离**：所有选择器与 `@keyframes` 都带实例作用域前缀（`gb-xxxxxx`），同页多实例或宿主同名类/动画都不冲突；
+  包自注入 `<style>`，迁移时不需要额外引 CSS。
+- **形变数学独立成纯函数**（`core/morph.ts`）：弹簧积分、眨眼曲线、拟 3D 球面投影都可单测，
+  避免「看起来不对但也不报错」的静默退化。
 
 ### D7 MCP 只暴露只读统计
 
@@ -108,8 +126,12 @@ SELECT/INSERT 全部收在 `core/src/svc/pomodoro.rs`，与 `workflow_state` 同
 - **新增 MCP 资源**：`todo-kanban://pomodoro`（5 → 6 resources；工具数不变）。
 - **新增前端**：`lib/pomodoro.ts`（纯逻辑）、`lib/pomodoroStore.ts`（运行态）、`lib/petState.ts`（纯逻辑）、
   `lib/petStore.ts`（偏好）、`pages/PomodoroPage.tsx`、`components/pomodoro/*`、`components/pet/GrokBot.tsx`。
+- **新增模块包**：`src/grokbot/`（自包含、零框架依赖，可整目录迁移；含 README 与三类自定义 API），
+  数据来源为 GrokBot 参考实现：25 组表情点集、39 个状态、6 个动作、6 套配色（见包内 README「出处」）。
 - **导航**：侧栏新增「番茄钟」（`/pomodoro`），顶栏新增紧凑指示器。
-- **测试**：`scripts/test-pomodoro.mjs`、`scripts/test-pet-state.mjs`（已并入 `npm run test:logic`）；
+- **测试**：`scripts/test-pomodoro.mjs`、`scripts/test-pet-state.mjs`、`scripts/test-grokbot.mjs`
+  （已并入 `npm run test:logic`；后者校验点集/状态/动作数据自洽、形变纯函数、样式作用域隔离，
+  以及「心情 → GrokBot 状态」映射指向真实存在的状态——引擎对未知状态是静默忽略的）；
   Rust 内联单测覆盖 `svc/pomodoro.rs`（7 例）、`db/schema.rs`（v13→v14）、`upgrade` 全链路、MCP 资源数。
 
 ## 未采纳的方案
