@@ -6,6 +6,8 @@ pub mod git_cmds;
 pub mod git_report;
 pub mod github;
 pub mod gitlab;
+/// 局域网共享（纯逻辑：共享范围过滤 / 合并 / 快照比较）
+pub mod lan;
 pub mod repo_cache;
 
 pub mod credentials;

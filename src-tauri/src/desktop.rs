@@ -69,6 +69,8 @@ pub fn on_run_event(app: &tauri::AppHandle, event: tauri::RunEvent) {
             api.prevent_exit();
             request_quit(app);
         }
+        // 进程退出：主动关闭局域网监听，避免退出瞬间端口仍短暂可达
+        tauri::RunEvent::Exit => crate::lan_server::stop(),
         #[cfg(target_os = "macos")]
         tauri::RunEvent::Reopen { .. } => {
             if let Some(window) = app.get_webview_window("main") {

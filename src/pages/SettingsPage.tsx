@@ -17,7 +17,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { ArrowRight, Bot, Braces, Eye, EyeOff, Paperclip, SquareKanban, Timer } from "lucide-react";
+import { ArrowRight, Bot, Braces, Eye, EyeOff, Paperclip, SquareKanban, Timer, Wifi } from "lucide-react";
 import { toast } from "sonner";
 import { gcOrphanAttachments, migrateInlineImages } from "@/lib/attachments";
 import { DEFAULT_MCP_TOKEN, mcpGetConfig, mcpSetConfig } from "@/lib/mcp";
@@ -39,6 +39,9 @@ import {
   type GrokBotTheme,
 } from "@/grokbot";
 import { GrokBotPet } from "@/grokbot/react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { DEFAULT_LAN_PORT, lanGetSettings, lanSetSettings, lanStatus, lanStop, type LanShareSettings, type LanStatus } from "@/lib/lan";
+import { useAppStore } from "@/lib/store";
 import { dbCheckVersion, type VersionReport } from "@/lib/version";
 
 export function SettingsPage() {
@@ -59,6 +62,15 @@ export function SettingsPage() {
   const [mcpToken, setMcpToken] = React.useState(DEFAULT_MCP_TOKEN);
   const [mcpShowToken, setMcpShowToken] = React.useState(false);
   const [mcpSaving, setMcpSaving] = React.useState(false);
+  // ── 局域网共享：设置（app_meta 持久化）+ 服务运行状态 ──────────
+  const projects = useAppStore((s) => s.projects);
+  const [lanEnabled, setLanEnabled] = React.useState(false);
+  const [lanPort, setLanPort] = React.useState(String(DEFAULT_LAN_PORT));
+  const [lanToken, setLanToken] = React.useState("");
+  const [lanProjects, setLanProjects] = React.useState<string[]>([]);
+  const [lanShowToken, setLanShowToken] = React.useState(false);
+  const [lanSaving, setLanSaving] = React.useState(false);
+  const [lan, setLan] = React.useState<LanStatus | null>(null);
   const [tools, setTools] = React.useState<ToolPath[]>([]);
   const [toolError, setToolError] = React.useState("");
   React.useEffect(() => {
@@ -143,6 +155,83 @@ export function SettingsPage() {
       toast.error(String(e));
     } finally {
       setMaintaining(false);
+    }
+  };
+
+  // 局域网设置读取：进入设置页时拉一次配置与运行状态
+  React.useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        const settings = await lanGetSettings();
+        if (!alive) return;
+        setLanEnabled(settings.enabled);
+        setLanPort(String(settings.port));
+        setLanToken(settings.token);
+        setLanProjects(settings.projectIds);
+      } catch { /* 读取失败保留默认值 */ }
+      try {
+        const status = await lanStatus();
+        if (alive) setLan(status);
+      } catch { /* 状态读取失败不影响配置展示 */ }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  // 运行中时轮询在线设备数（5s；页面隐藏不轮询）
+  React.useEffect(() => {
+    if (!lan?.running) return;
+    const timer = window.setInterval(() => {
+      if (document.hidden) return;
+      void lanStatus().then(setLan).catch(() => {});
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [lan?.running]);
+
+  const toggleLanProject = (id: string, checked: boolean) => {
+    setLanProjects((list) => (checked ? Array.from(new Set([...list, id])) : list.filter((item) => item !== id)));
+  };
+
+  const regenerateLanToken = () => {
+    const raw = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID().replace(/-/g, "") : String(Date.now());
+    setLanToken(raw.slice(0, 24));
+  };
+
+  const saveLan = async () => {
+    const port = Number.parseInt(lanPort, 10);
+    if (!Number.isFinite(port) || port < 1024 || port > 65535) {
+      toast.error("端口需在 1024 ~ 65535 之间");
+      return;
+    }
+    setLanSaving(true);
+    try {
+      const next: LanShareSettings = { enabled: lanEnabled, port, token: lanToken.trim(), projectIds: lanProjects };
+      const status = await lanSetSettings(next);
+      setLan(status);
+      if (status.error) toast.error(status.error);
+      else toast.success(status.running ? "局域网共享已开启" : "局域网共享设置已保存");
+    } catch (error) {
+      toast.error(String(error));
+    } finally {
+      setLanSaving(false);
+    }
+  };
+
+  const stopLan = async () => {
+    try {
+      setLan(await lanStop());
+      toast.success("局域网共享已停止");
+    } catch (error) {
+      toast.error(String(error));
+    }
+  };
+
+  const copyLanUrl = async (url: string) => {
+    try {
+      await navigator.clipboard.writeText(url);
+      toast.success("访问地址已复制");
+    } catch {
+      toast.error("复制失败，请手动选择复制");
     }
   };
 
@@ -451,6 +540,94 @@ export function SettingsPage() {
                 ；MCP server 启动需携带此 Token（--token 参数或 MCP_TODO_TOKEN 环境变量）。
               </p>
             </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Wifi className="h-4 w-4 text-primary" />
+              局域网共享
+            </CardTitle>
+            <CardDescription>
+              勾选项目后，同一局域网内的其他设备用浏览器打开下方地址，即可查看该项目的待办面板并创建 / 分配 / 完成 / 删除任务；
+              任意设备（含本机）的改动都会实时同步到其它已连接设备。
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <span className="text-sm font-medium">启用局域网共享服务</span>
+                <p className="text-xs text-muted-foreground">只有被勾选的项目会暴露给局域网，未勾选项目的数据不会被发送。</p>
+              </div>
+              <Switch checked={lanEnabled} onCheckedChange={setLanEnabled} />
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="lan-port">监听端口</Label>
+                <Input id="lan-port" inputMode="numeric" value={lanPort} onChange={(event) => setLanPort(event.target.value)} className="font-mono" />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="lan-token">访问令牌</Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="lan-token"
+                    type={lanShowToken ? "text" : "password"}
+                    value={lanToken}
+                    onChange={(event) => setLanToken(event.target.value)}
+                    className="font-mono"
+                    placeholder="留空 = 局域网内免验证"
+                  />
+                  <Button type="button" variant="outline" size="icon" aria-label="显示或隐藏访问令牌" onClick={() => setLanShowToken((value) => !value)}>
+                    {lanShowToken ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                  </Button>
+                  <Button type="button" variant="outline" onClick={regenerateLanToken}>重新生成</Button>
+                </div>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <span className="text-sm font-medium">共享项目</span>
+              {projects.filter((project) => !project.archived).length === 0 ? (
+                <p className="text-xs text-muted-foreground">还没有可共享的项目。</p>
+              ) : (
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {projects.filter((project) => !project.archived).map((project) => (
+                    <label key={project.id} className="flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm">
+                      <Checkbox
+                        checked={lanProjects.includes(project.id)}
+                        onCheckedChange={(checked) => toggleLanProject(project.id, checked === true)}
+                      />
+                      <span className="truncate">{project.name}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button onClick={saveLan} disabled={lanSaving}>{lanSaving ? "保存中…" : "保存并应用"}</Button>
+              {lan?.running && <Button variant="outline" onClick={stopLan}>停止服务</Button>}
+            </div>
+            {lan && (
+              <div className="space-y-2 rounded-lg border bg-muted/30 p-3 text-sm">
+                <div className="flex items-center gap-2">
+                  <span className={cn("h-2 w-2 rounded-full", lan.running ? "bg-emerald-500" : "bg-muted-foreground")} />
+                  <span>{lan.running ? "运行中 · " + lan.clientCount + " 台设备在线" : "未运行"}</span>
+                </div>
+                {lan.error && <p role="alert" className="text-destructive">{lan.error}</p>}
+                {lan.urls.length > 0 && (
+                  <div className="space-y-1">
+                    <p className="text-xs text-muted-foreground">其他设备在浏览器打开（把地址发给对方；第一个通常是本机主网卡，虚拟网卡地址可忽略）：</p>
+                    {lan.urls.map((url) => (
+                      <div key={url} className="flex items-center gap-2">
+                        <code className="min-w-0 flex-1 truncate rounded bg-background px-2 py-1 font-mono text-xs">{url}</code>
+                        <Button type="button" size="sm" variant="ghost" onClick={() => void copyLanUrl(url)}>复制</Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <p className="text-xs text-muted-foreground">首次开启时若系统弹出防火墙提示，请允许该应用访问专用网络，否则局域网设备无法连接。</p>
+              </div>
+            )}
           </CardContent>
         </Card>
 

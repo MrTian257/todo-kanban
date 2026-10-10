@@ -17,6 +17,9 @@ import { frontSortOrder } from "@/lib/manualOrder";
 import { flushPersistence, useAppStore } from "@/lib/store";
 import type { LibraryResource } from "@/lib/types";
 import { newId } from "@/lib/utils";
+import { useShortcut } from "@/lib/shortcuts";
+import { formatShortcut } from "@/lib/shortcutKeys";
+import { isMacOS } from "@/lib/platform";
 
 /** 新建资料的哨兵 id（与待办详情页的 new 一致）。 */
 const NEW = "new";
@@ -125,6 +128,14 @@ function ResourceEditorForm({ resourceId }: { resourceId: string }) {
     }
   };
 
+  // 快捷键：保存（等价于点「保存资料」；与页内 form 的 onSubmit 同一个 save()）
+  useShortcut("save", () => {
+    if (saving) return;
+    void save();
+  });
+  // 快捷键：关闭资料编辑（走既有 leave，脏状态由 NavigationGuard 统一拦截）
+  useShortcut("close-detail", () => leave());
+
   if (!isNew && !resource) {
     return (
       <div className="tk-page h-full overflow-y-auto">
@@ -164,11 +175,12 @@ function ResourceEditorForm({ resourceId }: { resourceId: string }) {
         {resource && (
           <span className="text-xs text-muted-foreground">更新于 {new Date(resource.updatedAt).toLocaleString()}</span>
         )}
-        <span className="ml-auto text-xs text-muted-foreground">
+        <span className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
           {saving ? "正在保存…" : dirty ? "有未保存的修改" : isNew ? "填写资料内容" : "所有修改已保存"}
+          <kbd className="tk-kbd">{formatShortcut("save", isMacOS)}</kbd>
         </span>
         {/* 顶栏按钮用 form= 关联表单：既是真正提交按钮（回车可保存），又只触发一次 onSubmit */}
-        <Button type="submit" form="resource-form" className="gap-2" disabled={saving}>
+        <Button type="submit" form="resource-form" className="gap-2" disabled={saving} title={`${formatShortcut("save", isMacOS)} 保存资料`}>
           <Save className="h-4 w-4" />
           {saving ? "保存中…" : "保存资料"}
         </Button>

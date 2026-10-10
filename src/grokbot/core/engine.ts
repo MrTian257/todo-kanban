@@ -67,7 +67,7 @@ export class GrokBotEngine {
 
   private root!: HTMLDivElement;
   private svg!: SVGSVGElement;
-  private eyesGroup!: SVGGElement;
+  // 眼睛容器不做逐帧改写，只保留逐条 path 引用（容器本身仅用于裁剪与分组）
   private eyePaths: SVGPathElement[] = [];
   private bubble!: HTMLDivElement;
   private bubbleText!: HTMLSpanElement;
@@ -362,7 +362,6 @@ export class GrokBotEngine {
 
     this.root = root;
     this.svg = svg;
-    this.eyesGroup = eyes;
     this.bubble = bubble;
     this.bubbleText = bubbleText;
   }

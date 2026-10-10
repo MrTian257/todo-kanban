@@ -3,6 +3,9 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { GitBranch, Pencil, Plus, Search, Settings2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { formatShortcut } from "@/lib/shortcutKeys";
+import { isMacOS } from "@/lib/platform";
 import { RefreshCommitsButton } from "@/components/board/RefreshCommitsButton";
 import { SwimlaneBoard } from "@/components/board/SwimlaneBoard";
 import { ProjectFormDialog } from "@/components/project/ProjectFormDialog";
@@ -40,7 +43,13 @@ export function BoardPage() {
         <RefreshCommitsButton todoIds={todos.filter(t => t.projectId === project.id && !t.archived).map(t => t.id)} />
         <Button variant="outline" className="gap-2 bg-card" onClick={() => setManage(true)}><Settings2 className="h-4 w-4" />管理泳道</Button>
         <Button variant="outline" className="gap-2 bg-card" onClick={() => setEdit(true)}><Pencil className="h-4 w-4" />编辑项目</Button>
-        <Button className="gap-2" onClick={() => navigate(`/project/${project.id}/todo/new`)}><Plus className="h-4 w-4" />新建待办</Button>
+        {/* 新建待办也可以按全局快捷键（ShortcutLifecycle 注册的 new-todo） */}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button className="gap-2" onClick={() => navigate(`/project/${project.id}/todo/new`)}><Plus className="h-4 w-4" />新建待办</Button>
+          </TooltipTrigger>
+          <TooltipContent>{formatShortcut("new-todo", isMacOS)}</TooltipContent>
+        </Tooltip>
       </div>
     </header>
 

@@ -1,4 +1,5 @@
 import { WorkflowLifecycle } from "@/components/workflow/WorkflowLifecycle";
+import { ShortcutLifecycle } from "@/components/layout/ShortcutLifecycle";
 import { NavigationGuard } from "@/components/layout/NavigationGuard";
 import { DesktopLifecycle } from "@/components/layout/DesktopLifecycle";
 // 路由根：HashRouter + ThemeProvider + TooltipProvider + Toaster + ContextMenuOverlay + SidebarLayout
@@ -14,6 +15,7 @@ import { SidebarLayout } from "@/components/layout/SidebarLayout";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { VersionBlockedPage } from "@/components/version/VersionBlockedPage";
 import { GrokBot } from "@/components/pet/GrokBot";
+import { PomodoroAlert } from "@/components/pomodoro/PomodoroAlert";
 import { useAppStore, startExternalSync, startGitCacheWarm } from "@/lib/store";
 import { initPomodoro } from "@/lib/pomodoroStore";
 import { initDisplaySize, initSkin } from "@/lib/theme";
@@ -108,9 +110,13 @@ function Application() {
     <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
       <TooltipProvider delayDuration={0}>
         <Toaster position="bottom-right" richColors />
+        {/* 番茄阶段结束提醒：GrokBot 表情弹窗（取代原来的纯文字 toast） */}
+        <PomodoroAlert />
         <ContextMenuOverlay />
         <DesktopLifecycle />
         <WorkflowLifecycle />
+        {/* 全局快捷键：新建待办、快捷键速查（页面级快捷键由各页面自行注册） */}
+        <ShortcutLifecycle />
         {versionBlocked && versionReport ? (
           <VersionBlockedPage report={versionReport} onRetry={() => window.location.reload()} />
         ) : (

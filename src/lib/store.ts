@@ -9,6 +9,7 @@ import { collectWarmRepos, warmRepos } from "./repoWarm";
 import { create } from "zustand";
 import { AppState, CommitInfo, LibraryResource, Project, Swimlane, Todo } from "./types";
 import { isTauri, loadState, saveState, pollState } from "./storage";
+import { listen } from "@tauri-apps/api/event";
 import { normalizeProject, normalizeState, swimlaneForStatus } from "./normalize";
 import { gitInfoCached } from "./git";
 
@@ -467,10 +468,18 @@ export function startExternalSync() {
   const timer = isTauri() ? window.setInterval(() => { if (!document.hidden) void sync(); }, 2000) : null;
   const focus = () => { if (isTauri()) void sync(); };
   window.addEventListener("focus", focus);
+  // 局域网访客写入后后端会广播事件：收到即刻同步，不必等 2s 轮询（轮询仍是兜底）
+  let stopLanEvent: (() => void) | undefined;
+  if (isTauri()) {
+    void listen("lan-state-changed", () => { if (!stopped) void sync(); })
+      .then((unlisten) => { if (stopped) unlisten(); else stopLanEvent = unlisten; })
+      .catch(() => { /* 事件通道不可用时仍有 2s 轮询兜底 */ });
+  }
   const stop = () => {
     stopped = true;
     if (timer !== null) clearInterval(timer);
     window.removeEventListener("focus", focus);
+    stopLanEvent?.();
     if (stopSync === stop) stopSync = null;
   };
   stopSync = stop;

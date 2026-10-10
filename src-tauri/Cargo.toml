@@ -26,6 +26,12 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 log = "0.4"
 todo-kanban-core = { path = "core" }
+# 局域网共享：内嵌 HTTP 服务（访客面板 + REST + SSE 实时推送）
+axum = "0.8"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "net", "time"] }
+futures-util = "0.3"
+# 局域网访问地址展示：枚举本机网卡 IPv4
+if-addrs = "0.13"
 
 # macOS：接管 applicationShouldTerminate: 让 Dock「退出」也走保存保护
 [target.'cfg(target_os = "macos")'.dependencies]

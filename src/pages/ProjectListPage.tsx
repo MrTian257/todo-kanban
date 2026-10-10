@@ -1,10 +1,10 @@
 import { projectTaskCounts } from "@/lib/listPerformance";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { deleteWithUndo } from "@/lib/deleteWithUndo";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
-import { Archive, ArchiveRestore, ArrowRight, Bot, FolderKanban, GitBranch, GripVertical, MoreHorizontal, Pencil, Plus, Search, Trash2 } from "lucide-react";
+import { Archive, ArchiveRestore, ArrowRight, Bot, FolderKanban, GitBranch, GripVertical, MoreHorizontal, Pencil, Plus, Search, Trash2, Wifi } from "lucide-react";
 import { DndContext, DragOverlay, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, arrayMove, rectSortingStrategy, sortableKeyboardCoordinates, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -15,6 +15,8 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { ProjectFormDialog } from "@/components/project/ProjectFormDialog";
 import { flushPersistence, useAppStore } from "@/lib/store";
 import { branchCodeOf, branchDisplayName, BRANCH_ACTION_LABEL, BRANCH_ROLE_LABEL, type Project } from "@/lib/types";
+import { lanGetSettings, lanSetSettings, type LanShareSettings } from "@/lib/lan";
+import { isTauri } from "@/lib/storage";
 import { cn } from "@/lib/utils";
 
 // 项目列表：卡片可拖拽排序（projects.sort_order，数据版本 v13）。
@@ -31,6 +33,10 @@ export function ProjectListPage() {
   const [open,setOpen]=useState(false),[editing,setEditing]=useState<Project|null>(null),[query,setQuery]=useState(""),[archived,setArchived]=useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Project | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
+  // 局域网共享：卡片上按项目开关（服务未开启时开启即自动拉起；取消最后一个共享项目即停服）
+  const [lanSettings, setLanSettings] = useState<LanShareSettings | null>(null);
+  // 同步镜像：连点两个项目时，第二次不能用旧列表覆盖第一次的结果
+  const lanRef = useRef<LanShareSettings | null>(null);
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
@@ -54,6 +60,41 @@ export function ProjectListPage() {
     if (from < 0 || to < 0) return;
     commitProjectOrder(arrayMove(visibleIds, from, to));
   };
+  useEffect(() => {
+    let alive = true;
+    void lanGetSettings()
+      .then(settings => { if (alive) { lanRef.current = settings; setLanSettings(settings); } })
+      .catch(() => { /* 浏览器预览 / 无数据源：保持未共享 */ });
+    return () => { alive = false; };
+  }, []);
+  const sharedIds = new Set(lanSettings?.projectIds ?? []);
+  const toggleShare = async (p: Project) => {
+    if (!isTauri()) { toast.error("浏览器预览不支持局域网共享，请在桌面端使用"); return; }
+    const current = lanRef.current;
+    if (!current) return;
+    const shared = current.projectIds.includes(p.id);
+    const projectIds = shared ? current.projectIds.filter(id => id !== p.id) : [...current.projectIds, p.id];
+    // 取消最后一个共享项目 = 停止服务；开启共享自动拉起服务（端口/令牌沿用设置页配置）
+    const next: LanShareSettings = { ...current, enabled: projectIds.length > 0, projectIds };
+    lanRef.current = next;
+    setLanSettings(next);
+    try {
+      const status = await lanSetSettings(next);
+      if (status.error) {
+        lanRef.current = current;
+        setLanSettings(current);
+        toast.error(status.error);
+      } else if (shared) {
+        toast.success(`已取消共享「${p.name}」`);
+      } else {
+        toast.success(`已共享「${p.name}」${status.urls[0] ? "：" + status.urls[0] : ""}`, { duration: 8000 });
+      }
+    } catch (error) {
+      lanRef.current = current;
+      setLanSettings(current);
+      toast.error(String(error));
+    }
+  };
   return <div className="tk-page h-full overflow-y-auto"><div className="w-full">
     <div className="tk-eyebrow">工作空间 / 项目管理</div>
     <header className="mb-7 flex items-center justify-between gap-4"><div><h1 className="tk-page-heading">项目资料</h1><p className="mt-2 text-sm text-muted-foreground">把任务、代码与进展，整理在一起；拖动卡片左侧手柄调整顺序，新建项目默认排在最前。</p></div><Button className="gap-2" onClick={create}><Plus className="h-4 w-4"/>新建项目</Button></header>
@@ -67,7 +108,7 @@ export function ProjectListPage() {
     >
       <SortableContext items={visibleIds} strategy={rectSortingStrategy}>
         <div className="grid grid-cols-1 gap-5 lg:grid-cols-2 2xl:grid-cols-3">
-          {visible.map(p => <ProjectCard key={p.id} project={p} count={counts.get(p.id) ?? {total:0,doing:0,done:0}} onEdit={()=>{setEditing(p);setOpen(true);}} onToggleArchive={()=>toggleArchive(p)} onDelete={()=>setDeleteTarget(p)} onEnter={()=>setActiveProjectId(p.id)} />)}
+          {visible.map(p => <ProjectCard key={p.id} project={p} count={counts.get(p.id) ?? {total:0,doing:0,done:0}} shared={sharedIds.has(p.id)} onToggleShare={()=>void toggleShare(p)} onEdit={()=>{setEditing(p);setOpen(true);}} onToggleArchive={()=>toggleArchive(p)} onDelete={()=>setDeleteTarget(p)} onEnter={()=>setActiveProjectId(p.id)} />)}
         </div>
       </SortableContext>
       <DragOverlay dropAnimation={null}>
@@ -81,9 +122,12 @@ export function ProjectListPage() {
 }
 
 /** 单个项目卡：只有左侧手柄能起拖，卡片内的链接 / 菜单 / 统计不受影响。 */
-function ProjectCard({ project: p, count, onEdit, onToggleArchive, onDelete, onEnter }: {
+function ProjectCard({ project: p, count, shared, onToggleShare, onEdit, onToggleArchive, onDelete, onEnter }: {
   project: Project;
   count: Counts;
+  /** 该项目是否已在局域网共享列表中 */
+  shared: boolean;
+  onToggleShare: () => void;
   onEdit: () => void;
   onToggleArchive: () => void;
   onDelete: () => void;
@@ -114,6 +158,17 @@ function ProjectCard({ project: p, count, onEdit, onToggleArchive, onDelete, onE
     {p.branchRule?.enabled&&!!p.branchRule.steps.length&&<details className="mt-4 text-xs text-muted-foreground"><summary className="cursor-pointer">分支流程 · {p.branchRule.steps.length} 个步骤</summary>
       {!!p.branchRule.branches?.length&&<div className="mt-3 flex flex-wrap gap-1.5">{p.branchRule.branches.map(b=><span key={b.role} className="rounded bg-muted/60 px-2 py-1"><span className="text-foreground/80">{b.name||BRANCH_ROLE_LABEL[b.role]||b.role}</span> <span className="font-mono text-[10px]">{b.code}</span></span>)}</div>}
       <ol className="mt-3 space-y-2">{p.branchRule.steps.map((s,i)=><li key={s.id}>{i+1}. {branchDisplayName(p.branchRule,s.from)} {BRANCH_ACTION_LABEL[s.action]} {branchDisplayName(p.branchRule,s.to)}{(branchCodeOf(p.branchRule,s.from)||branchCodeOf(p.branchRule,s.to))&&<span className="ml-1.5 font-mono text-[10px]">[{branchCodeOf(p.branchRule,s.from)||"?"} → {branchCodeOf(p.branchRule,s.to)||"?"}]</span>}</li>)}</ol></details>}
-    <div className="mt-5 flex items-center justify-between border-t pt-4 text-xs"><span className="text-muted-foreground">{p.swimlanes?.length??0} 个泳道</span><Link to={`/project/${p.id}`} onClick={onEnter} className="flex items-center gap-1.5 font-medium text-primary">进入看板<ArrowRight className="h-3.5 w-3.5"/></Link></div>
+    <div className="mt-5 flex items-center gap-3 border-t pt-4 text-xs">
+      <span className="text-muted-foreground">{p.swimlanes?.length??0} 个泳道</span>
+      <button
+        type="button"
+        onClick={onToggleShare}
+        title={shared ? "取消局域网共享" : "共享到局域网：其他设备用浏览器打开访问地址即可查看 / 管理该项目待办"}
+        className={cn("flex items-center gap-1 rounded-md border px-2 py-1 transition-colors", shared ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-primary")}
+      >
+        <Wifi className="h-3 w-3"/>{shared ? "已共享" : "共享"}
+      </button>
+      <Link to={`/project/${p.id}`} onClick={onEnter} className="ml-auto flex items-center gap-1.5 font-medium text-primary">进入看板<ArrowRight className="h-3.5 w-3.5"/></Link>
+    </div>
   </article>;
 }

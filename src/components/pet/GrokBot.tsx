@@ -198,7 +198,11 @@ export function GrokBot() {
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.key === "Escape") {
-      engineRef.current?.hideBubble();
+      // 只有真的收起了气泡才拦截：否则会把全局的 Esc「关闭详情」也一起吞掉
+      if (engineRef.current?.isBubbleVisible()) {
+        engineRef.current.hideBubble();
+        event.stopPropagation();
+      }
       return;
     }
     if (event.key === "Enter" || event.key === " ") {

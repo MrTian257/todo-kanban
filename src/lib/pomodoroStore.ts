@@ -10,7 +10,6 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { useSyncExternalStore } from "react";
-import { toast } from "sonner";
 import { isTauri } from "./storage";
 import { newId } from "./utils";
 import {
@@ -40,6 +39,23 @@ const RUNTIME_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 const STATS_DAYS = 30;
 const RECENT_LIMIT = 50;
 
+/** 阶段结束提醒的类型：决定 GrokBot 用哪个表情来演 */
+export type PomodoroAlertKind = "focus_done" | "break_done" | "restored";
+
+/**
+ * 番茄阶段结束的应用内提醒（由 components/pomodoro/PomodoroAlert 渲染成 GrokBot 表情弹窗）。
+ * 放在 store 而不是组件里：结束动作发生在非 React 的计时回调（tick）与启动恢复路径里。
+ */
+export interface PomodoroAlert {
+  /** 每次弹出都换新 id：组件据此重置自动收起计时 */
+  id: string;
+  kind: PomodoroAlertKind;
+  title: string;
+  body: string;
+  /** 接下来进入的阶段（用于「开始下一轮」）；补记场景为 null */
+  nextPhase: PomodoroPhase | null;
+}
+
 export interface PomodoroState {
   config: PomodoroConfig;
   phase: PomodoroPhase;
@@ -65,6 +81,8 @@ export interface PomodoroState {
   loading: boolean;
   /** 最近一次读取/写入错误（仅界面提示，不阻断计时） */
   error: string;
+  /** 阶段结束提醒；null = 当前没有待展示的提醒 */
+  alert: PomodoroAlert | null;
 }
 
 function initialState(): PomodoroState {
@@ -85,6 +103,7 @@ function initialState(): PomodoroState {
     recent: [],
     loading: false,
     error: "",
+    alert: null,
   };
 }
 
@@ -121,6 +140,11 @@ export function usePomodoroStats(): PomodoroStats | null {
 
 export function usePomodoroRecent(): PomodoroSession[] {
   return useSyncExternalStore(subscribe, () => state.recent);
+}
+
+/** 阶段结束提醒（GrokBot 表情弹窗的数据源） */
+export function usePomodoroAlert(): PomodoroAlert | null {
+  return useSyncExternalStore(subscribe, () => state.alert);
 }
 
 /** 统计面板需要的四元组（loading/error 是原始值，变化频率很低） */
@@ -283,7 +307,18 @@ function playChime(): void {
 }
 
 async function systemNotify(title: string, body: string): Promise<void> {
-  if (!isTauri()) return;
+  if (!isTauri()) {
+    // 浏览器预览没有 Tauri 通知插件，退回 Web Notification。
+    // 只在**已授权**时发送，不主动弹权限请求（避免打扰）；应用内的 GrokBot 表情弹窗才是主通道。
+    try {
+      if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+        new Notification(title, { body });
+      }
+    } catch {
+      /* 通知不可用不影响弹窗与计时 */
+    }
+    return;
+  }
   try {
     await invoke("desktop_notify", { title, body });
   } catch (error) {
@@ -419,18 +454,26 @@ async function finishPhase(completed: boolean): Promise<void> {
 
   if (shouldRecord(session)) await persistSession(session);
 
-  // 提醒三件套：只在"自然走完"时触发，跳过/重置是用户主动行为，不需要打扰。
-  // 应用内 toast 恒定触发（系统通知可能被权限拦掉，界面反馈必须有兜底）。
+  // 提醒：只在"自然走完"时触发，跳过/重置是用户主动行为，不需要打扰。
+  // 应用内换成 GrokBot 表情弹窗（比纯文字 toast 更能一眼看出发生了什么），
+  // 系统通知保留为窗口不在前台时的兜底（它渲染不了 SVG 表情）。
   if (completed) {
     const title = current.phase === "focus" ? "专注完成" : "休息结束";
     const body =
       current.phase === "focus"
         ? `已完成一轮专注，接下来是${PHASE_LABEL[next]}。`
         : "休息结束，开始下一轮专注吧。";
-    if (current.phase === "focus") toast.success(body);
-    else toast.info(body);
+    setState({
+      alert: {
+        id: newId(),
+        kind: current.phase === "focus" ? "focus_done" : "break_done",
+        title,
+        body,
+        nextPhase: next,
+      },
+    });
     if (current.config.sound) playChime();
-    if (current.config.notify) await systemNotify(title, body);
+    if (current.config.notify) await systemNotify("GrokBot · " + title, body);
   }
 
   // 自动接续下一阶段：复用同一入口，保证新建会话 id / 快照 / ticker 的初始化路径唯一
@@ -523,11 +566,43 @@ export function setPomodoroConfig(patch: Partial<PomodoroConfig>): void {
   });
 }
 
-/** 申请系统通知权限并发一条测试通知（设置页用） */
+/** 收起阶段提醒（用户点「知道了」/ 关闭按钮，或组件自动超时） */
+export function dismissPomodoroAlert(): void {
+  if (state.alert === null) return;
+  setState({ alert: null });
+}
+
+/**
+ * 从提醒里直接开始下一阶段（只有 autoStartNext 关闭时才会显示这个按钮）。
+ * 期间用户可能已经自己开始了下一轮，所以要在「仍停在等待开始」时才能接管。
+ */
+export function startNextPhaseFromAlert(): void {
+  const alert = state.alert;
+  dismissPomodoroAlert();
+  if (!alert || alert.nextPhase === null) return;
+  if (state.running || state.phase !== alert.nextPhase) return;
+  startPomodoro();
+}
+
+/**
+ * 申请系统通知权限并发一条测试通知（设置页用）。
+ * 先弹一次应用内的 Grok 表情提醒：这样即使系统通知不可用（浏览器预览 / 未授权），
+ * 用户也能看到「阶段结束时到底长什么样」。
+ */
 export async function testPomodoroNotification(): Promise<void> {
-  if (!isTauri()) throw new Error("浏览器预览模式不支持系统通知");
+  setState({
+    alert: {
+      id: newId(),
+      kind: "focus_done",
+      title: "通知测试",
+      body: "阶段结束时就会这样弹出 GrokBot 表情提醒。",
+      // 测试不该提供「开始下一轮」——现在并没有真的走完一个阶段
+      nextPhase: null,
+    },
+  });
+  if (!isTauri()) throw new Error("浏览器预览模式没有系统通知（已展示应用内的 Grok 表情提醒）");
   await invoke("desktop_enable_notifications");
-  await invoke("desktop_notify", { title: "番茄钟通知测试", body: "看到这条说明系统通知已就绪。" });
+  await invoke("desktop_notify", { title: "GrokBot · 番茄钟通知测试", body: "看到这条说明系统通知已就绪。" });
 }
 
 // ── 初始化 ────────────────────────────────────────────────
@@ -576,7 +651,15 @@ export async function initPomodoro(): Promise<void> {
       };
       await persistSession(session);
       // 只提示一次：应用关闭期间走完的轮次不会因为多次 tick 重复弹窗（这里根本没有 tick）
-      toast.info("上次的专注已经结束，已补记到统计");
+      setState({
+        alert: {
+          id: newId(),
+          kind: "restored",
+          title: "上次的专注已结束",
+          body: "这一轮是在应用关闭期间走完的，已补记到统计。",
+          nextPhase: null,
+        },
+      });
       const completedThisRound = snapshot.phase === "focus";
       setState({
         completedFocusCount: completedThisRound

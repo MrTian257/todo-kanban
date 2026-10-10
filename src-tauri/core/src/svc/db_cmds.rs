@@ -9,7 +9,7 @@ use crate::db;
 use crate::error::{AppError, AppResult};
 use crate::models::{
     DbBranchDef, DbBranchRule, DbBranchRuleStep, DbProject, DbState, DbSwimlane, DbTodo,
-    McpSettings,
+    LanShareSettings, McpSettings,
 };
 use crate::svc::attachments;
 use rusqlite::{Connection, OptionalExtension};
@@ -623,6 +623,118 @@ pub fn mcp_set_config(s: McpSettings) -> AppResult<()> {
     Ok(())
 }
 
+// ── 局域网共享（app_meta 持久化配置 + 访客范围读写编排） ─────────────
+
+/// app_meta 键：局域网共享设置 JSON
+const LAN_SETTINGS_KEY: &str = "lan_share_settings";
+
+/// 读取局域网共享设置（无数据源 -> 默认关闭；旧库缺键 -> 默认并自动生成 Token）
+pub fn lan_get_settings() -> AppResult<LanShareSettings> {
+    let path = db_path()?;
+    if !path.exists() {
+        return Ok(LanShareSettings::default());
+    }
+    lan_read_from_db(&path)
+}
+
+/// 从指定库文件读取局域网共享设置（启动自举与服务状态复用）
+pub fn lan_read_from_db(path: &Path) -> AppResult<LanShareSettings> {
+    let conn = db::open_existing(path, false)?;
+    let raw = read_meta(&conn, LAN_SETTINGS_KEY)?;
+    Ok(match raw {
+        Some(text) => serde_json::from_str(&text).unwrap_or_else(|error| {
+            log::warn!("局域网共享设置解析失败，回退默认值：{error}");
+            LanShareSettings::default()
+        }),
+        None => LanShareSettings::default(),
+    })
+}
+
+/// 保存局域网共享设置（写 app_meta；仅配置，不触发业务快照写链）
+pub fn lan_set_settings(settings: LanShareSettings) -> AppResult<()> {
+    let path = db_path()?;
+    let conn = db::open(&path)?;
+    db::init(&conn)?;
+    let raw = serde_json::to_string(&settings)?;
+    write_meta(&conn, LAN_SETTINGS_KEY, &raw)?;
+    Ok(())
+}
+
+/// 访客可见状态（共享项目 + 其待办；已按写入口径归一化，可直接与访客回写快照比较）
+pub fn lan_scoped_state(settings: &LanShareSettings) -> AppResult<Option<DbState>> {
+    lan_scoped_state_at(&db_path()?, settings)
+}
+
+/// 与数据文件同目录的备份目录（正式路径与单测路径共用同一推导规则）
+fn backup_dir_for(path: &Path) -> PathBuf {
+    path.parent()
+        .map(|dir| dir.join("backup"))
+        .unwrap_or_else(|| PathBuf::from("backup"))
+}
+
+/// 指定库文件的访客可见状态（路径可注入，便于单测完全绕开固定数据目录）
+fn lan_scoped_state_at(path: &Path, settings: &LanShareSettings) -> AppResult<Option<DbState>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let _guard = DB_RW_LOCK
+        .lock()
+        .map_err(|_| AppError::invalid("读锁获取失败"))?;
+    let (conn, _report) = db::open_and_init(path, &backup_dir_for(path))?;
+    let tx = conn.unchecked_transaction()?;
+    let state = db::load_state(&tx)?;
+    tx.commit()?;
+    let scope = crate::svc::lan::scope_ids(settings);
+    let mut scoped = crate::svc::lan::filter_state(&state, &scope);
+    db::row::normalize_for_compare(&mut scoped);
+    Ok(Some(scoped))
+}
+
+/// 访客写入：共享范围内并发校验 -> 合并回全量 -> 走同一差异写链
+/// （seq 取号 / 泳道校验 / 提交去重仍由 db::save_state_checked 负责）
+pub fn lan_save_scoped(
+    payload: DbState,
+    expected: DbState,
+    settings: &LanShareSettings,
+) -> AppResult<DbState> {
+    lan_save_scoped_at(&db_path()?, payload, expected, settings)
+}
+
+/// 指定库文件的访客写入（路径可注入，便于单测；写锁全程互斥）
+fn lan_save_scoped_at(
+    path: &Path,
+    payload: DbState,
+    expected: DbState,
+    settings: &LanShareSettings,
+) -> AppResult<DbState> {
+    let scope = crate::svc::lan::scope_ids(settings);
+    if scope.is_empty() {
+        return Err(AppError::invalid("未共享任何项目，写入被拒绝"));
+    }
+    let _guard = DB_RW_LOCK
+        .lock()
+        .map_err(|_| AppError::invalid("写锁获取失败"))?;
+    let (conn, _report) = db::open_and_init(path, &backup_dir_for(path))?;
+    // 库内全量快照：既做共享范围校验，也作为 /api/save 的 expected，防止并发覆盖
+    let mut current = db::load_state(&conn)?;
+    db::row::normalize_for_compare(&mut current);
+    let mut expected = expected;
+    db::row::normalize_for_compare(&mut expected);
+    if !crate::svc::lan::same_scoped(&current, &expected, &scope) {
+        return Err(AppError::invalid(
+            "STATE_CONFLICT: 数据已被其他设备修改，请刷新后重试",
+        ));
+    }
+    let merged = crate::svc::lan::merge_todos(&current, &payload, &scope)?;
+    let (saved, trash) = db::save_state_checked(&conn, &merged, &current)?;
+    if !trash.is_empty() {
+        attachments::move_to_trash_at(&attachments::attachments_root_at(path), &trash);
+    }
+    let mut scoped = crate::svc::lan::filter_state(&saved, &scope);
+    db::row::normalize_for_compare(&mut scoped);
+    Ok(scoped)
+}
+
 /// 扩展保存（备份恢复 / 提案应用）：写锁 + 事务内校验 + 附件文件回收。
 fn save_extended(
     payload: DbState,
@@ -897,5 +1009,190 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(50 * (i + 1)));
         }
+    }
+
+    // ── 局域网共享：访客范围写入（跑在自定义路径上，绕开固定数据目录） ──────
+
+    fn lan_temp_dir(label: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("tk-lan-{label}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn lan_project(id: &str) -> DbProject {
+        DbProject {
+            id: id.into(),
+            name: id.into(),
+            ..Default::default()
+        }
+    }
+
+    fn lan_todo(id: &str, project_id: &str) -> DbTodo {
+        DbTodo {
+            id: id.into(),
+            project_id: project_id.into(),
+            title: id.into(),
+            ..Default::default()
+        }
+    }
+
+    fn lan_settings(ids: &[&str]) -> LanShareSettings {
+        LanShareSettings {
+            enabled: true,
+            project_ids: ids.iter().map(|id| id.to_string()).collect(),
+            ..Default::default()
+        }
+    }
+
+    /// 访客写入不得动到共享范围外的数据——差异写最危险的失败模式。
+    #[test]
+    fn lan_scoped_write_keeps_unshared_projects() {
+        let dir = lan_temp_dir("scoped");
+        let path = dir.join("todo-kanban.db");
+        {
+            let conn = db::open(&path).unwrap();
+            db::init(&conn).unwrap();
+            db::save_state(
+                &conn,
+                &DbState {
+                    projects: vec![lan_project("p1"), lan_project("p2")],
+                    todos: vec![lan_todo("t1", "p1"), lan_todo("t2", "p2")],
+                    resources: vec![],
+                },
+            )
+            .unwrap();
+        }
+        let settings = lan_settings(&["p1"]);
+        let expected = lan_scoped_state_at(&path, &settings).unwrap().unwrap();
+        assert_eq!(expected.projects.len(), 1, "访客只应看到共享项目");
+        assert_eq!(expected.todos.len(), 1, "访客只应看到共享项目的待办");
+
+        let mut payload = expected.clone();
+        payload.todos[0].title = "edited".into();
+        payload.todos.push(lan_todo("t3", "p1"));
+        let saved = lan_save_scoped_at(&path, payload, expected, &settings).unwrap();
+        assert!(saved.todos.iter().all(|t| t.project_id == "p1"));
+
+        {
+            let conn = db::open(&path).unwrap();
+            let full = db::load_state(&conn).unwrap();
+            assert!(
+                full.todos.iter().any(|t| t.id == "t2"),
+                "未共享项目的待办不得被访客快照误删"
+            );
+            assert_eq!(
+                full.todos.iter().find(|t| t.id == "t1").unwrap().title,
+                "edited"
+            );
+            let created = full
+                .todos
+                .iter()
+                .find(|t| t.id == "t3")
+                .expect("访客新建的待办应落库");
+            assert!(created.seq > 0, "访客新建待办由后端分配 seq");
+            assert_eq!(created.tag, format!("todo-{}", created.seq));
+        }
+        drop_conn_files(&dir);
+    }
+
+    /// 过期快照必须被拒绝，不能让访客覆盖别人的并发改动。
+    #[test]
+    fn lan_scoped_write_rejects_stale_snapshot() {
+        let dir = lan_temp_dir("stale");
+        let path = dir.join("todo-kanban.db");
+        let initial = DbState {
+            projects: vec![lan_project("p1")],
+            todos: vec![lan_todo("t1", "p1")],
+            resources: vec![],
+        };
+        {
+            let conn = db::open(&path).unwrap();
+            db::init(&conn).unwrap();
+            db::save_state(&conn, &initial).unwrap();
+        }
+        let settings = lan_settings(&["p1"]);
+        let stale = lan_scoped_state_at(&path, &settings).unwrap().unwrap();
+        // 桌面端（或另一台设备）先改了这条待办
+        {
+            let conn = db::open(&path).unwrap();
+            let mut desktop = initial.clone();
+            desktop.todos[0].title = "desktop-edit".into();
+            desktop.todos[0].updated_at = 1;
+            db::save_state(&conn, &desktop).unwrap();
+        }
+        let mut payload = stale.clone();
+        payload.todos[0].title = "guest-edit".into();
+        let error = lan_save_scoped_at(&path, payload, stale, &settings).unwrap_err();
+        assert!(error.to_string().starts_with("STATE_CONFLICT"));
+        drop_conn_files(&dir);
+    }
+
+    /// 共享范围外的待办一律拒绝（防止访客越权写其它项目）。
+    #[test]
+    fn lan_scoped_write_rejects_out_of_scope_todo() {
+        let dir = lan_temp_dir("scope");
+        let path = dir.join("todo-kanban.db");
+        {
+            let conn = db::open(&path).unwrap();
+            db::init(&conn).unwrap();
+            db::save_state(
+                &conn,
+                &DbState {
+                    projects: vec![lan_project("p1")],
+                    todos: vec![lan_todo("t1", "p1")],
+                    resources: vec![],
+                },
+            )
+            .unwrap();
+        }
+        let settings = lan_settings(&["p1"]);
+        let expected = lan_scoped_state_at(&path, &settings).unwrap().unwrap();
+        let mut payload = expected.clone();
+        payload.todos.push(lan_todo("evil", "p2"));
+        let error = lan_save_scoped_at(&path, payload, expected, &settings).unwrap_err();
+        assert!(error.to_string().contains("共享范围外"));
+        drop_conn_files(&dir);
+    }
+
+    /// 共享设置的读写契约：缺键回默认、写后可读回、坏 JSON 不 panic 且回退默认。
+    #[test]
+    fn lan_settings_read_roundtrip_and_corrupt_fallback() {
+        let dir = lan_temp_dir("settings");
+        let path = ensure_db_at(&dir).unwrap();
+        // 从未配置过 -> 默认：关闭 + 默认端口
+        let initial = lan_read_from_db(&path).unwrap();
+        assert!(!initial.enabled);
+        assert_eq!(initial.port, crate::models::DEFAULT_LAN_PORT);
+        // 写入（模拟设置页保存）后可原样读回
+        let stored = LanShareSettings {
+            enabled: true,
+            port: 43999,
+            token: "sk-lan-test".into(),
+            project_ids: vec!["p1".into()],
+        };
+        {
+            let conn = db::open(&path).unwrap();
+            write_meta(
+                &conn,
+                LAN_SETTINGS_KEY,
+                &serde_json::to_string(&stored).unwrap(),
+            )
+            .unwrap();
+        }
+        let read = lan_read_from_db(&path).unwrap();
+        assert!(read.enabled);
+        assert_eq!(read.port, 43999);
+        assert_eq!(read.token, "sk-lan-test");
+        assert_eq!(read.project_ids, vec!["p1".to_string()]);
+        // 存储被写坏 -> 回退默认，不让服务启动被一个坏配置卡死
+        {
+            let conn = db::open(&path).unwrap();
+            write_meta(&conn, LAN_SETTINGS_KEY, "{not-json").unwrap();
+        }
+        let fallback = lan_read_from_db(&path).unwrap();
+        assert!(!fallback.enabled);
+        assert_eq!(fallback.port, crate::models::DEFAULT_LAN_PORT);
+        drop_conn_files(&dir);
     }
 }

@@ -383,6 +383,33 @@ impl Default for McpSettings {
     }
 }
 
+/// 默认局域网共享端口（设置页可改；绑定失败会以状态回报，不会静默）
+pub const DEFAULT_LAN_PORT: u16 = 42800;
+
+/// 局域网共享设置（app_meta 持久化 JSON；默认关闭，Token 首次读取时随机生成）。
+/// `project_ids` = 勾选共享的项目；只有这些项目的待办会出现在访客面板上。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LanShareSettings {
+    pub enabled: bool,
+    pub port: u16,
+    /// 访问令牌：空串 = 局域网内免令牌（不推荐）；面板 URL 带 ?t=<token>
+    pub token: String,
+    pub project_ids: Vec<String>,
+}
+
+impl Default for LanShareSettings {
+    fn default() -> Self {
+        LanShareSettings {
+            enabled: false,
+            port: DEFAULT_LAN_PORT,
+            // 默认即带令牌：局域网内任何人都能改数据，令牌是唯一门槛
+            token: uuid::Uuid::new_v4().simple().to_string(),
+            project_ids: Vec::new(),
+        }
+    }
+}
+
 impl DbTodo {
     /// 按状态映射默认泳道 id
     pub fn default_swimlane_for_status(status: &str) -> String {

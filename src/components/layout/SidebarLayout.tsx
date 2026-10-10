@@ -1,4 +1,4 @@
-import { isMacOS, shortcutLabel } from "@/lib/platform";
+import { isMacOS } from "@/lib/platform";
 // 全局侧边导航壳（shadcn sidebar 简化版）：品牌 + 工作台导航 + 明暗切换 + 设置入口
 // 无边框窗口：顶栏 data-tauri-drag-region 拖动窗口 + 自绘最小化/最大化/关闭；侧栏可拖宽 + 收起/展开。
 
@@ -24,6 +24,7 @@ import {
   Timer,
   FolderKanban,
   BookOpen,
+  Keyboard,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -35,6 +36,8 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ProjectContextSwitcher } from "@/components/layout/ProjectContextSwitcher";
 import { PomodoroIndicator } from "@/components/pomodoro/PomodoroIndicator";
+import { openShortcutCheatSheet, useShortcut } from "@/lib/shortcuts";
+import { formatShortcut } from "@/lib/shortcutKeys";
 
 interface NavItem {
   to: string;
@@ -98,13 +101,7 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
     const media = window.matchMedia("(max-width: 700px)");
     const change = () => { setNarrow(media.matches); setMobileExpanded(false); };
     media.addEventListener("change", change);
-    const key = (event: KeyboardEvent) => {
-      if (!event.isComposing && ((isMacOS && event.metaKey && event.shiftKey && event.key.toLowerCase() === "f") || (!isMacOS && event.ctrlKey && event.key.toLowerCase() === "k" && !(event.target instanceof Element && event.target.closest("input,textarea,[contenteditable=true]"))))) {
-        event.preventDefault(); searchRef.current?.focus();
-      }
-    };
-    window.addEventListener("keydown", key);
-    return () => { media.removeEventListener("change", change); window.removeEventListener("keydown", key); };
+    return () => { media.removeEventListener("change", change); };
   }, []);
   React.useEffect(() => { setMobileExpanded(false); }, [location.pathname]);
   const [resizing, setResizing] = React.useState(false);
@@ -178,6 +175,16 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
   };
 
   const toggleCollapsed = () => { if (narrow) setMobileExpanded(value => !value); else setCollapsed(value => !value); };
+
+  // 快捷键走全局系统（lib/shortcuts）：这里只声明「聚焦搜索」「展开/收起侧栏」两个业务动作。
+  // 搜索有平台别名（⌘/Ctrl+Shift+F 与 Windows 既有的 Ctrl+K）：后者在输入框内不抢焦点，保留原有手感。
+  useShortcut("search", ({ event, combo }) => {
+    const inField = event.target instanceof Element && event.target.closest("input, textarea, [contenteditable=true]");
+    if (inField && combo.ctrl) return;
+    searchRef.current?.focus();
+    searchRef.current?.select();
+  });
+  useShortcut("toggle-sidebar", toggleCollapsed);
   React.useEffect(() => {
     if (!isTauri() || !isMacOS) return;
     let alive = true;
@@ -222,7 +229,7 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
           {location.pathname.startsWith("/project/") ? "项目看板" : location.pathname === "/settings/workflow" ? "设置 / 工作流" : location.pathname === "/settings/fields" ? "设置 / 自定义字段" : location.pathname === "/settings" ? "设置" : NAV_ITEMS.find(item => location.pathname.startsWith(item.to))?.label ?? "工作台"}
         </div>}
         <form className="tk-toolbar-search mx-2 flex w-full min-w-0 max-w-sm items-center gap-1" onSubmit={event => { event.preventDefault(); navigate(`/todos?q=${encodeURIComponent(search)}`); }}>
-          <Input ref={searchRef} aria-label="全局搜索" value={search} onChange={event => setSearch(event.target.value)} placeholder={`搜索任务 · ${(isMacOS ? "⌘⇧F" : shortcutLabel("K"))}`} className="h-7 min-w-0 text-xs" />
+          <Input ref={searchRef} aria-label="全局搜索" value={search} onChange={event => setSearch(event.target.value)} placeholder={`搜索任务 · ${formatShortcut("search", isMacOS)}`} className="h-7 min-w-0 text-xs" />
           <Button type="submit" variant="ghost" size="icon" className="h-7 w-7" aria-label="搜索"><Search className="h-3.5 w-3.5" /></Button>
         </form>
 
@@ -345,6 +352,21 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
                 </Button>
               </TooltipTrigger>
               <TooltipContent>切换明暗</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  aria-label="快捷键"
+                  onClick={() => openShortcutCheatSheet()}
+                >
+                  <Keyboard className="tk-sidebar-icon h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>快捷键</TooltipContent>
             </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>

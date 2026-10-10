@@ -5,6 +5,8 @@
 
 pub mod commands;
 mod desktop;
+/// 局域网共享：内嵌 HTTP 服务（访客面板 + REST + SSE 实时推送）
+mod lan_server;
 #[cfg(target_os = "macos")]
 mod menu;
 #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
@@ -145,6 +147,8 @@ pub fn run() {
                 },
                 None => log::error!("数据文件初始化失败：无法定位程序目录"),
             }
+            // 局域网共享：设置里已启用则自动拉起（失败只记录状态，不阻塞启动）
+            lan_server::auto_start(_app.handle().clone());
             #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
             {
                 // 菜单栏/快捷键失败只降级（错误经 desktop_status 展示），不阻止应用启动。
@@ -198,6 +202,10 @@ pub fn run() {
             commands::pomodoro_record,
             commands::pomodoro_recent,
             commands::pomodoro_stats,
+            lan_server::lan_get_settings,
+            lan_server::lan_set_settings,
+            lan_server::lan_status,
+            lan_server::lan_stop,
         ])
         .build(tauri::generate_context!())
         .expect("应用初始化失败")

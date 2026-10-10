@@ -139,7 +139,7 @@ export function PomodoroSettings() {
         <div className="tk-pomodoro-toggle">
           <div>
             <span className="text-sm font-medium">系统通知</span>
-            <p className="text-xs text-muted-foreground">阶段结束时发系统通知；权限未授予时只显示应用内提示。</p>
+            <p className="text-xs text-muted-foreground">阶段结束时发系统通知（窗口不在前台时的兜底）；应用内始终会弹出 GrokBot 表情提醒。</p>
           </div>
           <Switch checked={config.notify} onCheckedChange={(checked) => setPomodoroConfig({ notify: checked })} />
         </div>

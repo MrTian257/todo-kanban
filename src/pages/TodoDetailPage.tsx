@@ -3,6 +3,9 @@ import { TaskReminder } from "@/components/workflow/TaskReminder";
 import { useWorkflow, getWorkflow, loadWorkflow, saveWorkflow } from "@/lib/workflow";
 import { useEditingGuard } from "@/lib/editingGuard";
 import { DirectoryInput } from "@/components/project/DirectoryInput";
+import { useShortcut } from "@/lib/shortcuts";
+import { formatShortcut } from "@/lib/shortcutKeys";
+import { isMacOS } from "@/lib/platform";
 // 待办详情页（新建/编辑一体）：中间标题 + Markdown 源文与预览 备注；右侧字段栏
 // 字段栏：代码目录 Select / 仓库状态条 / 分支 BranchSelect（可新建，切出源默认生产分支）/ 泳道 Select / 日期范围 / 卡点
 
@@ -371,6 +374,16 @@ function TodoDetailForm() {
     } catch(e) {setSaveError(String(e));toast.error("保存失败，请重试");} finally {submitLock.current=false;}
   };
 
+  // 快捷键：保存（与「保存任务」按钮完全等价——同一套 zod 校验、同一套错误提示与成功跳转）
+  useShortcut("save", () => {
+    // 与按钮的 disabled 条件保持一致：保存中/描述处理中不重复提交
+    if (isSubmitting || descriptionProcessing) return;
+    void handleSubmit(onSubmit)();
+  });
+  // 快捷键：关闭详情。直接走既有的 leave()，不额外写脏检查——
+  // useBlocker 的 NavigationGuard 已经统一拦截，行为与点返回箭头完全一致。
+  useShortcut("close-detail", () => leave());
+
   if (!project) {
     return (
       <div className="p-6">
@@ -391,7 +404,7 @@ function TodoDetailForm() {
         </Button>
         <h1 className="text-xl font-semibold">{isNew ? "新建待办" : "编辑待办"}</h1>
         {editing?.tag && <span className="font-mono text-xs text-muted-foreground">{editing.tag}</span>}
-        <span className="ml-auto text-xs text-muted-foreground">{isSubmitting ? "正在保存…" : isDirty ? "有未保存的修改" : isNew ? "填写任务内容" : "所有修改已保存"}</span><Button className="gap-2" disabled={isSubmitting || descriptionProcessing} onClick={handleSubmit(onSubmit)}><Save className="h-4 w-4"/>{descriptionProcessing ? "描述处理中…" : isSubmitting ? "保存中…" : "保存任务"}</Button>
+        <span className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">{isSubmitting ? "正在保存…" : isDirty ? "有未保存的修改" : isNew ? "填写任务内容" : "所有修改已保存"}<kbd className="tk-kbd">{formatShortcut("save", isMacOS)}</kbd></span><Button className="gap-2" disabled={isSubmitting || descriptionProcessing} title={`${formatShortcut("save", isMacOS)} 保存任务`} onClick={handleSubmit(onSubmit)}><Save className="h-4 w-4"/>{descriptionProcessing ? "描述处理中…" : isSubmitting ? "保存中…" : "保存任务"}</Button>
       </div>
 
       <Dialog open={resolution !== null} onOpenChange={open => { if (!open) setResolution(null); }}><DialogContent><DialogTitle>处理编辑冲突</DialogTitle><DialogDescription>{resolution === "remote" ? "使用最新内容将替换当前编辑并清除本地草稿。" : "保留自己的编辑后，下一次保存将用当前表单字段覆盖外部修改。"}</DialogDescription><div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setResolution(null)}>取消</Button><Button onClick={() => {

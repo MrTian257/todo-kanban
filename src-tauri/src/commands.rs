@@ -19,6 +19,15 @@ fn err_str(e: impl ToString) -> String {
     e.to_string()
 }
 
+/// 写命令成功后立即唤醒局域网推送（未启用共享时是空操作）。
+/// 统一收口：新增写命令时用它包一层，访客面板才能即时收到变化，而不是等 400ms 轮询。
+fn after_write<T>(result: Result<T, String>) -> Result<T, String> {
+    if result.is_ok() {
+        crate::lan_server::notify_changed();
+    }
+    result
+}
+
 /// 1. 仓库校验 + 分支列表（走 SQLite 持久缓存：命中即回 + 后台节流刷新）
 #[tauri::command]
 pub async fn git_info(repo: String) -> Result<GitInfo, String> {
@@ -135,7 +144,9 @@ pub async fn db_load_state() -> Result<Option<DbState>, String> {
 /// 11. 差异写落库（写锁 + 分支规则校验 + 泳道归属校验 + seq 收敛 + 提交去重）
 #[tauri::command]
 pub async fn db_save_state(payload: DbState, expected: DbState) -> Result<DbState, String> {
-    blocking(move || db_cmds::save_state_checked(payload, expected).map_err(err_str)).await
+    after_write(
+        blocking(move || db_cmds::save_state_checked(payload, expected).map_err(err_str)).await,
+    )
 }
 
 /// 12. 读取 MCP 集成设置（启用开关 + 授权 Token；缺失返回默认：启用 + sk-GLOBAl_MCP_BY_ADMIN）
@@ -219,8 +230,10 @@ pub async fn workflow_save(
     payload: todo_kanban_core::svc::workflow::Workflow,
     expected: i64,
 ) -> Result<todo_kanban_core::svc::workflow::Workflow, String> {
-    blocking(move || todo_kanban_core::svc::workflow::save(payload, expected).map_err(err_str))
-        .await
+    after_write(
+        blocking(move || todo_kanban_core::svc::workflow::save(payload, expected).map_err(err_str))
+            .await,
+    )
 }
 #[tauri::command]
 pub async fn history_list(
@@ -238,7 +251,10 @@ pub async fn history_restore(
     id: String,
     expected: todo_kanban_core::models::DbState,
 ) -> Result<todo_kanban_core::models::DbState, String> {
-    blocking(move || todo_kanban_core::svc::history::restore(&id, expected).map_err(err_str)).await
+    after_write(
+        blocking(move || todo_kanban_core::svc::history::restore(&id, expected).map_err(err_str))
+            .await,
+    )
 }
 #[tauri::command]
 pub async fn backup_list() -> Result<Vec<todo_kanban_core::svc::backups::BackupInfo>, String> {
@@ -255,11 +271,13 @@ pub async fn backup_restore(
     expected: todo_kanban_core::models::DbState,
     workflow_revision: i64,
 ) -> Result<todo_kanban_core::models::DbState, String> {
-    blocking(move || {
-        todo_kanban_core::svc::backups::restore(&id, expected, Some(workflow_revision))
-            .map_err(err_str)
-    })
-    .await
+    after_write(
+        blocking(move || {
+            todo_kanban_core::svc::backups::restore(&id, expected, Some(workflow_revision))
+                .map_err(err_str)
+        })
+        .await,
+    )
 }
 #[tauri::command]
 pub async fn proposal_list() -> Result<Vec<todo_kanban_core::svc::proposals::Proposal>, String> {
@@ -267,7 +285,9 @@ pub async fn proposal_list() -> Result<Vec<todo_kanban_core::svc::proposals::Pro
 }
 #[tauri::command]
 pub async fn proposal_apply(id: String) -> Result<todo_kanban_core::models::DbState, String> {
-    blocking(move || todo_kanban_core::svc::proposals::apply(&id).map_err(err_str)).await
+    after_write(
+        blocking(move || todo_kanban_core::svc::proposals::apply(&id).map_err(err_str)).await,
+    )
 }
 #[tauri::command]
 pub async fn proposal_reject(id: String) -> Result<(), String> {
@@ -276,7 +296,7 @@ pub async fn proposal_reject(id: String) -> Result<(), String> {
 /// 自动脚本补写：对当前已处于触发状态的存量任务应用规则动作（设置 · 自定义字段）
 #[tauri::command]
 pub async fn automation_backfill(rule_id: String) -> Result<(usize, usize), String> {
-    blocking(move || db_cmds::automation_backfill(rule_id).map_err(err_str)).await
+    after_write(blocking(move || db_cmds::automation_backfill(rule_id).map_err(err_str)).await)
 }
 
 /// Git 报告（日报 / 周报 / 月报）：按时间窗从 GitLab API 拉取提交，按开发人员归类聚合。

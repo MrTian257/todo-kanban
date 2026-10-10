@@ -17,7 +17,7 @@ todo-kanban/
 ├── src/              # React SPA（pages → components → lib 单向分层）
 │   └── grokbot/      # 可迁移的表情宠物模块包（零框架依赖，自定义能力见其 README.md）
 ├── src-tauri/        # Cargo workspace：config ← upgrade ← core ← 壳 crate + mcp-server
-├── docs/             # 设计文档 + ADR-001..017（部分文档有漂移，以源码为准）
+├── docs/             # 设计文档 + ADR-001..018（部分文档有漂移，以源码为准）
 ├── scripts/          # .mjs 验证脚本（esbuild + node assert，无测试框架）
 ├── public/vendor/vditor/  # gitignored，predev/prebuild 自动同步
 ├── release/          # 打包产物（gitignored）：todo-kanban.exe + mcp-server.exe
@@ -40,6 +40,8 @@ todo-kanban/
 | 自定义字段 / 自动脚本 | 定义与规则 `core/src/svc/workflow.rs`（fieldDefs / automations）+ `svc/fields.rs` + `svc/automation.rs`；值 `todos.custom_fields`（v11）；执行点 `db/mod.rs::save_state_inner`；前端词表 `src/lib/customFields.ts` + `src/components/workflow/*Panel.tsx`；UI 入口为设置页 `/settings/fields`（`src/pages/FieldSettingsPage.tsx`），存量任务补写走 `automation_backfill` |
 | 主题/皮肤 | `src/lib/theme.ts` + `src/index.css` |
 | 番茄钟 / GrokBot 宠物 | 前端纯逻辑 `src/lib/pomodoro.ts` + 运行态 `src/lib/pomodoroStore.ts` + 宠物 `src/lib/petState.ts` / `petStore.ts`；页面 `src/pages/PomodoroPage.tsx` + `src/components/pomodoro/` + `src/components/pet/GrokBot.tsx`；后端 `core/src/svc/pomodoro.rs`（v14 表 `pomodoro_sessions`）+ `commands.rs` 三个 `pomodoro_*` 命令；MCP 只读资源 `todo-kanban://pomodoro`；决策 ADR-017 |
+| 局域网共享 | 服务 `src-tauri/src/lan_server.rs`（axum：`GET /` 访客面板 + `/api/state|save|events`，SSE 实时推送，绑定 `0.0.0.0:<port>`）+ 面板 `src-tauri/src/lan_guest.html`（单文件 `include_str!`，不参与前端打包）；共享范围过滤/脱敏/合并纯逻辑 `core/src/svc/lan.rs`（含单测）+ 配置与访客读写编排 `core/src/svc/db_cmds.rs`（app_meta 键 `lan_share_settings`，不新增表/数据版本）；设置 UI `src/pages/SettingsPage.tsx`「局域网共享」卡片 + 项目卡片快捷开关 `src/pages/ProjectListPage.tsx` + `src/lib/lan.ts`；桌面实时刷新经 Tauri 事件 `lan-state-changed`（`src/lib/store.ts`）；决策 ADR-019 |
+| 新增 / 改快捷键 | 键位表与抑制规则 `src/lib/shortcutKeys.ts`（纯逻辑，有 node 测试）；监听/注册表/速查开关 `src/lib/shortcuts.ts`（`main.tsx` 安装）；全局注册 `src/components/layout/ShortcutLifecycle.tsx`；速查弹层 `ShortcutCheatSheet.tsx`。**加一条快捷键 = `SHORTCUTS` 加一项 + 组件里 `useShortcut(id, fn)`**；注意 macOS 原生菜单已占用 ⌘W/⌘1..4/⌘⇧F/⌘⇧L（`src-tauri/src/menu.rs`），决策见 ADR-018 |
 | GrokBot 渲染模块包（可迁移） | `src/grokbot/`——自包含、零框架依赖：`index.ts`（核心入口）/ `react.tsx`（可选 React 适配）/ `core/`（engine 渲染循环 + morph 形变纯函数 + styles 作用域样式）/ `data/`（25 组表情点集 · 39 状态 · 6 动作 · 6 套配色）。颜色/动作/表情三类自定义 API 见包内 `README.md`；只被 `components/pet/GrokBot.tsx` 与设置页消费 |
 
 ## CODE MAP
@@ -79,6 +81,7 @@ node scripts/test-day-clock.mjs    # 跨天刷新（本地零点间隔/通知）
 node scripts/test-pomodoro.mjs     # 番茄纯逻辑（阶段流转/读数/统计口径）
 node scripts/test-pet-state.mjs    # GrokBot 应用侧状态机（心情优先级/事件 TTL/偏好归一化）
 node scripts/test-grokbot.mjs      # GrokBot 模块包（表情点集/形变纯函数/样式作用域隔离/状态映射）
+node scripts/test-shortcut-keys.mjs # 快捷键（组合键匹配/平台化展示/浮层与富文本抑制）
 CDP_PORT=9222 node scripts/verify-dnd.mjs  # 浏览器：看板拖拽（需 dev server + 远程调试端口）
 bash build.sh               # 发布打包 → ./release/
 ```

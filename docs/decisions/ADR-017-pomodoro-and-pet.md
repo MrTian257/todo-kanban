@@ -47,6 +47,11 @@ SELECT/INSERT 全部收在 `core/src/svc/pomodoro.rs`，与 `workflow_state` 同
   结束时刻已过则**补记一次**（按计划时长计），超过 12h 直接丢弃，避免几天后打开应用突然弹一堆通知。
 - 落库只发生在阶段结束时，因此表里不存在 `ended_at IS NULL` 的行，也就没有「悬挂会话清理」这条路径。
 - 不足 1 分钟的中断不落库（`shouldRecord`）：误触「跳过 / 重置」不该在统计里留垃圾。
+- **阶段结束的应用内提醒是 GrokBot 表情弹窗**（`components/pomodoro/PomodoroAlert.tsx`）：GrokBot 的 SVG
+  表情渲染不了进系统通知，所以自己实现弹窗承载「表情 + 文案 + 操作（开始下一轮 / 知道了）」，
+  15s 自动收起；系统通知（`desktop_notify`）保留为窗口不在前台时的兜底，浏览器预览下退回 Web Notification
+  （仅在已授权时发送，不主动弹权限请求）。提醒数据放在 `lib/pomodoroStore.ts` 的 `alert` 字段——
+  结束动作发生在非 React 的计时回调与启动恢复路径里。
 
 ### D3 配置与宠物偏好是**本机界面偏好**，不进 SQLite / MCP
 

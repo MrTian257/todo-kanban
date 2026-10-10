@@ -704,6 +704,56 @@ input, textarea, select, button { font-family: inherit; }
 .tk-pet-host[data-edge="right"] .gb-bubble[hidden] { transform: translateY(6px); }
 .tk-pet-host:focus-visible { outline: 2px solid var(--ring); outline-offset: 4px; border-radius: 999px; }
 
+/* ── 番茄阶段结束提醒：GrokBot 表情弹窗 ──────────────────────────── */
+/* 顶部居中：避开右下角的宠物浮层与 toast，且比 toast 更醒目 */
+.tk-pomodoro-alert {
+  position: fixed;
+  top: 48px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: min(420px, calc(100vw - 32px));
+  padding: 12px 40px 12px 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow: 0 12px 32px #18234c2e;
+  animation: tk-pomodoro-alert-in .22s ease-out;
+}
+@keyframes tk-pomodoro-alert-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(-12px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+.tk-pomodoro-alert-face { flex: none; display: flex; }
+.tk-pomodoro-alert-body { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.tk-pomodoro-alert-title { font-size: 14px; font-weight: 600; }
+.tk-pomodoro-alert-text { font-size: 12.5px; color: var(--muted-foreground); }
+.tk-pomodoro-alert-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.tk-pomodoro-alert-close { position: absolute; top: 8px; right: 8px; height: 24px; width: 24px; }
+@media (prefers-reduced-motion: reduce) {
+  .tk-pomodoro-alert { animation: none; }
+}
+
+/* ── 快捷键速查：键帽 ────────────────────────────────────────────── */
+.tk-kbd {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  background: var(--muted);
+  color: var(--foreground);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  line-height: 1.7;
+  white-space: nowrap;
+}
+
 /* 减少动态效果：只关掉进度条过渡（宠物的动效由模块包按同一个媒体查询自行处理） */
 @media (prefers-reduced-motion: reduce) {
   .tk-pomodoro-fill { transition: none; }

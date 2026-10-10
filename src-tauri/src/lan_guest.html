@@ -1,0 +1,658 @@
+<!doctype html>
+<html lang="zh-CN">
+<!-- 局域网共享访客面板：单文件、零构建依赖，由 Rust 侧 include_str! 内嵌后由 / 下发。
+     数据来源：同源 REST（/api/state 读、/api/save 写）+ SSE（/api/events）实时推送。
+     同步语义：事件带 origin，发起方按本机 clientId 跳过自己的回声；409 冲突自动刷新。 -->
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>待办看板 · 局域网共享</title>
+  <style>
+    :root {
+      --bg: #f6f7fb; --panel: #ffffff; --text: #23262f; --muted: #6b7280;
+      --border: #e3e6ee; --primary: #555bdd; --primary-weak: #eef0ff;
+      --ok: #16a34a; --warn: #d97706; --danger: #dc2626; --shadow: 0 1px 2px rgba(16, 20, 40, 0.06);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #16181d; --panel: #1e2126; --text: #e8eaf0; --muted: #9aa1ad;
+        --border: #2c3038; --primary: #8b90f5; --primary-weak: #262a3a;
+        --ok: #4ade80; --warn: #fbbf24; --danger: #f87171; --shadow: none;
+      }
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+    .hidden { display: none !important; }
+    button { font: inherit; color: inherit; cursor: pointer; }
+    input, select, textarea { font: inherit; color: inherit; }
+    .top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 18px; background: var(--panel); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 5; }
+    .brand { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+    .brand h1 { font-size: 17px; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .muted { color: var(--muted); font-size: 12px; }
+    .status { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+    .status button { border: 1px solid var(--border); background: transparent; border-radius: 8px; padding: 4px 10px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+    .dot.live { background: var(--ok); }
+    .dot.offline { background: var(--danger); }
+    .dot.connecting { background: var(--warn); }
+    .tabs { display: flex; gap: 6px; padding: 10px 18px 0; overflow-x: auto; }
+    .tabs button { border: 1px solid var(--border); background: var(--panel); border-radius: 999px; padding: 5px 12px; white-space: nowrap; }
+    .tabs button.active { border-color: var(--primary); background: var(--primary-weak); color: var(--primary); }
+    .board { display: flex; gap: 14px; align-items: flex-start; padding: 14px 18px 8px; overflow-x: auto; }
+    .lane { flex: 0 0 288px; width: 288px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); display: flex; flex-direction: column; max-height: calc(100vh - 170px); }
+    .lane-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+    .lane-name { font-weight: 600; }
+    .lane-count { color: var(--muted); font-size: 12px; }
+    .lane-head button { margin-left: auto; border: 1px solid var(--border); background: transparent; border-radius: 8px; width: 26px; height: 26px; line-height: 1; }
+    .lane-body { padding: 10px; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; min-height: 60px; }
+    .lane-body.over { outline: 2px dashed var(--primary); outline-offset: -4px; border-radius: 10px; }
+    .card { border: 1px solid var(--border); border-radius: 10px; padding: 9px 10px; background: var(--panel); cursor: grab; }
+    .card:active { cursor: grabbing; }
+    .card-title { font-weight: 600; word-break: break-word; }
+    .chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+    .chip { font-size: 11px; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 1px 7px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .chip.tag { color: var(--primary); border-color: var(--primary); }
+    .chip.warn { color: var(--warn); border-color: var(--warn); }
+    .card-actions { display: flex; gap: 6px; margin-top: 8px; }
+    .card-actions button { border: 1px solid var(--border); background: transparent; border-radius: 7px; padding: 2px 8px; font-size: 12px; }
+    .card-actions button.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, var(--border)); }
+    .empty { max-width: 460px; margin: 18vh auto 0; padding: 24px; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; text-align: center; }
+    .empty h1 { font-size: 18px; margin: 0 0 8px; }
+    .foot { padding: 10px 18px 24px; color: var(--muted); font-size: 12px; }
+    .modal-mask { position: fixed; inset: 0; background: rgba(15, 18, 30, 0.45); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 20; }
+    .modal-card { background: var(--panel); border-radius: 14px; padding: 18px; width: min(560px, 100%); max-height: 88vh; overflow-y: auto; }
+    .modal-card h2 { margin: 0 0 12px; font-size: 16px; }
+    .modal-card label { display: block; margin-bottom: 10px; font-size: 12px; color: var(--muted); }
+    .modal-card label.check { display: flex; align-items: center; gap: 8px; color: var(--text); }
+    .modal-card input[type="text"], .modal-card input[type="number"], .modal-card input[type="date"], .modal-card input[type="datetime-local"], .modal-card select, .modal-card textarea { width: 100%; margin-top: 4px; padding: 7px 9px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
+    .modal-card textarea { min-height: 78px; resize: vertical; }
+    .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+    .modal-actions button { border-radius: 8px; padding: 7px 14px; border: 1px solid var(--border); background: transparent; }
+    .modal-actions button.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .gate { position: fixed; inset: 0; background: var(--bg); display: flex; align-items: center; justify-content: center; z-index: 30; padding: 16px; }
+    .gate-card { width: min(380px, 100%); background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 22px; }
+    .gate-card h2 { margin: 0 0 6px; font-size: 16px; }
+    .gate-card input { width: 100%; margin: 12px 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
+    .gate-card button { width: 100%; padding: 9px; border: 0; border-radius: 8px; background: var(--primary); color: #fff; }
+    .err { color: var(--danger); font-size: 12px; min-height: 16px; margin: 8px 0 0; }
+    .toast-root { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 40; }
+    .toast { background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--primary); border-radius: 10px; padding: 9px 13px; box-shadow: var(--shadow); max-width: 320px; transition: opacity 0.3s; }
+    .toast.ok { border-left-color: var(--ok); }
+    .toast.warn { border-left-color: var(--warn); }
+    .toast.err { border-left-color: var(--danger); }
+    .toast.out { opacity: 0; }
+    @media (max-width: 640px) {
+      .lane { flex: 0 0 82vw; width: 82vw; }
+      .grid2 { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <div id="modal-root"></div>
+  <div id="token-gate" class="gate hidden">
+    <div class="gate-card">
+      <h2>需要访问令牌</h2>
+      <p class="muted">请输入共享方在桌面端「设置 → 局域网共享」里显示的访问令牌。</p>
+      <input id="token-input" type="text" placeholder="访问令牌" autocomplete="off" />
+      <button id="token-submit" type="button">进入看板</button>
+      <p id="token-error" class="err"></p>
+    </div>
+  </div>
+  <div id="toast-root" class="toast-root"></div>
+  <script>
+    (function () {
+      "use strict";
+      var app = document.getElementById("app");
+      var modalRoot = document.getElementById("modal-root");
+      var toastRoot = document.getElementById("toast-root");
+      var gate = document.getElementById("token-gate");
+      var params = new URLSearchParams(window.location.search);
+      var token = params.get("t") || sessionStorage.getItem("tk-lan-token") || "";
+      if (token) sessionStorage.setItem("tk-lan-token", token);
+      var clientId = sessionStorage.getItem("tk-lan-client");
+      if (!clientId) {
+        clientId = "c" + Math.random().toString(36).slice(2) + Date.now().toString(36);
+        sessionStorage.setItem("tk-lan-client", clientId);
+      }
+
+      var state = { projects: [], todos: [], resources: [] };
+      var fieldDefs = [];
+      var serverSnapshot = null;
+      var activeProjectId = sessionStorage.getItem("tk-lan-project") || "";
+      var source = null;
+      var saving = false;
+      var connection = "connecting";
+      var loaded = false;
+      var modalContext = null;
+      var draggingId = null;
+
+      function esc(value) {
+        return String(value == null ? "" : value).replace(/[&<>"]/g, function (ch) {
+          if (ch === "&") return "&amp;";
+          if (ch === "<") return "&lt;";
+          if (ch === ">") return "&gt;";
+          return "&quot;";
+        });
+      }
+
+      function toast(message, kind) {
+        var node = document.createElement("div");
+        node.className = "toast " + (kind || "ok");
+        node.textContent = message;
+        toastRoot.appendChild(node);
+        window.setTimeout(function () {
+          node.classList.add("out");
+          window.setTimeout(function () { node.remove(); }, 300);
+        }, 2600);
+      }
+
+      function connectionLabel() {
+        if (connection === "live") return "实时同步中";
+        if (connection === "offline") return "连接已断开，重连中";
+        return "连接中…";
+      }
+
+      function setConnection(kind) {
+        connection = kind;
+        var dot = document.getElementById("conn");
+        var text = document.getElementById("conn-text");
+        if (dot) dot.className = "dot " + kind;
+        if (text) text.textContent = connectionLabel();
+      }
+
+      function apiUrl(path) {
+        var query = "t=" + encodeURIComponent(token) + "&c=" + encodeURIComponent(clientId);
+        return path + (path.indexOf("?") >= 0 ? "&" : "?") + query;
+      }
+
+      function projectList() { return state.projects || []; }
+
+      function currentProject() {
+        var list = projectList();
+        if (!list.length) return null;
+        var found = list.filter(function (item) { return item.id === activeProjectId; })[0];
+        if (found) return found;
+        activeProjectId = list[0].id;
+        sessionStorage.setItem("tk-lan-project", activeProjectId);
+        return list[0];
+      }
+
+      function laneList(project) {
+        var lanes = (project && project.swimlanes) || [];
+        if (!lanes.length) {
+          lanes = [
+            { id: "swim-todo", name: "待办", status: "todo", sortOrder: 0 },
+            { id: "swim-doing", name: "进行中", status: "doing", sortOrder: 1 },
+            { id: "swim-done", name: "已完成", status: "done", sortOrder: 2 }
+          ];
+        }
+        return lanes.slice().sort(function (a, b) { return a.sortOrder - b.sortOrder; });
+      }
+
+      function todosIn(project, laneId) {
+        return (state.todos || []).filter(function (item) {
+          return item.projectId === project.id && item.swimlaneId === laneId && !item.archived;
+        }).sort(function (a, b) {
+          return ((a.sortOrder || 0) - (b.sortOrder || 0)) || ((a.createdAt || 0) - (b.createdAt || 0));
+        });
+      }
+
+      function fieldsFor(project) {
+        return (fieldDefs || []).filter(function (def) {
+          return !def.projectId || def.projectId === project.id;
+        }).sort(function (a, b) { return (a.sortOrder || 0) - (b.sortOrder || 0); });
+      }
+
+      function fieldValue(todo, id) {
+        var hit = (todo.customFields || []).filter(function (item) { return item.fieldId === id; })[0];
+        return hit ? hit.value : null;
+      }
+
+      function isEmptyValue(value) {
+        return value === null || value === undefined || value === "" || (Array.isArray(value) && value.length === 0);
+      }
+
+      function canonicalFields(list) {
+        var seen = {};
+        var out = [];
+        (list || []).forEach(function (item) {
+          if (!item || !item.fieldId || seen[item.fieldId] || isEmptyValue(item.value)) return;
+          seen[item.fieldId] = true;
+          out.push({ fieldId: item.fieldId, value: item.value });
+        });
+        out.sort(function (a, b) { return a.fieldId < b.fieldId ? -1 : a.fieldId > b.fieldId ? 1 : 0; });
+        return out;
+      }
+
+      function formatField(def, value) {
+        if (isEmptyValue(value)) return "";
+        if (def.type === "checkbox") return value === true ? "是" : "否";
+        if (Array.isArray(value)) return value.join("、");
+        return String(value);
+      }
+
+      function renderCard(project, todo) {
+        var chips = fieldsFor(project).filter(function (def) { return def.showOnCard; }).map(function (def) {
+          var text = formatField(def, fieldValue(todo, def.id));
+          return text ? "<span class=\"chip\">" + esc(def.label) + "：" + esc(text) + "</span>" : "";
+        }).join("");
+        var dates = (todo.startDate || todo.endDate)
+          ? "<span class=\"chip\">" + esc(todo.startDate || "?") + " ~ " + esc(todo.endDate || "?") + "</span>"
+          : "";
+        var done = todo.status === "done";
+        return [
+          "<article class=\"card\" draggable=\"true\" data-todo=\"" + esc(todo.id) + "\">",
+          "  <div class=\"card-title\">" + esc(todo.title || "（无标题）") + "</div>",
+          "  <div class=\"chips\">",
+          todo.tag ? "<span class=\"chip tag\">" + esc(todo.tag) + "</span>" : "",
+          todo.branch ? "<span class=\"chip\">" + esc(todo.branch) + "</span>" : "",
+          dates,
+          todo.blocker ? "<span class=\"chip warn\">阻塞：" + esc(todo.blocker) + "</span>" : "",
+          chips,
+          done ? "<span class=\"chip\">已完成</span>" : "",
+          "  </div>",
+          "  <div class=\"card-actions\">",
+          "    <button type=\"button\" data-action=\"edit\" data-id=\"" + esc(todo.id) + "\">编辑</button>",
+          done ? "" : "    <button type=\"button\" data-action=\"done\" data-id=\"" + esc(todo.id) + "\">完成</button>",
+          "    <button type=\"button\" class=\"danger\" data-action=\"delete\" data-id=\"" + esc(todo.id) + "\">删除</button>",
+          "  </div>",
+          "</article>"
+        ].join("");
+      }
+
+      function renderLane(project, lane) {
+        var todos = todosIn(project, lane.id);
+        return [
+          "<section class=\"lane\">",
+          "  <header class=\"lane-head\">",
+          "    <span class=\"lane-name\">" + esc(lane.name) + "</span>",
+          "    <span class=\"lane-count\">" + todos.length + "</span>",
+          "    <button type=\"button\" title=\"在此泳道新建任务\" data-action=\"create\" data-lane=\"" + esc(lane.id) + "\">＋</button>",
+          "  </header>",
+          "  <div class=\"lane-body\" data-drop=\"" + esc(lane.id) + "\">" + todos.map(function (todo) { return renderCard(project, todo); }).join("") + "</div>",
+          "</section>"
+        ].join("");
+      }
+
+      function render() {
+        var project = currentProject();
+        // 多标签/多项目同时打开时，用项目名区分页面标题
+        document.title = project ? project.name + " · 共享待办" : "待办看板 · 局域网共享";
+        if (!project) {
+          app.innerHTML = "<div class=\"empty\"><h1>尚未共享任何项目</h1><p class=\"muted\">请在桌面端「设置 → 局域网共享」中启用服务并勾选要共享的项目。</p></div>";
+          return;
+        }
+        var list = projectList();
+        var tabs = list.length > 1 ? "<nav class=\"tabs\">" + list.map(function (item) {
+          return "<button type=\"button\" data-action=\"switch\" data-id=\"" + esc(item.id) + "\" class=\"" + (item.id === project.id ? "active" : "") + "\">" + esc(item.name) + "</button>";
+        }).join("") + "</nav>" : "";
+        var total = (state.todos || []).filter(function (item) { return item.projectId === project.id && !item.archived; }).length;
+        var header = [
+          "<header class=\"top\">",
+          "  <div class=\"brand\"><h1>" + esc(project.name) + "</h1><span class=\"muted\">共 " + total + " 条任务</span></div>",
+          "  <div class=\"status\"><span id=\"conn\" class=\"dot " + connection + "\"></span><span id=\"conn-text\">" + connectionLabel() + "</span>",
+          "  <button type=\"button\" data-action=\"refresh\" " + (saving ? "disabled" : "") + ">" + (saving ? "保存中…" : "刷新") + "</button></div>",
+          "</header>",
+          tabs
+        ].join("");
+        var board = "<div class=\"board\">" + laneList(project).map(function (lane) { return renderLane(project, lane); }).join("") + "</div>";
+        var foot = "<footer class=\"foot\">改动会实时同步到所有已连接设备；连接断开后浏览器会自动重连。</footer>";
+        app.innerHTML = header + board + foot;
+      }
+
+      function applyServerState(scoped) {
+        state = { projects: (scoped && scoped.projects) || [], todos: (scoped && scoped.todos) || [], resources: [] };
+        serverSnapshot = JSON.parse(JSON.stringify({ projects: state.projects, todos: state.todos, resources: [] }));
+        loaded = true;
+        render();
+      }
+
+      function refresh() {
+        return fetch(apiUrl("/api/state"), { headers: { Accept: "application/json" } }).then(function (response) {
+          if (response.status === 401) {
+            showGate();
+            throw new Error("unauthorized");
+          }
+          if (!response.ok) throw new Error("HTTP " + response.status);
+          return response.json();
+        }).then(function (body) {
+          fieldDefs = body.fieldDefs || [];
+          applyServerState(body.state || { projects: [], todos: [], resources: [] });
+          setConnection("live");
+        }).catch(function (error) {
+          if (String(error.message) !== "unauthorized") setConnection("offline");
+          throw error;
+        });
+      }
+
+      function saveTodos(nextTodos, successMessage) {
+        if (saving) { toast("正在保存，请稍候", "warn"); return; }
+        var next = { projects: state.projects, todos: nextTodos, resources: [] };
+        var expected = serverSnapshot || { projects: [], todos: [], resources: [] };
+        saving = true;
+        render();
+        fetch(apiUrl("/api/save"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ payload: next, expected: expected, clientId: clientId })
+        }).then(function (response) {
+          return response.json().catch(function () { return {}; }).then(function (body) {
+            return { status: response.status, ok: response.ok, body: body };
+          });
+        }).then(function (result) {
+          saving = false;
+          if (result.ok && result.body && result.body.state) {
+            applyServerState(result.body.state);
+            setConnection("live");
+            if (successMessage) toast(successMessage, "ok");
+          } else if (result.status === 401) {
+            showGate();
+            render();
+          } else if (result.status === 409) {
+            toast("数据刚被其他设备修改，已刷新为最新，请重试", "warn");
+            void refresh().catch(function () {});
+          } else {
+            toast((result.body && result.body.error) || "保存失败", "err");
+            void refresh().catch(function () {});
+          }
+        }).catch(function (error) {
+          saving = false;
+          setConnection("offline");
+          toast("网络错误：" + error, "err");
+          render();
+        });
+      }
+
+      function subscribe() {
+        if (source) { source.close(); source = null; }
+        setConnection("connecting");
+        source = new EventSource(apiUrl("/api/events"));
+        source.onopen = function () {
+          setConnection("live");
+          // 重连后补一次全量，避免断线期间漏掉的改动
+          void refresh().catch(function () {});
+        };
+        source.addEventListener("state", function (event) {
+          var message = null;
+          try { message = JSON.parse(event.data); } catch (error) { return; }
+          if (!message || message.origin === clientId) return;
+          if (message.state) applyServerState(message.state);
+        });
+        source.addEventListener("resync", function () { void refresh().catch(function () {}); });
+        source.onerror = function () { setConnection("offline"); };
+      }
+
+      function showGate(message) {
+        gate.classList.remove("hidden");
+        var error = document.getElementById("token-error");
+        if (error) error.textContent = message || "";
+      }
+
+      function hideGate() { gate.classList.add("hidden"); }
+
+      document.getElementById("token-submit").addEventListener("click", function () {
+        var input = document.getElementById("token-input");
+        var value = (input.value || "").trim();
+        if (!value) { showGate("请输入访问令牌"); return; }
+        token = value;
+        sessionStorage.setItem("tk-lan-token", value);
+        boot();
+      });
+      document.getElementById("token-input").addEventListener("keydown", function (event) {
+        if (event.key === "Enter") document.getElementById("token-submit").click();
+      });
+
+      function openModal(project, options) {
+        var editing = options.todo || null;
+        var lanes = laneList(project);
+        var laneId = options.laneId || (editing ? editing.swimlaneId : lanes[0].id);
+        modalContext = { project: project, todo: editing };
+        var laneOptions = lanes.map(function (lane) {
+          return "<option value=\"" + esc(lane.id) + "\"" + (lane.id === laneId ? " selected" : "") + ">" + esc(lane.name) + "</option>";
+        }).join("");
+        var fieldInputs = fieldsFor(project).filter(function (def) { return def.source === "manual"; }).map(function (def) {
+          var value = editing ? fieldValue(editing, def.id) : def.defaultValue;
+          if (def.type === "checkbox") {
+            return "<label class=\"check\"><input type=\"checkbox\" data-field=\"" + esc(def.id) + "\"" + (value === true ? " checked" : "") + " /> " + esc(def.label) + "</label>";
+          }
+          if (def.type === "select") {
+            var options = [""].concat(def.options || []).map(function (option) {
+              return "<option value=\"" + esc(option) + "\"" + (option === value ? " selected" : "") + ">" + (option ? esc(option) : "（未设置）") + "</option>";
+            }).join("");
+            return "<label>" + esc(def.label) + "<select data-field=\"" + esc(def.id) + "\">" + options + "</select></label>";
+          }
+          var type = def.type === "number" ? "number" : def.type === "date" ? "date" : def.type === "datetime" ? "datetime-local" : "text";
+          var text = isEmptyValue(value) ? "" : (Array.isArray(value) ? value.join(", ") : String(value));
+          if (def.type === "datetime") text = text.replace(" ", "T");
+          return "<label>" + esc(def.label) + "<input type=\"" + type + "\" data-field=\"" + esc(def.id) + "\" value=\"" + esc(text) + "\" /></label>";
+        }).join("");
+        var readonly = fieldsFor(project).filter(function (def) { return def.source !== "manual" && def.showOnCard; }).map(function (def) {
+          var text = editing ? formatField(def, fieldValue(editing, def.id)) : "";
+          return text ? "<p class=\"muted\">" + esc(def.label) + "：" + esc(text) + "（自动）</p>" : "";
+        }).join("");
+        modalRoot.innerHTML = [
+          "<div class=\"modal-mask\" data-action=\"close-modal\">",
+          "  <div class=\"modal-card\">",
+          "    <h2>" + (editing ? "编辑任务" : "新建任务") + "</h2>",
+          "    <label>标题<input id=\"f-title\" type=\"text\" value=\"" + esc(editing ? editing.title : "") + "\" placeholder=\"要做什么？\" /></label>",
+          "    <label>备注<textarea id=\"f-note\" placeholder=\"补充说明（支持 Markdown 文本）\">" + esc(editing ? editing.note : "") + "</textarea></label>",
+          "    <div class=\"grid2\">",
+          "      <label>泳道<select id=\"f-lane\">" + laneOptions + "</select></label>",
+          "      <label>分支<input id=\"f-branch\" type=\"text\" value=\"" + esc(editing ? editing.branch : "") + "\" /></label>",
+          "    </div>",
+          "    <div class=\"grid2\">",
+          "      <label>开始日期<input id=\"f-start\" type=\"date\" value=\"" + esc(editing && editing.startDate ? editing.startDate : "") + "\" /></label>",
+          "      <label>结束日期<input id=\"f-end\" type=\"date\" value=\"" + esc(editing && editing.endDate ? editing.endDate : "") + "\" /></label>",
+          "    </div>",
+          "    <div class=\"grid2\">",
+          "      <label>提交标记<input id=\"f-tag\" type=\"text\" value=\"" + esc(editing ? editing.tag : "") + "\" placeholder=\"留空自动生成\" /></label>",
+          "      <label>阻塞原因<input id=\"f-blocker\" type=\"text\" value=\"" + esc(editing ? editing.blocker : "") + "\" /></label>",
+          "    </div>",
+          fieldInputs,
+          readonly,
+          "    <div class=\"modal-actions\">",
+          "      <button type=\"button\" data-action=\"cancel\">取消</button>",
+          "      <button type=\"button\" class=\"primary\" data-action=\"submit\">" + (editing ? "保存" : "创建") + "</button>",
+          "    </div>",
+          "  </div>",
+          "</div>"
+        ].join("");
+        var title = document.getElementById("f-title");
+        if (title) title.focus();
+      }
+
+      function closeModal() {
+        modalContext = null;
+        modalRoot.innerHTML = "";
+      }
+
+      function collectValues(project) {
+        var value = function (id) { var el = document.getElementById(id); return el ? el.value : ""; };
+        var customFields = [];
+        fieldsFor(project).filter(function (def) { return def.source === "manual"; }).forEach(function (def) {
+          var el = document.querySelector("[data-field=\"" + def.id + "\"]");
+          if (!el) return;
+          var raw = null;
+          if (def.type === "checkbox") raw = el.checked;
+          else if (def.type === "number") { var num = Number(el.value); raw = (el.value || "").trim() === "" ? null : (Number.isFinite(num) ? num : el.value); }
+          else if (def.type === "multiselect") raw = (el.value || "").split(",").map(function (part) { return part.trim(); }).filter(Boolean);
+          else if (def.type === "datetime") raw = (el.value || "").trim() === "" ? null : el.value.replace("T", " ");
+          else raw = (el.value || "").trim() === "" ? null : el.value;
+          if (isEmptyValue(raw)) return;
+          customFields.push({ fieldId: def.id, value: raw });
+        });
+        return {
+          title: (value("f-title") || "").trim(),
+          note: value("f-note") || "",
+          branch: (value("f-branch") || "").trim(),
+          tag: (value("f-tag") || "").trim(),
+          startDate: value("f-start") || null,
+          endDate: value("f-end") || null,
+          blocker: (value("f-blocker") || "").trim(),
+          laneId: value("f-lane"),
+          customFields: canonicalFields(customFields)
+        };
+      }
+
+      function submitModal() {
+        if (!modalContext) return;
+        var project = modalContext.project;
+        var values = collectValues(project);
+        if (!values.title) { toast("标题不能为空", "warn"); return; }
+        var todo = modalContext.todo;
+        closeModal();
+        if (todo) updateTodo(project, todo, values);
+        else createTodo(project, values);
+      }
+
+      function createTodo(project, values) {
+        var now = Date.now();
+        var lanes = laneList(project);
+        var lane = lanes.filter(function (item) { return item.id === values.laneId; })[0] || lanes[0];
+        var id = (window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : "g" + now + Math.random().toString(36).slice(2);
+        var siblings = state.todos.filter(function (item) { return item.projectId === project.id && item.swimlaneId === lane.id && !item.archived; });
+        var maxOrder = siblings.reduce(function (max, item) { return Math.max(max, item.sortOrder || 0); }, -1);
+        var todo = {
+          id: id, projectId: project.id, title: values.title, note: values.note, repoPath: "",
+          branch: values.branch, status: lane.status, swimlaneId: lane.id, quadrant: "schedule",
+          seq: 0, tag: values.tag, startDate: values.startDate, endDate: values.endDate,
+          blocker: values.blocker, archived: false,
+          startedAt: lane.status === "todo" ? null : now,
+          doneAt: lane.status === "done" ? now : null,
+          commits: [], sortOrder: maxOrder + 1, createdBy: "human", aiCoordinated: false,
+          customFields: values.customFields, createdAt: now, updatedAt: now
+        };
+        saveTodos(state.todos.concat([todo]), "任务已创建");
+      }
+
+      function updateTodo(project, todo, values) {
+        var now = Date.now();
+        var lanes = laneList(project);
+        var lane = lanes.filter(function (item) { return item.id === values.laneId; })[0] || lanes[0];
+        var next = state.todos.map(function (item) {
+          if (item.id !== todo.id) return item;
+          var updated = Object.assign({}, item, {
+            title: values.title, note: values.note, branch: values.branch, tag: values.tag,
+            startDate: values.startDate, endDate: values.endDate, blocker: values.blocker,
+            swimlaneId: lane.id, status: lane.status, customFields: values.customFields, updatedAt: now
+          });
+          if (lane.status === "doing" && !updated.startedAt) updated.startedAt = now;
+          if (lane.status === "done") { updated.doneAt = now; if (!updated.startedAt) updated.startedAt = now; }
+          if (lane.status !== "done") updated.doneAt = null;
+          return updated;
+        });
+        saveTodos(next, "任务已保存");
+      }
+
+      function moveTodoToLane(todo, laneId) {
+        var project = currentProject();
+        if (!project || todo.swimlaneId === laneId) return;
+        var lane = laneList(project).filter(function (item) { return item.id === laneId; })[0];
+        if (!lane) return;
+        var now = Date.now();
+        var siblings = state.todos.filter(function (item) { return item.projectId === project.id && item.swimlaneId === lane.id && !item.archived; });
+        var maxOrder = siblings.reduce(function (max, item) { return Math.max(max, item.sortOrder || 0); }, -1);
+        var next = state.todos.map(function (item) {
+          if (item.id !== todo.id) return item;
+          var updated = Object.assign({}, item, { swimlaneId: lane.id, status: lane.status, sortOrder: maxOrder + 1, updatedAt: now });
+          if (lane.status === "doing" && !updated.startedAt) updated.startedAt = now;
+          if (lane.status === "done") { updated.doneAt = now; if (!updated.startedAt) updated.startedAt = now; }
+          if (lane.status !== "done") updated.doneAt = null;
+          return updated;
+        });
+        saveTodos(next, "已移动到「" + lane.name + "」");
+      }
+
+      function completeTodo(project, todo) {
+        var doneLane = laneList(project).filter(function (lane) { return lane.status === "done"; })[0];
+        if (!doneLane) { toast("该项目没有「已完成」泳道", "warn"); return; }
+        moveTodoToLane(todo, doneLane.id);
+      }
+
+      function deleteTodo(todo) {
+        if (!window.confirm("确定删除任务「" + todo.title + "」吗？")) return;
+        saveTodos(state.todos.filter(function (item) { return item.id !== todo.id; }), "任务已删除");
+      }
+
+      app.addEventListener("click", function (event) {
+        var target = event.target.closest ? event.target.closest("[data-action]") : null;
+        if (!target) return;
+        var project = currentProject();
+        if (!project) return;
+        var action = target.getAttribute("data-action");
+        if (action === "switch") {
+          activeProjectId = target.getAttribute("data-id");
+          sessionStorage.setItem("tk-lan-project", activeProjectId);
+          render();
+          return;
+        }
+        if (action === "refresh") { void refresh().catch(function () {}); return; }
+        if (action === "create") { openModal(project, { laneId: target.getAttribute("data-lane") }); return; }
+        var id = target.getAttribute("data-id");
+        var todo = state.todos.filter(function (item) { return item.id === id; })[0];
+        if (!todo) return;
+        if (action === "edit") openModal(project, { todo: todo });
+        else if (action === "done") completeTodo(project, todo);
+        else if (action === "delete") deleteTodo(todo);
+      });
+
+      modalRoot.addEventListener("click", function (event) {
+        var target = event.target.closest ? event.target.closest("[data-action]") : null;
+        if (!target) return;
+        var action = target.getAttribute("data-action");
+        if (action === "close-modal") { if (event.target.classList.contains("modal-mask")) closeModal(); return; }
+        if (action === "cancel") { closeModal(); return; }
+        if (action === "submit") { submitModal(); return; }
+      });
+
+      app.addEventListener("dragstart", function (event) {
+        var card = event.target.closest ? event.target.closest("[data-todo]") : null;
+        if (!card) return;
+        draggingId = card.getAttribute("data-todo");
+        if (event.dataTransfer) {
+          event.dataTransfer.effectAllowed = "move";
+          try { event.dataTransfer.setData("text/plain", draggingId); } catch (error) { /* 旧浏览器忽略 */ }
+        }
+      });
+      app.addEventListener("dragover", function (event) {
+        var lane = event.target.closest ? event.target.closest("[data-drop]") : null;
+        if (!lane || !draggingId) return;
+        event.preventDefault();
+        lane.classList.add("over");
+      });
+      app.addEventListener("dragleave", function (event) {
+        var lane = event.target.closest ? event.target.closest("[data-drop]") : null;
+        if (lane) lane.classList.remove("over");
+      });
+      app.addEventListener("drop", function (event) {
+        var lane = event.target.closest ? event.target.closest("[data-drop]") : null;
+        if (!lane || !draggingId) return;
+        event.preventDefault();
+        lane.classList.remove("over");
+        var id = draggingId;
+        draggingId = null;
+        var todo = state.todos.filter(function (item) { return item.id === id; })[0];
+        if (todo) moveTodoToLane(todo, lane.getAttribute("data-drop"));
+      });
+
+      function boot() {
+        render();
+        refresh().then(function () {
+          hideGate();
+          subscribe();
+        }).catch(function (error) {
+          if (String(error && error.message) !== "unauthorized") {
+            setConnection("offline");
+            toast("无法连接共享服务，请确认已开启局域网共享", "err");
+          }
+        });
+      }
+
+      boot();
+    })();
+  </script>
+</body>
+</html>
