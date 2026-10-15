@@ -298,22 +298,22 @@ async fn api_events(
     let guard = ClientGuard(clients);
     let stream =
         futures_util::stream::unfold((receiver, guard), |(mut receiver, guard)| async move {
-            loop {
-                match receiver.recv().await {
-                    Ok(message) => {
-                        if message.as_ref() == SHUTDOWN_SENTINEL {
-                            return None;
-                        }
-                        let event = Event::default().event("state").data(message.to_string());
-                        return Some((Ok::<Event, Infallible>(event), (receiver, guard)));
+            // 每个分支都是直接返回（unfold 每次只产出下一个事件），所以不需要 loop；
+            // 保留 loop 会被 clippy 判为 never_loops（-D warnings 会卡住）。
+            match receiver.recv().await {
+                Ok(message) => {
+                    if message.as_ref() == SHUTDOWN_SENTINEL {
+                        return None;
                     }
-                    Err(broadcast::error::RecvError::Lagged(_)) => {
-                        // 落后太多：通知客户端重新全量拉取，避免漏状态
-                        let event = Event::default().event("resync").data("{}");
-                        return Some((Ok::<Event, Infallible>(event), (receiver, guard)));
-                    }
-                    Err(broadcast::error::RecvError::Closed) => return None,
+                    let event = Event::default().event("state").data(&message);
+                    Some((Ok::<Event, Infallible>(event), (receiver, guard)))
                 }
+                Err(broadcast::error::RecvError::Lagged(_)) => {
+                    // 落后太多：通知客户端重新全量拉取，避免漏状态
+                    let event = Event::default().event("resync").data("{}");
+                    Some((Ok::<Event, Infallible>(event), (receiver, guard)))
+                }
+                Err(broadcast::error::RecvError::Closed) => None,
             }
         });
     Sse::new(stream)

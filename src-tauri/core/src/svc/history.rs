@@ -57,6 +57,28 @@ fn entities(state: &DbState) -> AppResult<HashMap<(String, String), Value>> {
     }
     Ok(result)
 }
+/// 只改了排序/更新时间的记录不写历史。
+/// 拖拽排序会一次性改动整条泳道的所有任务（`commitLaneOrder` 给每行分配 0..n），
+/// 而排序是视图状态、从历史里恢复旧排序没有意义，却会把整实体 JSON
+/// （含内嵌 base64 图片的备注）成对写进 change_history——实测单行可达 4 MB。
+fn only_order_noise(old: Option<&Value>, new: Option<&Value>) -> bool {
+    let (Some(Value::Object(before)), Some(Value::Object(after))) = (old, new) else {
+        return false;
+    };
+    let mut changed = false;
+    for key in before.keys().chain(after.keys()) {
+        if before.get(key) == after.get(key) {
+            continue;
+        }
+        if key == "sortOrder" || key == "updatedAt" {
+            changed = true;
+            continue;
+        }
+        // 有任何实质字段变化都要记录
+        return false;
+    }
+    changed
+}
 pub fn record(conn: &Connection, before: &DbState, after: &DbState) -> AppResult<()> {
     let before = entities(before)?;
     let after = entities(after)?;
@@ -66,7 +88,7 @@ pub fn record(conn: &Connection, before: &DbState, after: &DbState) -> AppResult
         let key = (entity.clone(), id.clone());
         let old = before.get(&key);
         let new = after.get(&key);
-        if old == new {
+        if old == new || only_order_noise(old, new) {
             continue;
         }
         conn.prepare_cached("INSERT INTO change_history(id,entity,entity_id,actor,happened_at,before_json,after_json) VALUES(?1,?2,?3,?4,?5,?6,?7)")?.execute(rusqlite::params![uuid::Uuid::new_v4().to_string(), entity, id, actor, super::workflow::now(), old.map(Value::to_string), new.map(Value::to_string)])?;
@@ -175,4 +197,48 @@ pub fn restore(id: &str, expected: DbState) -> AppResult<DbState> {
         // 恢复旧版本不执行自动脚本：还原结果必须与用户选中的版本一致
         super::db_cmds::restore_state_checked(payload, expected)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::only_order_noise;
+    use serde_json::json;
+
+    #[test]
+    fn order_only_change_is_not_recorded() {
+        let before = json!({"id":"t1","title":"甲","sortOrder":0,"updatedAt":10,"commits":[]});
+        let after = json!({"id":"t1","title":"甲","sortOrder":3,"updatedAt":20,"commits":[]});
+        assert!(
+            only_order_noise(Some(&before), Some(&after)),
+            "拖拽排序（只改 sortOrder/updatedAt）不该写进变更历史"
+        );
+    }
+
+    #[test]
+    fn real_field_change_is_recorded() {
+        let before = json!({"id":"t1","title":"甲","sortOrder":0,"updatedAt":10});
+        let after = json!({"id":"t1","title":"乙","sortOrder":3,"updatedAt":20});
+        assert!(
+            !only_order_noise(Some(&before), Some(&after)),
+            "标题变了必须记录"
+        );
+    }
+
+    #[test]
+    fn create_and_delete_are_recorded() {
+        let value = json!({"id":"t1","sortOrder":1});
+        assert!(!only_order_noise(None, Some(&value)), "新建必须记录");
+        assert!(!only_order_noise(Some(&value), None), "删除必须记录");
+    }
+
+    #[test]
+    fn non_object_or_identical_payloads_fall_through() {
+        let value = json!({"id":"t1","sortOrder":1,"updatedAt":2});
+        assert!(
+            !only_order_noise(Some(&value), Some(&value)),
+            "完全相同由 old==new 拦下"
+        );
+        let list = json!([1, 2]);
+        assert!(!only_order_noise(Some(&list), Some(&list)));
+    }
 }

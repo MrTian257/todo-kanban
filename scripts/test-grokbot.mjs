@@ -77,7 +77,12 @@ try {
   assert.deepEqual(interpolateRings(from, to, -1), from, 't 小于 0 应被钳制');
 
   assert.equal(blinkScale(0), 1, '0ms 处于睁眼态');
-  assert.ok(blinkScale(160) < 0.1, '半程应接近闭合');
+  // 眨眼曲线是**非对称**的：前 42% 快速闭合、后 58% 缓慢睁开（见 src/grokbot/core/morph.ts blinkScale）。
+  // 所以「接近闭合」的点是 0.42 × 时长而不是半程；这里同时钉住两段语义，改曲线必须显式改这里。
+  const closeAt = Math.round(gb.BLINK_DURATION_MS * 0.42);
+  assert.ok(blinkScale(closeAt) <= 0.04 + 1e-9, `闭合到底（${closeAt}ms）应压到 BLINK_MIN_SCALE`);
+  assert.ok(blinkScale(160) < 0.5, '半程已进入睁开阶段，但还没睁眼');
+  assert.ok(blinkScale(closeAt) < blinkScale(160), '闭合点必须比半程更紧（先闭合后睁开）');
   assert.equal(blinkScale(320), 1, '到点即视为睁眼');
   assert.equal(blinkScale(-1), 1, '负耗时按睁眼处理');
   assert.ok(gb.BLINK_DURATION_MS > 0, '眨眼时长必须是正数');
@@ -132,7 +137,7 @@ try {
   // ── 5. 与应用侧的约定：心情映射必须指向真实存在的状态 ──────
   // 引擎对未知状态 id 是静默忽略的，映射写错只会"没反应"，不会报错——所以要在这里拦住。
   const petStateSource = await readFile(path.resolve('src/lib/petState.ts'), 'utf8');
-  const mapping = petStateSource.match(/GROKBOT_STATE_BY_MOOD[^{]*\{([^}]*)\}/);
+  const mapping = petStateSource.match(/export const GROKBOT_STATE_BY_MOOD[^{]*\{([^}]*)\}/);
   assert.ok(mapping, '未找到 GROKBOT_STATE_BY_MOOD 映射表');
   const targets = [...mapping[1].matchAll(/:\s*"([^"]+)"/g)].map((match) => match[1]);
   assert.equal(targets.length, 7, '心情映射应覆盖 7 档心情');

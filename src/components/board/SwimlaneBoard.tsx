@@ -59,14 +59,29 @@ export function SwimlaneBoard({projectId, query = "", branch = ""}: {projectId:s
   const [target,setTarget] = React.useState<Target|null>(null);
   const [laneOver,setLaneOver] = React.useState<string|null>(null);
   const targetRef = React.useRef<Target|null>(null);
+  // 拖拽期间的实时指针位置（dnd-kit 的 DragMoveEvent 不携带原生事件，只能自己跟踪）
+  const pointerRef = React.useRef<{x:number;y:number}|null>(null);
+  const trackPointer = React.useCallback((e:PointerEvent) => { pointerRef.current = {x:e.clientX, y:e.clientY}; }, []);
+  React.useEffect(() => () => window.removeEventListener("pointermove", trackPointer, true), [trackPointer]);
   const sensors = useSensors(useSensor(CardPointerSensor,{activationConstraint:{distance:6}}),useSensor(KeyboardSensor,{coordinateGetter:sortableKeyboardCoordinates}));
-  const reset = () => {setActive(null);setTarget(null);targetRef.current=null;setLaneOver(null);};
+  const reset = () => {setActive(null);setTarget(null);targetRef.current=null;setLaneOver(null);pointerRef.current=null;window.removeEventListener("pointermove", trackPointer, true);};
+  /** 把 dnd-kit 的命中结果换算成「泳道 + 插入序号」（序号以剔除被拖任务后的列表为基准）。 */
   const locate = (e:DragMoveEvent|DragEndEvent):Target|null => {
     if (!e.over) return null;
     const data = e.over.data.current;
     const laneId = data?.laneId as string | undefined;
     if (!laneId) return null;
-    const list = (items.get(laneId)??[]).filter(t=>t.id!==String(e.active.id));
+    const full = items.get(laneId)??[];
+    const list = full.filter(t=>t.id!==String(e.active.id));
+    // 原地放开判定：指针仍停在被拖卡片「拖拽开始时」的矩形内 = 没有换位置。
+    // 卡片自身的 droppable 在 collision 里被过滤掉了，此时命中会落到泳道空白区（body）或相邻卡片，
+    // 按空白区语义返回「末尾」会把中间卡片挪到泳道末尾（verify-dnd 场景6 回归）。
+    const selfIndex = full.findIndex(t=>t.id===String(e.active.id));
+    const start = e.active.rect.current.initial;
+    const p = pointerRef.current;
+    if (selfIndex >= 0 && start && p && p.x >= start.left && p.x <= start.right && p.y >= start.top && p.y <= start.bottom) {
+      return {laneId, index: Math.min(selfIndex, list.length)};
+    }
     if (data?.kind === "body") return {laneId,index:list.length};
     const index = list.findIndex(t=>t.id===String(e.over!.id));
     if (index < 0) return null;
@@ -101,13 +116,40 @@ export function SwimlaneBoard({projectId, query = "", branch = ""}: {projectId:s
   };
   const draggingTask=active?.kind === "todo" ? todos.find(t=>t.id===active.id):null;
   const draggingLane=active?.kind === "lane" ? lanes.find(l=>l.id===active.id):null;
-  return <DndContext sensors={sensors} collisionDetection={collision} onDragStart={e=>{setActive({kind:e.active.data.current?.kind,id:String(e.active.id).replace(/^lane:/,"")});}} onDragOver={over} onDragMove={over} onDragEnd={end} onDragCancel={reset}>
+  // 横向溢出可感知：泳道多到一屏放不下时，右缘渐隐 + 「还有 N 条」按钮翻一屏
+  // （滚动条在容器最底部，离视线很远，用户不知道后面还有泳道）。
+  const scroller = React.useRef<HTMLDivElement>(null);
+  const [spill, setSpill] = React.useState({hidden:0, canLeft:false, canRight:false});
+  const measureSpill = React.useCallback(() => {
+    const el = scroller.current; if (!el) return;
+    const right = el.scrollLeft + el.clientWidth;
+    let hidden = 0;
+    for (const lane of Array.from(el.querySelectorAll<HTMLElement>("[data-lane-id]"))) {
+      if (lane.offsetLeft + lane.offsetWidth > right + 1) hidden += 1;
+    }
+    const next = {hidden, canLeft: el.scrollLeft > 1, canRight: right < el.scrollWidth - 1};
+    setSpill(previous => previous.hidden===next.hidden && previous.canLeft===next.canLeft && previous.canRight===next.canRight ? previous : next);
+  }, []);
+  React.useEffect(() => {
+    const el = scroller.current; if (!el) return;
+    measureSpill();
+    const observer = new ResizeObserver(measureSpill);
+    observer.observe(el);
+    for (const lane of Array.from(el.querySelectorAll("[data-lane-id]"))) observer.observe(lane);
+    return () => observer.disconnect();
+  }, [measureSpill, lanes, items]);
+  const pageBy = (dir:number) => { const el=scroller.current; if (!el) return; el.scrollBy({left: dir*Math.max(240, el.clientWidth*0.8), behavior:"smooth"}); };
+  return <DndContext sensors={sensors} collisionDetection={collision} onDragStart={e=>{setActive({kind:e.active.data.current?.kind,id:String(e.active.id).replace(/^lane:/,"")}); const a=e.activatorEvent as PointerEvent|undefined; if(a && Number.isFinite(a.clientX)) pointerRef.current={x:a.clientX,y:a.clientY}; window.addEventListener("pointermove", trackPointer, true);}} onDragOver={over} onDragMove={over} onDragEnd={end} onDragCancel={reset}>
     {filtered && <p className="mb-2 text-xs text-muted-foreground">筛选结果中暂不调整任务顺序，清除筛选后即可拖拽。</p>}
-    <div className="flex h-full items-stretch gap-5 overflow-x-auto" data-testid="kanban">
+    <div className="relative h-full min-h-0">
+    <div ref={scroller} onScroll={measureSpill} className="flex h-full items-stretch gap-5 overflow-x-auto" data-testid="kanban">
       <SortableContext items={lanes.map(l=>`lane:${l.id}`)} strategy={horizontalListSortingStrategy}>
         {lanes.map(lane=><Lane key={lane.id} lane={lane} tasks={items.get(lane.id)??[]} activeId={active?.kind==="todo"?active.id:null} target={target?.laneId===lane.id?target:null} laneTarget={laneOver===lane.id && draggingLane?.id!==lane.id} disabled={filtered} projectId={projectId} />)}
       </SortableContext>
       {lanes.length===0 && <div className="tk-panel flex-1 p-10 text-center text-muted-foreground">暂无泳道，请通过“管理泳道”添加。</div>}
+    </div>
+    {spill.canRight && !active && <><div aria-hidden className="tk-board-fade" /><button type="button" className="tk-board-more" onClick={() => pageBy(1)} aria-label="向右看更多泳道">还有 {spill.hidden} 条泳道 →</button></>}
+    {spill.canLeft && !active && <button type="button" className="tk-board-more is-left" onClick={() => pageBy(-1)} aria-label="向左看更早的泳道">← 前面的泳道</button>}
     </div>
     <DragOverlay dropAnimation={null}>{draggingTask ? <div data-drag-overlay="task" className="w-[280px] rotate-1 shadow-xl rounded-xl"><TodoRow todo={draggingTask} variant="card" /></div> : draggingLane ? <div data-drag-overlay="lane" className="tk-panel w-[300px] p-5 shadow-xl"><div className="flex gap-2 font-semibold"><GripVertical className="h-5 w-5 text-primary"/>{draggingLane.name}</div><p className="mt-2 text-xs text-muted-foreground">{items.get(draggingLane.id)?.length ?? 0} 个任务</p></div>:null}</DragOverlay>
   </DndContext>;

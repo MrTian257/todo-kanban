@@ -29,7 +29,7 @@ npm run tauri dev     # 桌面窗口开发（1440×900）
 
 ## 架构
 
-三进程位面：React 前端（pages → components → lib 单向分层）经 Tauri invoke（17 命令）调用 Rust 壳 crate，转调纯逻辑库 **todo-kanban-core**（models / error / tool / db / svc；SQLite WAL，schema v8，数据源固定为平台数据目录 `todo-kanban.db`）；独立 **mcp-server** 进程以 stdio MCP（手写 JSON-RPC，9 tools + 3 resources）复用同一 core，`MCP_TODO_READONLY=1` 一键只读。
+三进程位面：React 前端（pages → components → lib 单向分层）经 Tauri invoke（48 个命令）调用 Rust 壳 crate，转调纯逻辑库 **todo-kanban-core**（models / error / tool / db / svc；SQLite WAL，schema v14，数据源固定为平台数据目录 `todo-kanban.db`）；独立 **mcp-server** 进程以 stdio MCP（手写 JSON-RPC，11 tools + 6 resources）复用同一 core，`MCP_TODO_READONLY=1` 一键只读。
 
 完整设计（数据模型 / 命令契约 / UI / 核心流程 / 实现状态）见 [docs/软件设计文档.md](docs/软件设计文档.md)；关键决策的完整背景与备选方案见 [docs/decisions/](docs/decisions/)。
 
@@ -39,7 +39,7 @@ npm run tauri dev     # 桌面窗口开发（1440×900）
 | --- | --- |
 | [docs/软件设计文档.md](docs/软件设计文档.md) | 整合视图（推荐入口）：产品 / 架构 / 数据 / 接口 / UI / 流程 + 实现状态 |
 | [docs/README.md](docs/README.md) | 设计基线文档地图 |
-| [docs/decisions/](docs/decisions/) | 架构决策记录 ADR-001 ~ ADR-012 |
+| [docs/decisions/](docs/decisions/) | 架构决策记录 ADR-001 ~ ADR-021 |
 | [docs/01-design/prd-swimlane.md](docs/01-design/prd-swimlane.md) | 泳道看板重构 PRD（已实施） |
 | docs/01-design/ · docs/02-development/ | 设计分册与开发指南 |
 

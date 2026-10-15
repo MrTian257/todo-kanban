@@ -322,7 +322,7 @@ export const TodoRow = React.memo(function TodoRow({ todo, projectName, showProj
           </DropdownMenuContent>
         </DropdownMenu>}
         {cardFields.length > 0 && (
-          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          <div data-task-part="fields" className="mt-2 flex flex-wrap items-center gap-1.5">
             {cardFields.slice(0, 3).map((def) => {
               const text = formatCustomValue(def, resolveFieldValue(def, todo, project));
               if (!text) return null;
@@ -335,7 +335,7 @@ export const TodoRow = React.memo(function TodoRow({ todo, projectName, showProj
             {cardFields.length > 3 && <span className="text-xs text-muted-foreground">+{cardFields.length - 3}</span>}
           </div>
         )}
-        {todo.blocker && <div className="mt-3 flex items-start gap-1.5 rounded-md bg-amber-500/10 px-2 py-1.5 text-xs text-amber-700 dark:text-amber-300"><AlertTriangle className="mt-0.5 h-3 w-3 shrink-0"/><span className="break-words">阻塞：{todo.blocker}</span></div>}
+        {todo.blocker && <div data-task-part="blocker" className="mt-3 flex items-start gap-1.5 rounded-md bg-amber-500/10 px-2 py-1.5 text-xs text-amber-700 dark:text-amber-300"><AlertTriangle className="mt-0.5 h-3 w-3 shrink-0"/><span className="break-words">阻塞：{todo.blocker}</span></div>}
         {/* 备注（展开） */}
         {expanded && (
           <div className="mt-1 border-t pt-1">
@@ -481,7 +481,7 @@ export const TodoRow = React.memo(function TodoRow({ todo, projectName, showProj
         <DialogContent className="max-w-sm">
           <DialogHeader>
             <DialogTitle>删除任务</DialogTitle>
-            <DialogDescription>确定删除任务「{todo.title}」？任务及其提交关联将一并移除，此操作无法撤销。</DialogDescription>
+            <DialogDescription>确定删除任务「{todo.title}」？任务及其提交关联将一并移除。确认后不会立即删除：右下角提示条会倒计时 8 秒，其间可点「撤销」收回；超时后不可恢复。</DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setConfirmDeleteOpen(false)}>取消</Button>

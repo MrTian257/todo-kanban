@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { GitBranch, Pencil, Plus, Search, Settings2, X } from "lucide-react";
+import { GitBranch, LayoutGrid, Pencil, Plus, Rows3, Search, Settings2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -17,6 +17,12 @@ export function BoardPage() {
   const projects = useAppStore(s => s.projects), todos = useAppStore(s => s.todos);
   const setActiveProjectId = useAppStore(s => s.setActiveProjectId);
   const [manage, setManage] = useState(false), [edit, setEdit] = useState(false), [query, setQuery] = useState(""), [branch, setBranch] = useState("");
+  // 卡片密度（仅本机视图偏好，不落库）：紧凑行一屏可见任务数约为卡片的 2–3 倍。
+  // 存原值而不是 JSON（useDebouncedPreference 会 JSON.stringify，读回来会多一层引号）。
+  const [compact, setCompact] = useState(() => { try { return window.localStorage.getItem("tk-board-card-density") === "compact"; } catch { return false; } });
+  useEffect(() => {
+    try { window.localStorage.setItem("tk-board-card-density", compact ? "compact" : "card"); } catch { /* 界面偏好存储可选。 */ }
+  }, [compact]);
   const project = projects.find(p => p.id === projectId);
   // 进入看板即同步当前项目（计划：看板使用当前项目）
   useEffect(() => { if (project) setActiveProjectId(project.id); }, [project?.id, setActiveProjectId]);
@@ -41,6 +47,14 @@ export function BoardPage() {
 
       <div className="ml-auto flex flex-wrap gap-2">
         <RefreshCommitsButton todoIds={todos.filter(t => t.projectId === project.id && !t.archived).map(t => t.id)} />
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button variant="outline" size="icon" className="h-9 w-9 bg-card" aria-pressed={compact} aria-label="切换卡片密度" onClick={() => setCompact(v => !v)}>
+              {compact ? <LayoutGrid className="h-4 w-4" /> : <Rows3 className="h-4 w-4" />}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{compact ? "切回舒适卡片视图" : "紧凑行视图（一屏看更多任务，不隐藏字段）"}</TooltipContent>
+        </Tooltip>
         <Button variant="outline" className="gap-2 bg-card" onClick={() => setManage(true)}><Settings2 className="h-4 w-4" />管理泳道</Button>
         <Button variant="outline" className="gap-2 bg-card" onClick={() => setEdit(true)}><Pencil className="h-4 w-4" />编辑项目</Button>
         {/* 新建待办也可以按全局快捷键（ShortcutLifecycle 注册的 new-todo） */}
@@ -53,7 +67,7 @@ export function BoardPage() {
       </div>
     </header>
 
-    <div className="min-h-0 flex-1"><SwimlaneBoard key={project.id} projectId={project.id} query={query} branch={branch} /></div>
+    <div className="min-h-0 flex-1" data-card-density={compact ? "compact" : "card"}><SwimlaneBoard key={project.id} projectId={project.id} query={query} branch={branch} /></div>
     <SwimlaneManageDialog projectId={project.id} open={manage} onOpenChange={setManage} />
     <ProjectFormDialog open={edit} onOpenChange={setEdit} project={project} />
   </div>;

@@ -9,7 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 权威文档（改动前先查；注意部分文档与实际代码有漂移，**以源码为准**）：
 - `docs/软件设计文档.md` — 整合视图（产品/架构/数据/接口/UI/流程）
 - `docs/02-development/directory-map.md` — 「去哪里改」文件地图（部分文件名仍为 todo-git 旧称，如 TodoCard.tsx、todo-git-core 已更名/移除）
-- `docs/decisions/` — ADR-001 ~ ADR-018 架构决策（文件名自描述：hash-router / system-cli-git-curl / sqlite-storage / db-config-data-source / workspace-split / global-seq-and-commit-dedupe / mcp-handwritten-protocol / single-store-write-chain / swimlane-board / swimlane-order-persistence / data-version-upgrade / fixed-db-path / custom-fields-and-automations / git-report / github-and-gitlab-forge / pomodoro-and-pet / keyboard-shortcuts）
+- `docs/decisions/` — ADR-001 ~ ADR-021 架构决策（文件名自描述：hash-router / system-cli-git-curl / sqlite-storage / db-config-data-source / workspace-split / global-seq-and-commit-dedupe / mcp-handwritten-protocol / single-store-write-chain / swimlane-board / swimlane-order-persistence / data-version-upgrade / fixed-db-path / custom-fields-and-automations / git-report / github-and-gitlab-forge / pomodoro-and-pet / keyboard-shortcuts / lan-sharing / board-lane-width-and-density / history-order-skip-and-report-scope）
 - `docs/README.md` 的文档地图已漂移（列出多份不存在的文件），只作背景参考
 
 ## 环境与常用命令
@@ -35,17 +35,17 @@ cargo test -p todo-kanban-core   # 核心库单测（db / git 解析 / 缓存 / 
 cargo test -p mcp-server         # MCP 单测（握手 / 工具清单 / 映射 / 只读门禁）
 ```
 
-前端纯逻辑无测试框架，用 esbuild 打包后跑 node 断言：`node scripts/test-board-order.mjs`、`node scripts/test-day-clock.mjs`（跨天刷新）、`node scripts/test-pomodoro.mjs`（番茄阶段流转与统计口径）、`node scripts/test-pet-state.mjs`（宠物心情优先级）、`node scripts/test-grokbot.mjs`（宠物模块包的数据自洽与形变纯函数）、`node scripts/test-shortcut-keys.mjs`（快捷键匹配与浮层抑制）；六条都已并入 `npm run test:logic`。
+前端纯逻辑无测试框架，用 esbuild 打包后跑 node 断言，**十一条已全部并入 `npm run test:logic`**（改任一纯逻辑文件后跑这一条）：`test-board-order.mjs`（泳道排序）、`test-day-clock.mjs`（跨天刷新）、`test-state-optimizations.mjs`（保存期编辑保护/远端合并/预热）、`test-list-performance.mjs`（列表统计与搜索）、`test-custom-fields.mjs`（自定义字段词表）、`test-manual-order.mjs`（手工排序）、`test-git-report-period.mjs`（报告周期口径）、`test-pomodoro.mjs`（番茄阶段流转与统计）、`test-pet-state.mjs`（宠物心情优先级）、`test-grokbot.mjs`（宠物模块包数据自洽与形变纯函数）、`test-shortcut-keys.mjs`（快捷键匹配与浮层抑制）。
 
 需要真实浏览器的验证脚本（CDP，先起 `npm run dev` 并用 `--remote-debugging-port` 打开页面，端口用 `CDP_PORT` 覆盖，默认 9222）：
-`node scripts/verify-dnd.mjs`（跨泳道/空白区落点/泳道内重排/按钮不误触/resize 后落点）、`verify-project-steps.mjs`（分支规则步骤编辑与回显）、`verify-daterange.mjs`（日期范围两击选择）、`probe-daterange.mjs`。
+`node scripts/verify-dnd.mjs`（跨泳道/空白区落点/泳道内重排/按钮不误触/resize 后落点/原地放开不改顺序/紧凑行视图）、`verify-project-steps.mjs`（分支规则步骤编辑与回显）、`verify-daterange.mjs`（日期范围两击选择）、`probe-daterange.mjs`。
 
 发布打包：`bash build.sh`（一体化：Windows 本机构建 + 经 GitHub Actions 远程构建 macOS，产物收集到 `artifacts/<platform>/`，Windows exe 同步拷贝 `release/` 运行目录）。`--windows-only` / `--mac-only` 只打单平台。macOS 产物（.dmg）无法在 Windows 交叉构建，必须走 CI：经 `.github/workflows/build-macos.yml`（macos runner 出 dmg + mcp-server 双架构），触发要求该文件已 push 到当前分支；凭据自动获取（GITHUB_TOKEN → gh auth token → git credential），无需配置。
 
 ## 架构：三进程位面
 
 ```
-React SPA ──Tauri invoke（35 个命令）──> Rust 壳 crate（src-tauri/src/）
+React SPA ──Tauri invoke（48 个命令）──> Rust 壳 crate（src-tauri/src/）
                                             └─ 转调 todo-kanban-core（纯逻辑，无 tauri 依赖）
 mcp-server（独立 stdio 进程，复用同一个 core）
 ```
@@ -116,7 +116,8 @@ note 持久化只存 `attachment://<todoId>/<file>` 短引用；展示/编辑时
 | 改 GitLab 远端 | core/svc/gitlab.rs + svc/repo_cache.rs（缓存编排） |
 | 改存储/表结构 | core/db/schema.rs + row.rs + db/mod.rs 三处同步 + svc/db_cmds.rs |
 | 改数据字段 | 前端 types.ts + normalize.ts ↔ 后端 core/models.rs **两端同步**（必要时 DDL/row） |
-| 改看板拖拽/泳道管理 | components/board/SwimlaneBoard.tsx（排序纯逻辑在 lib/boardOrder.ts，有测试） |
+| 改看板拖拽/泳道管理 | components/board/SwimlaneBoard.tsx（排序纯逻辑在 lib/boardOrder.ts，有测试；**原地放开不得改顺序**，回归见 scripts/verify-dnd.mjs 场景6） |
+| 看板列宽 / 卡片密度 | 列宽变量 `src/index.css` 的 `--tk-lane-min/max`（撑满档按容器宽度算，见 ADR-020）；紧凑行样式 `[data-card-density="compact"]` + 切换按钮 `src/pages/BoardPage.tsx`（偏好存 localStorage `tk-board-card-density`，不落库） |
 | 改 Markdown 备注 | components/todo/MarkdownEditor.tsx（WYSIWYG，markdown-it + turndown）+ MarkdownRenderer/View |
 | 改主题皮肤 | src/lib/theme.ts（SKINS）+ src/index.css（[data-theme] 变量） |
 | 新增 / 改快捷键 | 键位表与抑制规则 `src/lib/shortcutKeys.ts`（纯逻辑，有 node 测试）；监听与注册表 `src/lib/shortcuts.ts`（`main.tsx` 在渲染前安装）；全局注册 `src/components/layout/ShortcutLifecycle.tsx`；速查弹层 `ShortcutCheatSheet.tsx`（内容由 `SHORTCUTS` 生成）。**加一条 = `SHORTCUTS` 加一项 + 组件里 `useShortcut(id, fn)`**；键位占用排查与抑制规则见 ADR-018 |

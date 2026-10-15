@@ -179,7 +179,8 @@ pub struct RepoReport {
     pub error: String,
     /// 原始拉取条数（含合并提交）
     pub fetched_count: usize,
-    /// 纳入统计的提交数（按 includeMerges 规则过滤后）
+    /// 纳入统计的提交数：只计**已归类开发人员**且按 includeMerges 规则过滤后的提交；
+    /// 原始拉取条数（含未归类提交人）看 fetched_count。
     pub commit_count: usize,
     /// 合并提交条数（includeMerges=false 时它们不进人员统计，但仍在仓库维度计数）
     pub merge_count: usize,
@@ -787,16 +788,19 @@ fn classify(
     out
 }
 
+/// 详情补全结果：提交下标 → (行数, 模块路径)。
+/// 抽成别名是因为内联在元组里会被 clippy 判为「very complex type」（-D warnings 会直接卡住）。
+type DetailMap = HashMap<usize, (Option<CommitStats>, Vec<String>)>;
+
 /// 详情补全：逐提交拉行数与文件路径（GitHub 一次调用两者都拿；GitLab 只拿路径，行数来自列表）。
 /// 多线程限流 + 时间预算；单条失败只告警不中断。
 /// 返回 (提交下标 → (行数, 模块路径), 是否因时间预算截断)
 fn fetch_details(
     jobs: &[(usize, Forge, String, String, String)],
-) -> (HashMap<usize, (Option<CommitStats>, Vec<String>)>, bool) {
+) -> (DetailMap, bool) {
     let next = AtomicUsize::new(0);
     let truncated = AtomicBool::new(false);
-    let results: Mutex<HashMap<usize, (Option<CommitStats>, Vec<String>)>> =
-        Mutex::new(HashMap::new());
+    let results: Mutex<DetailMap> = Mutex::new(HashMap::new());
     let started = Instant::now();
     let workers = DETAIL_WORKERS.min(jobs.len()).max(1);
     std::thread::scope(|scope| {
@@ -907,23 +911,28 @@ fn build_result(
             }
             continue;
         }
-        counted_total += 1;
-        if stats.is_some() {
-            stats_count += 1;
-        }
-        if let Some(target) = repo_reports.get_mut(item.repo_index) {
-            target.commit_count += 1;
-            if item.is_merge {
-                target.merge_count += 1;
-            }
-            if let Some(stats) = &stats {
-                target.additions += stats.additions;
-                target.deletions += stats.deletions;
-            }
-        }
         let secs = parse_iso_to_epoch_secs(&item.commit.date).unwrap_or(0);
         match item.developer {
             Some(index) => {
+                // 详情预算（300 条 / 20s）只按已归类提交消耗（见 fetch_details 的 item.developer.is_none() 跳过），
+                // 所以 stats_partial 的分母也必须是已归类提交，否则有未归类提交人时会误标「≈」。
+                counted_total += 1;
+                if stats.is_some() {
+                    stats_count += 1;
+                }
+                // 仓库维度与人员维度必须同口径：只有已归类开发人员的提交才计入 commit_count 与行数。
+                // 否则「提交数」KPI（Σ repo.commitCount）会把未归类提交人算进去，
+                // 与新增行/删除行（Σ developer.*）自相矛盾（设计文档 §6.6：只有已归类人员的提交进入 KPI）。
+                if let Some(target) = repo_reports.get_mut(item.repo_index) {
+                    target.commit_count += 1;
+                    if item.is_merge {
+                        target.merge_count += 1;
+                    }
+                    if let Some(stats) = &stats {
+                        target.additions += stats.additions;
+                        target.deletions += stats.deletions;
+                    }
+                }
                 let acc = &mut accounts[index];
                 acc.commits += 1;
                 if item.is_merge {

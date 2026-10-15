@@ -1150,7 +1150,7 @@ mod tests {
         let mut todos = vec![after];
         assert_eq!(
             run(
-                &[before.clone()],
+                std::slice::from_ref(&before),
                 &mut todos,
                 &[project()],
                 &defs,
@@ -1334,7 +1334,7 @@ mod tests {
     #[test]
     fn validate_rejects_bad_rules() {
         let ok = lane_rule("a1", "swim-doing", "f1");
-        assert!(validate(&[ok.clone()]).is_ok());
+        assert!(validate(std::slice::from_ref(&ok)).is_ok());
         assert!(validate(&[AutomationRule {
             id: "".into(),
             ..ok.clone()

@@ -1,6 +1,7 @@
 // CDP 验证：泳道看板拖拽（dnd-kit + 合成 PointerEvent——PointerSensor 监听 pointer 事件流，不校验 isTrusted）
 // 覆盖：跨泳道 / 落到泳道空白区 / 泳道内精确重排 / 按钮点击不误触拖拽 / 窗口 resize 后落点仍正确 /
-//       原地放弃拖拽不改顺序（按住卡片小幅移动后放开，不得被当成「移动到末尾」）
+//       原地放弃拖拽不改顺序（按住卡片小幅移动后放开，不得被当成「移动到末尾」）/
+//       紧凑行视图（卡片高度 ~57px，几何完全不同）下的原地放开与跨泳道落点
 // 前置：dev server 运行在 :1420，Chrome 以远程调试端口打开该页面（默认 9222，可用 CDP_PORT 覆盖）
 // 用法：CDP_PORT=9222 node scripts/verify-dnd.mjs
 const PORT = process.env.CDP_PORT || "9222";
@@ -249,6 +250,19 @@ async function main() {
   await openBoard(ws);
   const s6 = await evalJs(ws, dragScript("demo-2", "swim-todo", "self"));
   check("场景6 原地放弃拖拽不改顺序", s6.ok && s6.from === "swim-todo" && s6.to === "swim-todo" && JSON.stringify(s6.order) === JSON.stringify(["demo-1", "demo-2", "demo-3"]), s6, await scenarioErrors(ws));
+
+  step("场景7 开始");
+  // 场景7：紧凑行视图（卡片高度从 ~258px 降到 ~111px，几何完全变了）下，
+  // 落点判定必须与卡片视图一致：原地放开不改顺序，跳列拖拽仍能落对。
+  await evalJs(ws, `(() => { localStorage.setItem('tk-board-card-density', 'compact'); return 1; })()`);
+  await openBoard(ws);
+  const s7mode = await evalJs(ws, `(() => { const el = document.querySelector('[data-card-density]'); const c = document.querySelector('[data-task-id]'); return { density: el?.dataset.cardDensity || null, cardH: c ? Math.round(c.getBoundingClientRect().height) : 0 }; })()`);
+  const s7a = await evalJs(ws, dragScript("demo-2", "swim-todo", "self"));
+  check("场景7a 紧凑视图原地放开不改顺序", s7mode.density === "compact" && s7mode.cardH > 0 && s7mode.cardH < 180
+    && s7a.ok && JSON.stringify(s7a.order) === JSON.stringify(["demo-1", "demo-2", "demo-3"]), { ...s7mode, ...s7a }, await scenarioErrors(ws));
+  const s7b = await evalJs(ws, dragScript("demo-1", "swim-doing", "center"));
+  check("场景7b 紧凑视图跳泳道落点", s7b.ok && s7b.from === "swim-todo" && s7b.to === "swim-doing" && s7b.order.includes("demo-1"), s7b, await scenarioErrors(ws));
+  await evalJs(ws, `(() => { localStorage.removeItem('tk-board-card-density'); return 1; })()`);
 
   ws.close();
 
