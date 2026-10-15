@@ -1,6 +1,9 @@
 # ADR-007：MCP server 手写逐行 JSON-RPC，零 SDK，支持一键只读
 
 ## 状态
+
+> ⚠️ 部分失效：本 ADR 的「`MCP_TODO_READONLY=1` 环境变量一键只读」已被 **ADR-022** 取代（只读改由应用设置决定，env/CLI 入口移除）。
+> 其余决策（手写 JSON-RPC、零 SDK、启动认证、stdout 只走协议帧）仍然有效。
 Accepted（重构基线）
 
 ## 日期
@@ -13,7 +16,7 @@ Accepted（重构基线）
 - protocol.rs 手写逐行 JSON-RPC 2.0（initialize / tools / resources / ping）
 - bridge.rs 映射 11 tools + 4 resources ↔ core::svc；AppError → JSON-RPC 错误码（Invalid→-32602，其余→-32603）
 - stdout 仅输出协议帧；一切日志走 stderr（stdout 污染即协议破坏）
-- MCP_TODO_READONLY=1 环境变量一键只读：拒绝全部写工具
+- MCP_TODO_READONLY=1 环境变量一键只读：拒绝全部写工具（**已被 ADR-022 取代**：改由设置页 app_meta `mcp_readonly` 决定）
 - 数据源解析与 app 同规则（ADR-012），MCP_TODO_DB_CONFIG / --db-config 可覆盖
 
 ## 备选方案
@@ -27,5 +30,5 @@ Accepted（重构基线）
 ## 后果
 - MCP 规范演进需手工跟进（子集小、可控）
 - 任何调试打印必须走 stderr——硬约束
-- 只读开关是部署侧安全边界（配合 ADR-004 同库直连）
+- 只读开关是部署侧安全边界（配合 ADR-004 同库直连）——**该定位已由 ADR-022 改为应用内设置**，理由是权限来源与 Token / 启用状态统一、且可每请求重读
 - 单测已覆盖：握手 / 9 工具清单 / 映射 / 只读门禁

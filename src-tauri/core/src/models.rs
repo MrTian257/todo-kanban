@@ -387,6 +387,86 @@ impl Default for McpSettings {
     }
 }
 
+/// MCP HTTP 传输设置（app_meta 持久化 JSON；见 ADR-023）。
+/// 与 stdio 共用同一份工具表与写链，只是多一层 Token 鉴权与审计留痕。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct McpHttpSettings {
+    /// 总开关：关闭时端口不监听，已建立的会话立即失效
+    pub enabled: bool,
+    /// 监听端口（与局域网共享 42800 错开，默认 42900）
+    pub port: u16,
+    /// 允许局域网访问：true 绑定 0.0.0.0（同网段可达，设置页给风险提示）；
+    /// false 只绑 127.0.0.1——默认必须是最小暴露面
+    pub allow_lan: bool,
+}
+
+impl Default for McpHttpSettings {
+    fn default() -> Self {
+        McpHttpSettings {
+            enabled: false,
+            port: DEFAULT_MCP_HTTP_PORT,
+            allow_lan: false,
+        }
+    }
+}
+
+/// 单个 AI 的接入 Token（app_meta 的 mcp_tokens 数组）。
+/// 多 AI 各自一把 Key 的目的：**审计可归属**（谁改的）+ **可单独撤销/只读**，
+/// 不再共享那个写死在文档里的全局管理 Key。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct McpToken {
+    /// 稳定标识（`mt-` + 8 位十六进制），审计行按它关联
+    pub id: String,
+    /// 展示名，同时写进 change_history.actor（如 `mcp:Claude Code`）
+    pub name: String,
+    /// Token 明文。与仓库 Token 不同：这是**本机服务自己的准入凭据**，
+    /// 本来就存在 app_meta 里供两个进程比对，不引入钥匙串（见 ADR-023 取舍）
+    pub token: String,
+    /// 只读：与全局 mcp_readonly **取严**（任一为真即只读），避免优先级陷阱
+    pub readonly: bool,
+    /// 撤销 = 关掉即可，不必删除（保留审计归属）
+    pub enabled: bool,
+    pub created_at: i64,
+}
+
+impl Default for McpToken {
+    fn default() -> Self {
+        McpToken {
+            id: String::new(),
+            name: String::new(),
+            token: String::new(),
+            readonly: false,
+            enabled: true,
+            created_at: 0,
+        }
+    }
+}
+
+/// MCP 审计日志一行（mcp_audit 表，v15）。**不含请求正文**。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct McpAuditEntry {
+    pub id: String,
+    pub at: i64,
+    pub transport: String,
+    pub actor: String,
+    pub token_id: String,
+    pub peer: String,
+    pub method: String,
+    pub tool: String,
+    pub target: String,
+    pub ok: bool,
+    pub status: String,
+    pub error: String,
+    pub bytes: i64,
+    pub duration_ms: i64,
+}
+
+/// 默认 MCP HTTP 端口（与局域网共享 42800 错开）
+pub const DEFAULT_MCP_HTTP_PORT: u16 = 42900;
+
 /// 默认局域网共享端口（设置页可改；绑定失败会以状态回报，不会静默）
 pub const DEFAULT_LAN_PORT: u16 = 42800;
 

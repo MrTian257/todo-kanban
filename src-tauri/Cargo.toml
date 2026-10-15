@@ -11,6 +11,10 @@ edition = "2021"
 name = "todo_kanban_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[dev-dependencies]
+# 仅测试用：MCP HTTP 集成测试要直接播种 app_meta（版本与 core 一致，复用同一份编译产物）
+rusqlite = { version = "0.32", features = ["bundled", "backup"] }
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -30,6 +34,7 @@ todo-kanban-core = { path = "core" }
 axum = "0.8"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "net", "time"] }
 futures-util = "0.3"
+uuid = { version = "1", features = ["v4"] }
 # 局域网访问地址展示：枚举本机网卡 IPv4
 if-addrs = "0.13"
 

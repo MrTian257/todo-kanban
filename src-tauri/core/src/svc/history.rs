@@ -7,18 +7,34 @@ use crate::{
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::cell::Cell;
+use std::cell::RefCell;
 use std::collections::HashMap;
-thread_local! { static ACTOR: Cell<&'static str> = const { Cell::new("human") }; }
-pub fn with_actor<T>(actor: &'static str, action: impl FnOnce() -> T) -> T {
-    struct Reset(&'static str);
-    impl Drop for Reset {
+thread_local! { static ACTOR: RefCell<String> = const { RefCell::new(String::new()) }; }
+
+/// 本线程内变更历史的归属主体（human / ai / mcp / mcp:<AI 名> / backup-restore / restore）。
+/// 收 `&str` 而不是 `&'static str`：MCP 要把「哪个 AI」写进 actor，名称是运行期数据（ADR-023）。
+pub fn with_actor<T>(actor: &str, action: impl FnOnce() -> T) -> T {
+    struct Restore(String);
+    impl Drop for Restore {
         fn drop(&mut self) {
-            ACTOR.with(|value| value.set(self.0));
+            ACTOR.with(|value| *value.borrow_mut() = std::mem::take(&mut self.0));
         }
     }
-    let _reset = Reset(ACTOR.with(|value| value.replace(actor)));
+    let previous = ACTOR.with(|value| std::mem::replace(&mut *value.borrow_mut(), actor.to_string()));
+    let _restore = Restore(previous);
     action()
+}
+
+/// 当前 actor；没设置过就是 human（默认值不能是空串，否则历史里看不出谁改的）
+fn actor() -> String {
+    ACTOR.with(|value| {
+        let slot = value.borrow();
+        if slot.is_empty() {
+            "human".to_string()
+        } else {
+            slot.clone()
+        }
+    })
 }
 pub fn redact(mut value: Value) -> Value {
     match &mut value {
@@ -83,7 +99,7 @@ pub fn record(conn: &Connection, before: &DbState, after: &DbState) -> AppResult
     let before = entities(before)?;
     let after = entities(after)?;
     let keys: std::collections::HashSet<_> = before.keys().chain(after.keys()).collect();
-    let actor = ACTOR.with(Cell::get);
+    let actor = actor();
     for (entity, id) in keys {
         let key = (entity.clone(), id.clone());
         let old = before.get(&key);

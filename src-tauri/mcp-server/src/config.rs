@@ -1,10 +1,10 @@
-//! MCP server 配置：数据源目录解析（--db-config / MCP_TODO_DB_CONFIG 覆盖 → exe_dir 回退）+ 授权 Token。
+//! stdio 传输的启动配置：数据源目录（--db-config / MCP_TODO_DB_CONFIG 覆盖 → exe_dir 回退）+ 授权 Token。
+//! 只负责「解析成结构体」，不再存进程内全局——上下文由 main.rs 每个请求注入 `core::mcp`。
 //! 实际库文件固定为 <目录>/todo-kanban.db。
 //! **只读模式不在这里**：它由 todo-kanban 设置页（app_meta 的 mcp_readonly）决定，
 //! 每个业务请求重读（见 ADR-022）；旧的 --readonly / MCP_TODO_READONLY 会被明确拒绝而不是静默忽略。
 
 use std::path::PathBuf;
-use std::sync::Mutex;
 
 /// 只读开关已从环变量 / 命令行迁到设置页。仍传进来时**拒绝启动**：
 /// 静默忽略会让调用方以为自已在只读保护下，实际却把生产库开放了写入。
@@ -17,18 +17,6 @@ pub struct McpConfig {
     pub db_config_dir: Option<PathBuf>,
     /// 启动授权 Token（--token / MCP_TODO_TOKEN；需与设置页授权 Token 匹配）
     pub token: Option<String>,
-}
-
-static CONFIG: Mutex<Option<McpConfig>> = Mutex::new(None);
-
-pub fn set(config: McpConfig) -> Result<(), String> {
-    let mut current = CONFIG.lock().map_err(|_| "MCP 配置锁不可用".to_string())?;
-    *current = Some(config);
-    Ok(())
-}
-
-pub fn get() -> Option<McpConfig> {
-    CONFIG.lock().ok().and_then(|g| g.clone())
 }
 
 /// 解析命令行与环境变量

@@ -1,10 +1,16 @@
-//! stdio JSON-RPC：协议校验、初始化状态、MCP 标准工具结果与错误响应。
-use crate::bridge;
+//! JSON-RPC 会话与分发：协议校验、初始化状态、MCP 标准工具结果与错误响应。
+//! **传输无关**——stdio（`mcp-server`）与 HTTP（桌面壳 `mcp_http`）都调这里，
+//! 工具表与参数校验因此只有一份（ADR-023）。
+use super::bridge;
 use serde_json::{json, Value};
 
-const PROTOCOL_VERSION: &str = "2024-11-05";
-const SERVER_NAME: &str = "mcp-server";
+pub const PROTOCOL_VERSION: &str = "2024-11-05";
+pub const SERVER_NAME: &str = "mcp-server";
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// 鉴权回调：由传输层提供（stdio 查 CLI/env Token + 应用设置；HTTP 查 Bearer Token）。
+/// 放在协议层执行而不是让传输各自记得做，是为了不给「忘做一次检查」留机会。
+pub type Authorize<'a> = &'a dyn Fn() -> Result<(), String>;
 
 pub fn error(id: Value, code: i64, message: impl Into<String>) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message.into() } })
@@ -16,7 +22,7 @@ pub struct Session {
     ready: bool,
 }
 impl Session {
-    pub fn handle(&mut self, req: &Value) -> Option<Value> {
+    pub fn handle(&mut self, req: &Value, authorize: Authorize<'_>) -> Option<Value> {
         if !valid_envelope(req) {
             return handle_request(req);
         }
@@ -38,9 +44,10 @@ impl Session {
                 "请先完成 initialize 与 notifications/initialized",
             ));
         }
-        // 每次业务请求重新检查启用状态、数据版本和 Token，设置页撤销权限后无需重启服务。
+        // 每个业务请求都重新鉴权：设置页改 Token / 禁用 MCP / 切换只读后无需重启服务即生效。
+        // ping 例外——它只是保活，不读不写业务数据。
         if method != "ping" {
-            if let Err(message) = bridge::verify_startup() {
+            if let Err(message) = authorize() {
                 return Some(error(id, -32001, message));
             }
         }
@@ -114,6 +121,7 @@ pub fn handle_request(req: &Value) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
 
     fn initialize_req() -> Value {
         json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": { "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "test", "version": "1" } } })

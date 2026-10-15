@@ -4797,6 +4797,7 @@ dependencies = [
  "log",
  "objc2",
  "objc2-app-kit",
+ "rusqlite",
  "serde",
  "serde_json",
  "tauri",
@@ -4811,6 +4812,7 @@ dependencies = [
  "tauri-plugin-window-state",
  "todo-kanban-core",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

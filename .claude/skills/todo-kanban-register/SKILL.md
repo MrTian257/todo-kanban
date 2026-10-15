@@ -27,7 +27,11 @@ MCP server 是独立 stdio 进程，两种方式接入：
    ```
 
    - 启动校验：数据源可用 + 设置页启用 + Token 匹配，任一不满足即退出（stderr 中文提示）。
-   - 只读开关：`MCP_TODO_READONLY=1` 拒绝全部写工具（与 Token 正交）。
+   - HTTP 传输（可选）：桌面应用「设置 → MCP 集成 → HTTP 传输」启用后为 `http://127.0.0.1:<port>/mcp`，
+     请求头带 `Authorization: Bearer <token>`；与 stdio 同一份工具表（ADR-023）。
+   - 多 AI Token：建议每个 AI 用「设置 → MCP 集成 → 接入 Token」单独发一把，审计可按名归属；
+     只读由「全局开关 或 该 Token 勾选」取严决定。
+   - 只读开关：在 todo-kanban「设置 → MCP 集成 → MCP 只读模式」里开（存 app_meta，每个请求重读）。开启后 5 个写工具（建/切分支、db_save_state、db_preview_state）从 tools/list 隐藏且调用被拒；`MCP_TODO_READONLY` / `--readonly` 已移除，传了会拒绝启动（ADR-022）。
 
 ## 可用工具（写入口仅 db_save_state）
 

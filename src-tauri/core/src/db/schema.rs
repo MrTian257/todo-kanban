@@ -1,8 +1,8 @@
-//! DDL + 迁移。USER_VERSION = 14。
+//! DDL + 迁移。USER_VERSION = 15。
 //! 注意：SQLite 列序是硬契约——schema ↔ row ↔ mod 的 SELECT/INSERT 三处同步。
 //! 版本号必须与 config::CURRENT_DATA_VERSION 一致：open_existing 用它做跨进程版本门禁。
 
-pub const USER_VERSION: i64 = 14;
+pub const USER_VERSION: i64 = 15;
 
 /// 建表（新库直接完整 v6 形态；旧库缺列由 migrate 补）
 pub fn create_tables(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
@@ -126,6 +126,27 @@ CREATE TABLE IF NOT EXISTS pomodoro_sessions (
   interruptions INTEGER NOT NULL DEFAULT 0 -- 本轮暂停次数
 );
 CREATE INDEX IF NOT EXISTS idx_pomodoro_started ON pomodoro_sessions(started_at DESC);
+-- v15：MCP 审计留痕（ADR-023）。**只存元数据，不存请求正文**——change_history 用整实体 JSON
+-- 把库撑到 17 MB 的教训（ADR-021）同样适用于审计：审计要回答「谁在何时、用什么 Token、
+-- 调了哪个工具、结果如何」，字段级前后值由 change_history / change_proposals 负责，两者互补不重复。
+CREATE TABLE IF NOT EXISTS mcp_audit (
+  id TEXT PRIMARY KEY,
+  at INTEGER NOT NULL,                          -- 记录时刻（epoch ms）
+  transport TEXT NOT NULL,                      -- stdio | http
+  actor TEXT NOT NULL,                          -- Token 名称（哪个 AI）；管理 Key 记为「管理 Key」
+  token_id TEXT NOT NULL DEFAULT '',           -- 关联 mcp_tokens[].id；管理 Key / 鉴权失败为空
+  peer TEXT NOT NULL DEFAULT '',               -- HTTP 客户端地址（IP:port）；stdio 为空
+  method TEXT NOT NULL,                         -- initialize / tools/list / tools/call / resources/read / …
+  tool TEXT NOT NULL DEFAULT '',               -- 工具名或资源 uri
+  target TEXT NOT NULL DEFAULT '',             -- 作用对象摘要（待办 id / 仓库路径等），便于筛选
+  ok INTEGER NOT NULL DEFAULT 1,                -- 1=成功，0=失败或被拒
+  status TEXT NOT NULL DEFAULT '',             -- 业务标签：STATE_CONFLICT / READONLY_DENIED / AUTH_DENIED / …
+  error TEXT NOT NULL DEFAULT '',              -- 中文错误（写入前截断，见 audit::MAX_ERROR_CHARS）
+  bytes INTEGER NOT NULL DEFAULT 0,             -- 响应字节数（不存正文）
+  duration_ms INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_mcp_audit_at ON mcp_audit(at DESC);
+CREATE INDEX IF NOT EXISTS idx_mcp_audit_actor ON mcp_audit(actor, at DESC);
 ",
     )
 }
@@ -607,5 +628,41 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM pomodoro_sessions", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    /// v14 → v15：老库补建 MCP 审计表（纯追加表，不回填、不改写任何业务数据）
+    #[test]
+    fn migrate_v14_db_adds_mcp_audit() {
+        let conn = open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL,
+               project_dir TEXT NOT NULL DEFAULT '', frontend_dir TEXT, backend_dir TEXT,
+               frontend_repo_url TEXT, backend_repo_url TEXT, production_branch TEXT,
+               branch_rule TEXT, archived INTEGER, created_at INTEGER, updated_at INTEGER,
+               frontend_repo_token TEXT, backend_repo_token TEXT, swimlanes TEXT,
+               created_by TEXT NOT NULL DEFAULT 'human', sort_order INTEGER NOT NULL DEFAULT 0);
+             CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             INSERT INTO app_meta(key, value) VALUES ('mcp_readonly', '1');
+             PRAGMA user_version = 14;",
+        )
+        .unwrap();
+        crate::db::init(&conn).unwrap();
+        assert!(
+            table_exists(&conn, "mcp_audit").unwrap(),
+            "v14→v15 应补建 mcp_audit 表"
+        );
+        let v: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, USER_VERSION);
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM mcp_audit", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0, "审计表迁移不做任何回填");
+        // 迁移不能动 app_meta：只读开关等设置必须原样保留
+        let readonly: String = conn
+            .query_row("SELECT value FROM app_meta WHERE key='mcp_readonly'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(readonly, "1", "迁移不得改写既有设置");
     }
 }

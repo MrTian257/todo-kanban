@@ -21,7 +21,7 @@ Accepted（实施中）
 3. **升级链路独立分包**：新增 workspace member `todo-kanban-upgrade`（src-tauri/upgrade），迁移引擎/版本判定/备份/报告全部在其内，**不依赖 core**；core 通过 `db::open_and_init / check_version` 薄壳接入；app 与 mcp-server 静态链接进主体，无额外分发物。版本等常量（软件版本 / 数据版本支持范围 / 迁移步骤 / 更新日志 / 依赖清单）集中存放于新增纯配置库 `todo-kanban-config`（src-tauri/config，无任何依赖），upgrade 引用之。
 4. **迁移事务化 + 硬备份**：迁移整体包事务（任一失败回滚，user_version 不变）；迁移前 `wal_checkpoint(TRUNCATE)` 合并 WAL 后，将 db 主文件**直接复制到程序运行目录 `backup/`**（命名 `<stem>-v<from>-<时间戳>.db`，保留最近 10 份）。
 5. **支持范围打包进软件**：`CURRENT_VERSION` / `MIN_SUPPORTED_VERSION` / `SOFTWARE_VERSION`（env CARGO_PKG_VERSION）为编译常量；迁移步骤描述表 `MIGRATION_STEPS` 内置，用于报告与提示。
-6. **App 与 MCP 共用**：core `open_and_init` 是唯一入口；MCP `verify_startup` 做版本检查，不兼容时拒绝启动并 stderr 提示。
+6. **App 与 MCP 共用**：core `open_and_init` 是唯一入口；MCP `verify_startup`（ADR-023 起改名迁移为 `core::mcp::authorize`）做版本检查，不兼容时拒绝启动并 stderr 提示。
 7. **前端门禁**：新增命令 `db_check_version`（第 14 号）返回结构化 `VersionReport`（ok/upgraded/too_new/too_old + 双方版本 + 迁移步骤）；`App.tsx` 启动先检查——不兼容 → 全屏 `VersionBlockedPage`（不进主界面）；升级成功 → toast「数据已从 vX 升级到 vY」。
 
 ## 备选方案

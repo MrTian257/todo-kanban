@@ -9,7 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 权威文档（改动前先查；注意部分文档与实际代码有漂移，**以源码为准**）：
 - `docs/软件设计文档.md` — 整合视图（产品/架构/数据/接口/UI/流程）
 - `docs/02-development/directory-map.md` — 「去哪里改」文件地图（部分文件名仍为 todo-git 旧称，如 TodoCard.tsx、todo-git-core 已更名/移除）
-- `docs/decisions/` — ADR-001 ~ ADR-021 架构决策（文件名自描述：hash-router / system-cli-git-curl / sqlite-storage / db-config-data-source / workspace-split / global-seq-and-commit-dedupe / mcp-handwritten-protocol / single-store-write-chain / swimlane-board / swimlane-order-persistence / data-version-upgrade / fixed-db-path / custom-fields-and-automations / git-report / github-and-gitlab-forge / pomodoro-and-pet / keyboard-shortcuts / lan-sharing / board-lane-width-and-density / history-order-skip-and-report-scope）
+- `docs/decisions/` — ADR-001 ~ ADR-023 架构决策（文件名自描述：hash-router / system-cli-git-curl / sqlite-storage / db-config-data-source / workspace-split / global-seq-and-commit-dedupe / mcp-handwritten-protocol / single-store-write-chain / swimlane-board / swimlane-order-persistence / data-version-upgrade / fixed-db-path / custom-fields-and-automations / git-report / github-and-gitlab-forge / pomodoro-and-pet / keyboard-shortcuts / lan-sharing / board-lane-width-and-density / history-order-skip-and-report-scope / mcp-readonly-from-settings / mcp-http-tokens-and-audit）。**注意 ADR-007 的 env 只读决策已被 ADR-022 取代**。
 - `docs/README.md` 的文档地图已漂移（列出多份不存在的文件），只作背景参考
 
 ## 环境与常用命令
@@ -45,9 +45,12 @@ cargo test -p mcp-server         # MCP 单测（握手 / 工具清单 / 映射 /
 ## 架构：三进程位面
 
 ```
-React SPA ──Tauri invoke（48 个命令）──> Rust 壳 crate（src-tauri/src/）
-                                            └─ 转调 todo-kanban-core（纯逻辑，无 tauri 依赖）
-mcp-server（独立 stdio 进程，复用同一个 core）
+React SPA ──Tauri invoke（59 个 handler）──> Rust 壳 crate（src-tauri/src/）
+                                            ├─ 转调 todo-kanban-core（纯逻辑，无 tauri 依赖）
+                                            └─ 进程内 MCP HTTP 服务（mcp_http.rs，默认关闭）
+mcp-server（独立 stdio 进程）──┐
+                               ├─> 同一个 core::mcp 调度（工具表只有一份）
+      MCP HTTP ────────────────┘
 ```
 
 ### Cargo workspace 与依赖方向
@@ -56,7 +59,7 @@ mcp-server（独立 stdio 进程，复用同一个 core）
 
 ### 数据版本升级框架（ADR-011）
 
-- 版本常量集中在 `src-tauri/config/src/lib.rs`：`CURRENT_DATA_VERSION = 14`、`MIN_SUPPORTED_DATA_VERSION`、`MIGRATION_STEPS`（v1→v14 逐级）、`CHANGELOG`。
+- 版本常量集中在 `src-tauri/config/src/lib.rs`：`CURRENT_DATA_VERSION = 15`、`MIN_SUPPORTED_DATA_VERSION`、`MIGRATION_STEPS`（v1→v15 逐级）、`CHANGELOG`。
 - `todo-kanban-upgrade::upgrade::ensure()` 编排：版本判定 →（兼容升级时）硬备份到运行目录 `backup/` → 逐级迁移 → 报告。语义：v=0（新库）不备份直接迁到最新；TooNew / TooOld 拒绝；调用方负责开连接 + 幂等建表。
 - 前端启动门禁：`db_check_version` 命令 → `src/lib/version.ts` → 不兼容时全屏 `VersionBlockedPage`（`src/components/version/`），升级成功 toast 提示。
 - **新增数据版本时**：提升 config 常量 → upgrade 写迁移 → 更新 MIGRATION_STEPS / CHANGELOG → 前端 `PREVIEW_REPORT` 同步。schema 变更需同步 `schema.rs`（DDL）、`row.rs`（行映射）、`db/mod.rs`（SELECT/INSERT）三处——**SQLite 列序是硬契约**（见 schema.rs 头部注释）。
@@ -98,9 +101,48 @@ Git 报告（日报/周报/月报，ADR-015/ADR-016）走 GitLab / GitHub 官方
 
 note 持久化只存 `attachment://<todoId>/<file>` 短引用；展示/编辑时前缀换为自定义协议 URL（Windows `http://attachment.localhost/`，其余 `attachment://localhost/`），由 app 壳注册的 attachment 协议按相对路径直接供图（serve 不查库）。文件落 `<db 目录>/attachments/<todoId>/`，单张上限 5MB；save_state 对 note 引用补链（INSERT OR IGNORE），仅待办被差集删除时删关系、文件移 `attachments/trash/`。历史内嵌 data URL 图片继续兼容，不强制迁移。
 
-### MCP server（`src-tauri/mcp-server/`）
+### MCP：一份调度层，两种传输（`core/src/mcp/` + `src-tauri/mcp-server/` + `src-tauri/src/mcp_http.rs`）
 
-手写 stdio JSON-RPC（无框架，ADR-007）：11 tools + 6 resources（`todo-kanban://state|projects|todos|resources|fields|pomodoro`；fields = v11 自定义字段定义与自动脚本，AI 登记任务前可先读；pomodoro = v14 番茄专注统计），复用 core。配置解析（`config.rs`）：`--db-config` / `MCP_TODO_DB_CONFIG` 覆盖数据源目录（库文件固定为 `<dir>/todo-kanban.db`，不存在时不自动创建）→ 回退 app exe 目录；`--token` / `MCP_TODO_TOKEN`；`MCP_TODO_READONLY=1` 只读。启动校验（`bridge::verify_startup`，任一不满足即退出）：数据源可用 + 设置页「MCP 集成」启用 + Token 匹配（默认 `sk-GLOBAl_MCP_BY_ADMIN`，设置存 app_meta）。错误映射：AppError::Invalid→-32602、其余→-32603。写工具共 7 个（含 `db_save_state`，**唯一数据写入口**，必须携带修改前 `db_load_state` 返回值作 expected，禁止直接覆盖）；MCP 的 git_info 保持直读语义（不经 app 侧缓存），`git_info_refresh` / `git_info_remote` 为 app 专属不暴露。
+**工具表与 JSON-RPC 调度都在 `core/src/mcp/`**（`bridge.rs` 映射 + `protocol.rs` 会话/校验），
+stdio 与 HTTP 只是两个薄传输层——两条写路径分叉过一次就再也对不齐（ADR-023）。
+上下文（数据源路径 / actor / 只读 / 对端）由传输层用 `mcp::with_context` 注入，
+走 `thread_local`（与 `history::with_actor` 同款）；**取不到上下文 = 无数据源 + 只读**（fail-closed）。
+
+11 tools + 6 resources（`todo-kanban://state|projects|todos|resources|fields|pomodoro`；
+fields = v11 自定义字段与自动脚本，AI 登记前可先读；pomodoro = v14 番茄统计）。
+写工具共 **5 个**（`git_create_branch` / `git_create_branch_from` / `git_checkout_branch` /
+`db_save_state` / `db_preview_state`；`git_sync_commits` / `git_commits_between` / `git_commit_info`
+只跑 git 查询，属读工具）。只读模式下这 5 个既从 `tools/list` 隐藏、调用也被拒。
+`db_save_state` 是**唯一业务数据写入口**，必须带修改前 `db_load_state` 返回值作 expected
+（缺失 -32602，过期 `STATE_CONFLICT`）；`db_load_state` 返回顶层 `{projects,todos,resources}`，
+`db_save_state` 返回 `{ok,state}`。错误映射：AppError::Invalid→-32602、其余→-32603。
+MCP 的 git_info 保持直读语义（不经 app 侧缓存），`git_info_refresh` / `git_info_remote` 为 app 专属不暴露。
+
+**鉴权（每请求）**：`mcp::authorize(db_path, token)` 读 app_meta 的 `mcp_enabled` /
+`mcp_readonly` / `mcp_token` / `mcp_tokens` → `mcp::tokens::authenticate`。
+全局管理 Key（默认 `sk-GLOBAl_MCP_BY_ADMIN`）继续有效；**多 AI 各一把 Token**
+（`{id,name,token,readonly,enabled,createdAt}`），生效只读 = `全局 || Token`（**取严**，ADR-022/023）。
+设置页改动无需重启即生效；stdio 侧 Token 不匹配 / 被禁用 → 启动即退出。
+`--readonly` 与 `MCP_TODO_READONLY` 已移除，仍传入会拒绝启动（不静默忽略）。
+
+**stdio 传输**（`mcp-server`，独立进程）：逐行 JSON-RPC，单帧上限 64 MiB，stdout 只走协议帧、
+日志走 stderr；`--db-config` / `MCP_TODO_DB_CONFIG` 覆盖数据源目录（库文件固定 `<dir>/todo-kanban.db`，
+不存在不自动创建）→ 回退 app exe 目录。
+
+**HTTP 传输**（`mcp_http.rs`，进程内 axum，默认关闭 + 只绑 127.0.0.1）：
+`POST /mcp` 一条 JSON-RPC 返回 `application/json`（无状态子集：不推 SSE、不支持批量数组）；
+`initialize` 响应头发 `Mcp-Session-Id`，未 initialize 的业务请求按协议层拒绝（-32002，
+同时也是权限前置）；`GET /mcp` → 405 + Allow；`GET /health` 免鉴权探活；其它路径回自解释说明页。
+Token 只认 `Authorization: Bearer` / `X-MCP-Token`，**不接受查询串传 Token**（URL 会进代理日志）。
+启停与端口由设置决定（app_meta `mcp_http_settings`，默认端口 42900 与局域网共享 42800 错开），
+「允许局域网访问」才绑 0.0.0.0 并显示风险提示。
+
+**审计（v15 表 `mcp_audit`）**：每个请求（stdio 与 HTTP，**含鉴权失败**）落一行元数据——
+`at/transport/actor/token_id/peer/method/tool/target/ok/status/error/bytes/duration_ms`。
+**刻意不存请求正文**（一次 `db_save_state` 的 payload+expected 是两份全量快照，含 base64 备注单条可达 MB 级，
+ADR-021 的膨胀教训不能重演）；字段级前后值看 `change_history`，两者互补。
+`notifications/*` 不记；错误文本压平换行并截断 400 字；按条数保留最近 20 000 行、每 200 次写入顺带裁剪。
+`change_history.actor` 同步升级为 `mcp:<AI 名>`，与 `mcp_audit.actor` 能对上。
 
 ### 项目 skill
 
@@ -125,7 +167,8 @@ note 持久化只存 `attachment://<todoId>/<file>` 短引用；展示/编辑时
 | 番茄钟 / GrokBot 宠物 | 前端纯逻辑 `src/lib/pomodoro.ts`（阶段流转/统计口径，有 node 测试）+ 运行态 `src/lib/pomodoroStore.ts`；宠物 `src/lib/petState.ts`（心情状态机，有 node 测试）+ `src/lib/petStore.ts` + `src/components/pet/GrokBot.tsx`；页面 `src/pages/PomodoroPage.tsx` + `src/components/pomodoro/`；后端 `core/src/svc/pomodoro.rs`（v14 `pomodoro_sessions`）+ `commands.rs` 的 `pomodoro_record/recent/stats`；MCP 资源 `todo-kanban://pomodoro`；决策见 ADR-017 |
 | 局域网共享 | 内嵌 HTTP 服务 `src-tauri/src/lan_server.rs`（axum + SSE；`GET /` 访客面板、`/api/state`、`/api/save`、`/api/events`；绑定 `0.0.0.0:<port>`）+ 访客面板 `src-tauri/src/lan_guest.html`（单文件 `include_str!`）；共享范围过滤/脱敏/合并 `core/src/svc/lan.rs`（纯逻辑含单测）+ 配置与访客读写 `core/src/svc/db_cmds.rs`（app_meta `lan_share_settings`，不新增表/数据版本）；设置页「局域网共享」卡片 + 项目卡片快捷开关（`src/pages/ProjectListPage.tsx`）+ `src/lib/lan.ts`；桌面端实时刷新监听 Tauri 事件 `lan-state-changed`；命令 `lan_get_settings/lan_set_settings/lan_status/lan_stop`；决策见 ADR-019 |
 | 自定义字段 / 自动脚本 | 词表与纯逻辑：`src/lib/customFields.ts` ↔ `core/src/svc/fields.rs` + `svc/automation.rs`（同规则，后端为准）；定义与规则存 workflow_state（`core/src/svc/workflow.rs` 的 fieldDefs / automations）；值存 `todos.custom_fields`（schema v11）；执行点 `db::save_state_inner`；UI 在设置页 `/settings/fields`（`src/pages/FieldSettingsPage.tsx` + `src/components/workflow/` 的 FieldDefsPanel / AutomationsPanel / CustomFieldInputs，ADR-014）；存量任务补写命令 `automation_backfill` |
-| 新增/改 MCP 工具 | mcp-server/src/bridge.rs（映射）+ protocol.rs（tools 表/inputSchema），业务仍走 core/svc |
+| 新增/改 MCP 工具 | **`core/src/mcp/bridge.rs`**（映射 + `audit_target`）+ **`core/src/mcp/protocol.rs`**（tools 表/inputSchema/JSON-RPC 会话），业务仍走 core/svc。**stdio 与 HTTP 共用这一份**，不要在传输层各自实现一遍（ADR-023） |
+| MCP HTTP 端点 / 多 AI Token / 审计 | 服务与命令 `src-tauri/src/mcp_http.rs`（axum：`POST /mcp` + `GET /health` + 会话头 `Mcp-Session-Id`；app_meta `mcp_http_settings` / `mcp_tokens`）；鉴权与只读取严 `core/src/mcp/tokens.rs`；审计读写 `core/src/mcp/audit.rs`（v15 表 `mcp_audit`，**只存元数据不存正文**）；设置 UI `src/components/settings/McpAccessPanel.tsx`，审计页 `src/pages/McpAuditPage.tsx`（`/settings/mcp-audit`）；决策见 ADR-023 |
 
 ## 代码规范
 

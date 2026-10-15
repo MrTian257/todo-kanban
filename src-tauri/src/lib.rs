@@ -1,4 +1,4 @@
-// 应用入口：注册 44 个 handler（commands 35 + native_workflow 6 + desktop 3）
+// 应用入口：注册 57 个 handler（commands 35 + native_workflow 6 + desktop 3 + lan 4 + mcp_http 9）
 // + attachment:// 自定义协议（附件供图）+ opener/log/clipboard-manager/dialog/window-state 插件 + 启动自举。
 // 日志：数据目录 kanban.log（追加写，超限轮转只保留一份）。
 // 可选能力（菜单栏/全局快捷键）安装失败只降级为可见错误，不影响启动。
@@ -7,6 +7,8 @@ pub mod commands;
 mod desktop;
 /// 局域网共享：内嵌 HTTP 服务（访客面板 + REST + SSE 实时推送）
 mod lan_server;
+/// MCP HTTP 传输：内嵌 /mcp 端点 + 多 AI Token + 审计留痕（与 stdio 共用 core::mcp）
+mod mcp_http;
 #[cfg(target_os = "macos")]
 mod menu;
 #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
@@ -149,6 +151,8 @@ pub fn run() {
             }
             // 局域网共享：设置里已启用则自动拉起（失败只记录状态，不阻塞启动）
             lan_server::auto_start(_app.handle().clone());
+            // MCP HTTP：同上，默认关闭；启用状态下端口被占用只记录状态，不阻塞启动
+            mcp_http::auto_start();
             #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
             {
                 // 菜单栏/快捷键失败只降级（错误经 desktop_status 展示），不阻止应用启动。
@@ -206,6 +210,17 @@ pub fn run() {
             lan_server::lan_set_settings,
             lan_server::lan_status,
             lan_server::lan_stop,
+            mcp_http::mcp_http_get_settings,
+            mcp_http::mcp_http_set_settings,
+            mcp_http::mcp_http_status,
+            mcp_http::mcp_http_stop,
+            mcp_http::mcp_tokens_list,
+            mcp_http::mcp_token_issue,
+            mcp_http::mcp_tokens_save,
+            mcp_http::mcp_tokens_remove,
+            mcp_http::mcp_audit_list,
+            mcp_http::mcp_audit_actors,
+            mcp_http::mcp_audit_clear,
         ])
         .build(tauri::generate_context!())
         .expect("应用初始化失败")

@@ -960,7 +960,8 @@ mod tests {
     /// 接管旧附件目录：补齐缺失文件、跳过 trash、绝不覆盖同路径的现有文件
     #[test]
     fn adopt_dir_copies_missing_and_never_overwrites() {
-        let dir = std::env::temp_dir().join(format!("tk-adopt-{}", std::process::id()));
+        // 目录名必须每个用例唯一：只带 process::id() 时，同一测试进程里的并行用例会互相 remove_dir_all
+        let dir = std::env::temp_dir().join(format!("tk-adopt-{}-{}", std::process::id(), uuid::Uuid::new_v4()));
         let _ = fs::remove_dir_all(&dir);
         let (from, to) = (dir.join("legacy"), dir.join("current"));
         fs::create_dir_all(from.join("t1")).unwrap();

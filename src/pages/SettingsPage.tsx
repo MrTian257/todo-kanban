@@ -21,6 +21,7 @@ import { ArrowRight, Bot, Braces, Eye, EyeOff, Paperclip, SquareKanban, Timer, W
 import { toast } from "sonner";
 import { gcOrphanAttachments, migrateInlineImages } from "@/lib/attachments";
 import { DEFAULT_MCP_TOKEN, mcpGetConfig, mcpSetConfig } from "@/lib/mcp";
+import { McpAccessPanel } from "@/components/settings/McpAccessPanel";
 import { useSkin, SKINS, useDisplaySize, DISPLAY_SIZES } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import { toolPaths, type ToolPath } from "@/lib/git";
@@ -59,6 +60,7 @@ export function SettingsPage() {
   );
   const [displaySize, setDisplaySize] = useDisplaySize();
   const [mcpEnabled, setMcpEnabled] = React.useState(true);
+  const [mcpReadonly, setMcpReadonly] = React.useState(false);
   const [mcpToken, setMcpToken] = React.useState(DEFAULT_MCP_TOKEN);
   const [mcpShowToken, setMcpShowToken] = React.useState(false);
   const [mcpSaving, setMcpSaving] = React.useState(false);
@@ -85,6 +87,7 @@ export function SettingsPage() {
     mcpGetConfig()
       .then((s) => {
         setMcpEnabled(s.enabled);
+        setMcpReadonly(s.readonly);
         setMcpToken(s.token);
       })
       .catch(() => {
@@ -104,7 +107,7 @@ export function SettingsPage() {
   const saveMcp = async () => {
     setMcpSaving(true);
     try {
-      await mcpSetConfig({ enabled: mcpEnabled, token: mcpToken.trim() || DEFAULT_MCP_TOKEN });
+      await mcpSetConfig({ enabled: mcpEnabled, readonly: mcpReadonly, token: mcpToken.trim() || DEFAULT_MCP_TOKEN });
       toast.success("MCP 设置已保存");
     } catch (e) {
       toast.error(String(e));
@@ -511,6 +514,17 @@ export function SettingsPage() {
               </div>
               <Switch checked={mcpEnabled} onCheckedChange={setMcpEnabled} />
             </div>
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <span className="text-sm font-medium">MCP 只读模式</span>
+                <p className="text-xs text-muted-foreground">
+                  开启后 AI 只能读：写工具（建/切分支、保存状态、提提案）从工具列表隐藏且调用被拒。
+                  只读只由本设置决定（已不再支持 MCP_TODO_READONLY 环境变量与 --readonly 参数，传了会直接拒绝启动）；
+                  保存后下一个请求即生效，无需重启 mcp-server。
+                </p>
+              </div>
+              <Switch checked={mcpReadonly} onCheckedChange={setMcpReadonly} aria-label="MCP 只读模式" />
+            </div>
             <div className="space-y-2">
               <Label htmlFor="mcp-token">授权 Token</Label>
               <div className="flex gap-2">
@@ -538,8 +552,10 @@ export function SettingsPage() {
               <p className="text-xs text-muted-foreground">
                 默认全局固定授权 Key：<code className="font-mono">{DEFAULT_MCP_TOKEN}</code>
                 ；MCP server 启动需携带此 Token（--token 参数或 MCP_TODO_TOKEN 环境变量）。
+                多个 AI 建议各发一把「接入 Token」（见下方 HTTP 传输区），管理 Key 只留给自己用。
               </p>
             </div>
+            <McpAccessPanel />
           </CardContent>
         </Card>
 

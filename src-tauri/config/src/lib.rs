@@ -5,16 +5,16 @@
 pub const SOFTWARE_VERSION: &str = "v2.0.0";
 
 /// 软件支持的当前（最高）数据版本（schema user_version 目标值）
-pub const CURRENT_DATA_VERSION: i64 = 14;
+pub const CURRENT_DATA_VERSION: i64 = 15;
 
 /// 软件能兼容升级的最低数据版本（未来删除/改写某段迁移时提升；低于此 → TooOld 拒绝）
 pub const MIN_SUPPORTED_DATA_VERSION: i64 = 1;
 
 /// 数据版本支持范围（展示用）
-pub const DATA_VERSION_RANGE: &str = "v1 ~ v14";
+pub const DATA_VERSION_RANGE: &str = "v1 ~ v15";
 
 /// 迁移步骤描述（下标 j（0-based）对应 v{j+1}→v{j+2}；供升级报告/前端提示）
-pub const MIGRATION_STEPS: [(&str, &str); 13] = [
+pub const MIGRATION_STEPS: [(&str, &str); 14] = [
     ("v1→v2", "建 app_meta；存量数字标记清洗"),
     ("v2→v3", "建 git_repo_cache"),
     ("v3→v4", "projects 补 GitLab Token 两列"),
@@ -49,6 +49,10 @@ pub const MIGRATION_STEPS: [(&str, &str); 13] = [
         "v13→v14",
         "番茄专注会话记录：建 pomodoro_sessions 表（独立计时器，不绑定任务）",
     ),
+    (
+        "v14→v15",
+        "MCP 审计留痕：建 mcp_audit 表（谁在何时用什么 Token 调了哪个工具，不存请求正文）",
+    ),
 ];
 
 /// 更新日志（文本形式，逐版本摘要）
@@ -66,6 +70,9 @@ pub const CHANGELOG: &str = "2.0.0（当前）：
 - 项目列表手工排序（v13）：项目卡片可拖拽排序并持久化（projects.sort_order），新建项目默认排在最前
 - 番茄专注会话（v14）：独立番茄计时器（专注/短休/长休），每次会话落库 pomodoro_sessions，
   支持今日/近 7 天统计与 MCP 只读资源；配置与宠物偏好为本机界面偏好，存 localStorage
+- MCP HTTP 传输与审计（v15，ADR-023）：stdio 之外增加 http://<host>:<port>/mcp 端点，
+  设置页开关控制启停；多个 AI 各用一把接入 Token（可单独只读 / 单独撤销）；
+  每次请求（含鉴权失败）落 mcp_audit，只记元数据不记请求正文
 ";
 
 /// 依赖关系信息（数组形式）：workspace 分包职责

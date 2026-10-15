@@ -28,7 +28,7 @@
 4. db_load_state 得到的完整对象作为 expected；db_save_state 传 payload 和 expected。
 5. 保存成功后使用业务结果的 state 作为下一次 expected；isError=true 时不要当作成功，也不要自动覆盖冲突。
 
-共 10 个工具、3 个资源；只读模式公开 6 个读取工具。批量查询每次 1~1000 项，每项包含 id、tag、可选 branch。
+（当时的数量）共 10 个工具、3 个资源；只读模式公开 6 个读取工具。批量查询每次 1~1000 项，每项包含 id、tag、可选 branch。**现为 11 tools + 6 resources**（新增 `db_preview_state`、`todo-kanban://fields`、`todo-kanban://pomodoro`）。
 
 ## 保留的行为与边界
 
@@ -44,5 +44,38 @@
 
 - 去掉批量请求的重复字段校验。
 - 对 expected 中已存在的项目/待办，payload 必须保留原有字段；需要清空时显式传空值，需要删除时删除整条记录。缺失字段直接报参数错误，不再用默认值覆盖已有数据。
-- MCP_TODO_READONLY 若不是有效文本也拒绝启动，避免错误配置意外关闭只读限制。
+- MCP_TODO_READONLY 若不是有效文本也拒绝启动，避免错误配置意外关闭只读限制。（**该开关已于 2026-10-15 整体移除，见文末**）
 - 本轮仍只编辑代码与说明，未测试、构建、运行 MCP 或操作真实数据库；此前通过的测试结果不适用于当前代码。
+
+
+## 2026-10-15：只读模式改由应用设置决定（ADR-022）
+
+上面「`MCP_TODO_READONLY` / `--readonly`」的只读入口**已整体移除**，只读改由应用内设置决定。
+
+### 为什么改
+
+- 权限来源分裂：启用状态与 Token 存在 `app_meta`、由设置页管理、**每个业务请求重读**；只有只读是进程启动时的一次性快照，改它要重启 MCP 客户端，设置页里也看不到。
+- 优先级陷阱：旧实现里 `MCP_TODO_READONLY=0` 会把显式传入的 `--readonly` 关掉——部署方以为在只读保护下，实际可写。
+- 安全边界不该依赖一个不能写错的字符串。
+
+### 现在的行为
+
+| 场景 | 结果 |
+| --- | --- |
+| 设置 → MCP 集成 → 「MCP 只读模式」开启 | 5 个写工具（`git_create_branch` / `git_create_branch_from` / `git_checkout_branch` / `db_save_state` / `db_preview_state`）从 `tools/list` 隐藏，调用时返回 `isError` + 中文提示；6 个读工具照常 |
+| 保存该设置 | **下一个请求即生效**，无需重启 mcp-server（与 Token / 启用状态一致） |
+| 传 `--readonly` | 拒绝启动，stderr 指向设置页 |
+| `MCP_TODO_READONLY=1`（或任何 truthy / 不可解析值） | 拒绝启动，stderr 指向设置页——**不静默忽略**，避免安全边界静默降级 |
+| `MCP_TODO_READONLY=0` / `false` / `no` / `off` / 空 | 视为历史残留，忽略；只读仍由设置决定 |
+| 读不到设置 / 尚未校验 | 进程内快照初值为**只读**（fail-closed） |
+
+存储：`app_meta` 键 `mcp_readonly`（`"1"`/`"0"`）。不新增表、**不提升数据版本**；旧库缺该键 → 默认 `false`（保持升级前可写行为）。
+
+### 升级动作（重要）
+
+MCP 客户端配置里带 `MCP_TODO_READONLY=1` 或 `--readonly` 的，升级后会**启动失败**。需要：移除该配置 → 在应用「设置 → MCP 集成 → MCP 只读模式」里打开 → 重连。
+
+### 验证
+
+- `cargo test -p mcp-server` 12 项（新增：`--readonly` 拒绝启动、未知选项提示不再宣传该参数、只读隐藏写工具、非只读列出全部 11 个工具）。
+- 31 项 stdio 端到端检查（真实 mcp-server 二进制 + 真实 SQLite 副本）：握手与 capabilities、11 工具 / 6 资源清单、逐个 `resources/read`、真实写入与 `{ok,state}` 返回、缺 `expected` → -32602、过期 `expected` → `STATE_CONFLICT`、未知工具 / 未知方法、参数类型校验、只读三层行为、设置页禁用即时生效（-32001）、Token 不匹配 / 缺失 / 数据版本过新三类拒绝启动。

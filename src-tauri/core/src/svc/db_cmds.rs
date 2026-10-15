@@ -9,10 +9,11 @@ use crate::db;
 use crate::error::{AppError, AppResult};
 use crate::models::{
     DbBranchDef, DbBranchRule, DbBranchRuleStep, DbProject, DbState, DbSwimlane, DbTodo,
-    LanShareSettings, McpSettings,
+    LanShareSettings, McpHttpSettings, McpSettings, McpToken,
 };
 use crate::svc::attachments;
 use rusqlite::{Connection, OptionalExtension};
+use serde::de::DeserializeOwned;
 
 static DB_RW_LOCK: Mutex<()> = Mutex::new(());
 
@@ -619,7 +620,7 @@ pub fn mcp_get_config() -> AppResult<McpSettings> {
 }
 
 /// 保存 MCP 集成设置（写 app_meta）。只读模式也只在这里决定，
-/// mcp-server 每个业务请求重读一次（见 bridge::verify_startup）。
+/// mcp-server 与 HTTP 每个业务请求重读一次（见 `core::mcp::authorize`）。
 pub fn mcp_set_config(s: McpSettings) -> AppResult<()> {
     let path = db_path()?;
     let conn = db::open(&path)?;
@@ -628,6 +629,165 @@ pub fn mcp_set_config(s: McpSettings) -> AppResult<()> {
     write_meta(&conn, MCP_READONLY_KEY, if s.readonly { "1" } else { "0" })?;
     write_meta(&conn, MCP_TOKEN_KEY, &s.token)?;
     Ok(())
+}
+
+// ── MCP HTTP 传输与多 AI Token（app_meta 持久化 JSON；见 ADR-023） ─────
+
+/// app_meta 键：MCP HTTP 传输设置 JSON
+const MCP_HTTP_KEY: &str = "mcp_http_settings";
+/// app_meta 键：多 AI Token 列表 JSON
+const MCP_TOKENS_KEY: &str = "mcp_tokens";
+/// 接入 Token 数量上限（防误配成超大 JSON 拖慢每次读设置）
+pub const MCP_TOKEN_LIMIT: usize = 50;
+
+/// 读一个 JSON 型 app_meta；缺键或**解析失败都回默认值**——配置损坏不该让设置页打不开，
+/// 但必须留一条 warn，避免静默把用户的 Token 列表当成空。
+fn read_json_meta<T: DeserializeOwned>(conn: &Connection, key: &str, default: T) -> AppResult<T> {
+    let Some(raw) = read_meta(conn, key)? else {
+        return Ok(default);
+    };
+    match serde_json::from_str::<T>(&raw) {
+        Ok(value) => Ok(value),
+        Err(error) => {
+            log::warn!("app_meta.{key} 解析失败，回退默认值：{error}");
+            Ok(default)
+        }
+    }
+}
+
+fn write_json_meta<T: serde::Serialize>(conn: &Connection, key: &str, value: &T) -> AppResult<()> {
+    write_meta(conn, key, &serde_json::to_string(value)?)
+}
+
+/// 同一事务里读 MCP 全套访问配置（设置 + 多 AI Token），避免两次开连接读到不一致快照
+pub fn mcp_access_from_conn(conn: &Connection) -> AppResult<(McpSettings, Vec<McpToken>)> {
+    let settings = mcp_settings_from_conn(conn)?;
+    let tokens = read_json_meta(conn, MCP_TOKENS_KEY, Vec::new())?;
+    Ok((settings, tokens))
+}
+
+pub fn mcp_access_from_db(path: &Path) -> AppResult<(McpSettings, Vec<McpToken>)> {
+    let conn = db::open_existing(path, false)?;
+    let tx = conn.unchecked_transaction()?;
+    let access = mcp_access_from_conn(&tx)?;
+    tx.commit()?;
+    Ok(access)
+}
+
+pub fn mcp_http_get() -> AppResult<McpHttpSettings> {
+    let path = db_path()?;
+    if !path.exists() {
+        return Ok(McpHttpSettings::default());
+    }
+    let conn = db::open_existing(&path, false)?;
+    read_json_meta(&conn, MCP_HTTP_KEY, McpHttpSettings::default())
+}
+
+pub fn mcp_http_set(settings: McpHttpSettings) -> AppResult<()> {
+    let path = db_path()?;
+    let conn = db::open(&path)?;
+    db::init(&conn)?;
+    write_json_meta(&conn, MCP_HTTP_KEY, &settings)
+}
+
+/// 多 AI Token 列表（顺序即展示顺序）
+pub fn mcp_tokens_list() -> AppResult<Vec<McpToken>> {
+    let path = db_path()?;
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let conn = db::open_existing(&path, false)?;
+    read_json_meta(&conn, MCP_TOKENS_KEY, Vec::new())
+}
+
+/// 覆盖保存 Token 列表（前端整表提交）。校验名称、Token 非空与去重、数量上限。
+pub fn mcp_tokens_save(tokens: Vec<McpToken>) -> AppResult<Vec<McpToken>> {
+    if tokens.len() > MCP_TOKEN_LIMIT {
+        return Err(AppError::invalid(format!(
+            "接入 Token 最多 {MCP_TOKEN_LIMIT} 个（当前 {} 个）",
+            tokens.len()
+        )));
+    }
+    let mut seen = std::collections::HashSet::new();
+    for item in &tokens {
+        if item.name.trim().is_empty() {
+            return Err(AppError::invalid("每个接入 Token 都要有名称（审计日志按它归属）"));
+        }
+        let value = item.token.trim();
+        if value.is_empty() {
+            return Err(AppError::invalid("Token 值不能为空"));
+        }
+        if !seen.insert(value.to_string()) {
+            return Err(AppError::invalid(format!(
+                "Token 值重复：{}（不同 AI 必须各用一把，否则审计无法区分）",
+                item.name.trim()
+            )));
+        }
+    }
+    let cleaned: Vec<McpToken> = tokens
+        .into_iter()
+        .map(|mut item| {
+            item.name = item.name.trim().to_string();
+            item.token = item.token.trim().to_string();
+            item
+        })
+        .collect();
+    let path = db_path()?;
+    let conn = db::open(&path)?;
+    db::init(&conn)?;
+    write_json_meta(&conn, MCP_TOKENS_KEY, &cleaned)?;
+    Ok(cleaned)
+}
+
+/// 新建一把 AI Token：`sk-` + 32 位十六进制，id 为 `mt-` + 8 位（审计关联用）。
+pub fn mcp_token_issue(name: &str, readonly: bool) -> AppResult<McpToken> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(AppError::invalid("请先填写这个 AI 的名称"));
+    }
+    if name.chars().count() > 40 {
+        return Err(AppError::invalid("AI 名称最长 40 个字符"));
+    }
+    let path = db_path()?;
+    let conn = db::open(&path)?;
+    db::init(&conn)?;
+    let mut tokens = read_json_meta::<Vec<McpToken>>(&conn, MCP_TOKENS_KEY, Vec::new())?;
+    if tokens.len() >= MCP_TOKEN_LIMIT {
+        return Err(AppError::invalid(format!(
+            "接入 Token 已达上限 {MCP_TOKEN_LIMIT} 个，请先删除不再使用的"
+        )));
+    }
+    let simple = uuid::Uuid::new_v4().simple().to_string();
+    let token = McpToken {
+        id: format!("mt-{}", &simple[..8]),
+        name: name.to_string(),
+        token: format!("sk-{simple}"),
+        readonly,
+        enabled: true,
+        created_at: crate::svc::workflow::now(),
+    };
+    // 8 位十六进制撞车概率极低，但必须确定性拒绝——否则两个 AI 的审计归属会串
+    if tokens.iter().any(|item| item.id == token.id) {
+        return Err(AppError::invalid("生成标识撞车，请重试"));
+    }
+    tokens.push(token.clone());
+    write_json_meta(&conn, MCP_TOKENS_KEY, &tokens)?;
+    Ok(token)
+}
+
+/// 删除一个 Token。审计日志里已记录的 actor / token_id 文本保留（归属不受影响），
+/// 「临时停用」应该用 enabled=false 而不是删除。
+pub fn mcp_tokens_remove(id: &str) -> AppResult<Vec<McpToken>> {
+    let path = db_path()?;
+    let conn = db::open(&path)?;
+    db::init(&conn)?;
+    let tokens = read_json_meta::<Vec<McpToken>>(&conn, MCP_TOKENS_KEY, Vec::new())?;
+    let kept: Vec<McpToken> = tokens
+        .into_iter()
+        .filter(|item| item.id != id)
+        .collect();
+    write_json_meta(&conn, MCP_TOKENS_KEY, &kept)?;
+    Ok(kept)
 }
 
 // ── 局域网共享（app_meta 持久化配置 + 访客范围读写编排） ─────────────
@@ -950,7 +1110,7 @@ mod tests {
     /// 接管旧数据：库与附件一起搬到目标目录，目标目录里没有旧库时不做任何事
     #[test]
     fn adopt_legacy_data_copies_db_and_attachments() {
-        let dir = std::env::temp_dir().join(format!("tk-adopt-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("tk-adopt-legacy-{}-{}", std::process::id(), uuid::Uuid::new_v4()));
         let _ = std::fs::remove_dir_all(&dir);
         let legacy = dir.join("app-dir");
         let target = dir.join("user-dir");

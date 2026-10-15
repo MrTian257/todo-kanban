@@ -1,23 +1,21 @@
-//! MCP bridge：11 tools + 6 resources ↔ core::svc。
+//! MCP bridge：11 tools + 6 resources ↔ core::svc。**stdio 与 HTTP 两种传输共用这一份**。
 //! 参数错误返回 JSON-RPC 错误；执行失败返回 MCP isError。
-//! 只读模式**来自应用设置（app_meta mcp_readonly）**，由 verify_startup 每个业务请求刷新；
-//! 只读时写工具既不出现在 tools/list、调用时也被拒（见 ADR-022）。
-//! 数据源固定为程序运行目录 todo-kanban.db；--db-config 仍支持覆盖到指定目录。
+//! 数据源与只读标记都取自**当前请求上下文**（`super::current()`，由传输层入口注入）：
+//! 只读时写工具既不出现在 tools/list、调用时也被拒（ADR-022 起由应用设置决定）。
+//! 取不到上下文时按「无数据源 + 只读」处理（fail-closed），绝不放行写操作。
 //! MCP 的 git_info 保持直读语义（不经 app 侧缓存）；git_info_refresh / git_info_remote 为 app 专属不暴露。
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde_json::{json, Value};
-use todo_kanban_core::db;
-use todo_kanban_core::error::{AppError, AppResult};
-use todo_kanban_core::models::DbState;
-#[cfg(test)]
-use todo_kanban_core::models::{DbProject, DbTodo};
-use todo_kanban_core::svc::{db_cmds, git_cmds};
 
-use crate::config;
+use super::current;
+use crate::db;
+use crate::error::{AppError, AppResult};
+use crate::models::DbState;
+#[cfg(test)]
+use crate::models::{DbProject, DbTodo};
+use crate::svc::{git_cmds, history};
 
 pub const RESOURCES: [(&str, &str); 6] = [
     ("todo-kanban://state", "全部状态（项目 + 待办 + 资料）JSON"),
@@ -36,7 +34,7 @@ pub const RESOURCES: [(&str, &str); 6] = [
 
 /// 真正会改动仓库/数据的工具。git_sync_commits / git_commits_between / git_commit_info
 /// 只跑 git log/show/branch --contains，属只读查询，不能算写工具。
-const WRITE_TOOLS: [&str; 5] = [
+pub const WRITE_TOOLS: [&str; 5] = [
     "git_create_branch",
     "git_create_branch_from",
     "git_checkout_branch",
@@ -44,40 +42,23 @@ const WRITE_TOOLS: [&str; 5] = [
     "db_preview_state",
 ];
 
-/// 只读开关的**运行时快照**：由 `verify_startup` 在每次业务请求前从设置（app_meta）刷新。
-/// 初值 true = 还没读到设置时按只读处理（fail-closed），避免启动早期或读库失败时误放行写操作。
-/// 只读不再取自环境变量 / 命令行（见 ADR-022）。
-static READONLY: AtomicBool = AtomicBool::new(true);
-
+/// 本次请求是否只读：取自上下文；无上下文按只读处理（fail-closed）。
 fn is_readonly() -> bool {
-    READONLY.load(Ordering::Relaxed)
+    current().map(|item| item.readonly).unwrap_or(true)
 }
 
-/// 供测试与启动校验写入当前只读状态
-fn set_readonly(value: bool) {
-    READONLY.store(value, Ordering::Relaxed);
-}
-
+/// 拒绝写操作时的统一文案（指明去哪里改，AI 侧能直接转述给用户）
 fn readonly_denial() -> AppError {
     AppError::invalid("只读模式已开启（todo-kanban 设置 → MCP 集成 → 「MCP 只读模式」），写操作被拒绝")
 }
 
-/// 数据源路径：--db-config 指定目录 → 该目录下 todo-kanban.db；否则回退 app 运行目录。
-/// 数据文件不存在时返回 None，避免 MCP server 自动创建未初始化的库。
-fn resolve_db_file() -> AppResult<Option<PathBuf>> {
-    let path = if let Some(cfg) = config::get() {
-        if let Some(dir) = cfg.db_config_dir {
-            dir.join("todo-kanban.db")
-        } else {
-            db_cmds::db_path()?
-        }
-    } else {
-        db_cmds::db_path()?
-    };
-    if path.exists() {
-        Ok(Some(path))
-    } else {
-        Ok(None)
+/// 数据源路径：当前请求上下文里已由传输层解析好（stdio 支持 --db-config 覆盖，
+/// HTTP 固定用应用数据目录）。数据文件不存在时返回 None——MCP 绝不自动建库。
+fn resolve_db_file() -> AppResult<Option<std::path::PathBuf>> {
+    match current() {
+        Some(context) if context.db_path.exists() => Ok(Some(context.db_path)),
+        Some(_) => Ok(None),
+        None => Err(AppError::invalid("缺少请求上下文：MCP 调度只能由传输层调用")),
     }
 }
 
@@ -100,13 +81,15 @@ fn save_state(state: DbState, expected: &DbState) -> AppResult<DbState> {
         return Err(AppError::invalid("未配置数据文件，无法保存"));
     };
     let conn = db::open_existing(&path, true)?;
-    let (saved, trash) = todo_kanban_core::svc::history::with_actor("mcp", || {
-        db::save_state_checked(&conn, &state, expected)
-    })?;
+    // actor 带 AI 名称，变更历史里能直接看出是哪个 AI 改的（与 mcp_audit 归属一致）
+    let actor = current()
+        .map(|item| format!("mcp:{}", item.actor))
+        .unwrap_or_else(|| "mcp".to_string());
+    let (saved, trash) = history::with_actor(&actor, || db::save_state_checked(&conn, &state, expected))?;
     // 附件联动：被删任务的附件文件移入数据文件旁 attachments/trash/（按实际 db 路径定位根目录）
     if !trash.is_empty() {
-        todo_kanban_core::svc::attachments::move_to_trash_at(
-            &todo_kanban_core::svc::attachments::attachments_root_at(&path),
+        crate::svc::attachments::move_to_trash_at(
+            &crate::svc::attachments::attachments_root_at(&path),
             &trash,
         );
     }
@@ -116,8 +99,8 @@ fn save_state(state: DbState, expected: &DbState) -> AppResult<DbState> {
 fn call_tool(name: &str, args: &Value) -> AppResult<Value> {
     let path = resolve_db_file()?
         .ok_or_else(|| AppError::invalid("数据文件不存在，请恢复数据源后重试"))?;
-    let _database = todo_kanban_core::svc::gitlab::database_scope(Some(path));
-    // 写工具在只读模式下拒绝（只读状态由上一个业务请求的 verify_startup 从设置刷新）
+    let _database = crate::svc::gitlab::database_scope(Some(path));
+    // 写工具在只读模式下拒绝（只读状态来自本次请求的上下文）
     if is_readonly() && WRITE_TOOLS.contains(&name) {
         return Err(readonly_denial());
     }
@@ -176,7 +159,7 @@ fn call_tool(name: &str, args: &Value) -> AppResult<Value> {
             let expected: DbState = serde_json::from_value(args["expected"].clone())?;
             apply_ai_markers(&mut payload, &expected);
             let path = resolve_db_file()?.ok_or_else(|| AppError::invalid("数据库不存在"))?;
-            let id = todo_kanban_core::svc::proposals::create_at(&path, payload, expected)?;
+            let id = crate::svc::proposals::create_at(&path, payload, expected)?;
             Ok(
                 json!({"proposalId":id,"status":"pending","message":"变更尚未应用，请用户在应用的工作流页面确认"}),
             )
@@ -262,32 +245,6 @@ fn apply_ai_markers(state: &mut DbState, existing: &DbState) {
     }
 }
 
-/// 启动与**每个业务请求**都会跑一遍：数据源可用 + MCP 已启用 + 只读开关同步 + Token 匹配。
-/// 不通过 → Err 中文提示（启动时退出，请求时返回 -32001）。
-/// 只读模式也从这里的应用设置读一次，所以设置页改「MCP 只读模式」无需重启 mcp-server。
-pub fn verify_startup() -> Result<(), String> {
-    let Some(path) = resolve_db_file().map_err(|e| e.to_string())? else {
-        return Err(
-            "未找到数据文件：请先运行桌面应用完成初始化，或检查 --db-config 指定的数据目录"
-                .to_string(),
-        );
-    };
-    let settings = db_cmds::mcp_read_from_db(&path).map_err(|e| e.to_string())?;
-    if !settings.enabled {
-        return Err("MCP 已在 todo-kanban 设置页中被禁用，请先在应用中启用".to_string());
-    }
-    // 必须在返回 Ok 之前写入：否则本请求的写工具会沿用上一个请求的只读快照。
-    set_readonly(settings.readonly);
-    let provided = config::get()
-        .and_then(|c| c.token.clone())
-        .filter(|t| !t.trim().is_empty());
-    match provided {
-        Some(t) if t == settings.token => Ok(()),
-        Some(_) => Err("授权 Token 不匹配，请更新 MCP 配置后重新连接".into()),
-        None => Err("缺少授权 Token，请通过 MCP_TODO_TOKEN 环境变量或 --token 参数传入".into()),
-    }
-}
-
 fn read_resource(uri: &str) -> AppResult<Value> {
     if !RESOURCES.iter().any(|(known, _)| *known == uri) {
         return Err(AppError::invalid(format!("未知资源：{uri}")));
@@ -299,7 +256,7 @@ fn read_resource(uri: &str) -> AppResult<Value> {
         // 自定义字段与自动脚本属于工作流配置（不在业务快照里）：AI 登记任务前可先读它，
         // 以便给 payload.todos[].customFields 写入合法的字段标识与取值。
         "todo-kanban://fields" => {
-            let workflow = todo_kanban_core::svc::workflow::read(&tx)?;
+            let workflow = crate::svc::workflow::read(&tx)?;
             serde_json::to_value(json!({
                 "fieldDefs": workflow.field_defs,
                 "automations": workflow.automations,
@@ -307,8 +264,8 @@ fn read_resource(uri: &str) -> AppResult<Value> {
         }
         // 番茄专注（v14）：独立计时器的会话历史。只读聚合，配置在本机 localStorage 里，不对外暴露。
         "todo-kanban://pomodoro" => {
-            let stats = todo_kanban_core::svc::pomodoro::stats_from_conn(&tx, 7)?;
-            let recent = todo_kanban_core::svc::pomodoro::recent_from_conn(&tx, 20)?;
+            let stats = crate::svc::pomodoro::stats_from_conn(&tx, 7)?;
+            let recent = crate::svc::pomodoro::recent_from_conn(&tx, 20)?;
             serde_json::to_value(json!({ "stats": stats, "recent": recent }))?
         }
         "todo-kanban://projects" => serde_json::to_value(db::row::load_projects_from_conn(&tx)?)?,
@@ -318,6 +275,66 @@ fn read_resource(uri: &str) -> AppResult<Value> {
     };
     tx.commit()?;
     Ok(value)
+}
+
+/// 从工具入参提取「作用对象」摘要，供审计筛选与展示。
+/// 刻意不含 Token / note 正文，只留定位信息（ADR-023）。
+pub fn audit_target(name: &str, args: &Value) -> String {
+    let text = |key: &str| {
+        args.get(key)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string()
+    };
+    match name {
+        "" => String::new(),
+        // git 类：仓库 + 分支/标记，足够定位「动了哪个仓库的哪条线」
+        n if n.starts_with("git_") => {
+            let mut parts = vec![text("repo")];
+            for key in ["branch", "tag", "hash", "from"] {
+                let value = text(key);
+                if !value.is_empty() {
+                    parts.push(value);
+                }
+            }
+            parts.retain(|part| !part.is_empty());
+            parts.join(" ")
+        }
+        "db_load_state" => String::new(),
+        "db_save_state" | "db_preview_state" => {
+            // 只报「碰到哪些待办/项目」，不复制内容
+            let payload = args.get("payload");
+            let ids = |key: &str, field: &str| -> Vec<String> {
+                payload
+                    .and_then(|body| body.get(key))
+                    .and_then(Value::as_array)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|item| item[field].as_str().map(str::to_string))
+                            .take(4)
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            };
+            let mut parts = Vec::new();
+            let todos = ids("todos", "id");
+            if !todos.is_empty() {
+                let total = payload
+                    .and_then(|body| body.get("todos"))
+                    .and_then(Value::as_array)
+                    .map_or(0, Vec::len);
+                parts.push(format!("todos={} [{}]", total, todos.join(",")));
+            }
+            let projects = ids("projects", "id");
+            if !projects.is_empty() {
+                parts.push(format!("projects={}", projects.join(",")));
+            }
+            parts.join(" ")
+        }
+        other => other.to_string(),
+    }
 }
 
 /// tools/call 分发 → JSON-RPC result（错误码映射由 protocol 层做）
@@ -549,30 +566,67 @@ fn all_tool_schemas() -> Value {
 mod tests {
     use super::*;
 
-    #[test]
-    fn readonly_rejects_writes() {
-        // 只读状态现在来自应用设置（verify_startup 写入的快照），测试直接预置该快照。
-        set_readonly(true);
-        let err = handle_call("db_save_state", &json!({ "payload": {} }));
-        assert!(err.is_err());
-        assert_eq!(err.unwrap_err().0, -32602);
-        // 只读模式下写工具不得出现在 tools/list 里
-        let listed = tool_schemas();
-        let names = listed
+    fn context(readonly: bool) -> super::super::McpContext {
+        super::super::McpContext {
+            // 不存在的库：只读判定发生在触库之前，所以这里只关心权限
+            db_path: std::path::PathBuf::from("does-not-exist.db"),
+            transport: "http",
+            actor: "Claude".into(),
+            token_id: "mt-x".into(),
+            readonly,
+            peer: String::new(),
+        }
+    }
+
+    fn listed_names() -> Vec<String> {
+        tool_schemas()
             .as_array()
             .unwrap()
             .iter()
-            .filter_map(|schema| schema["name"].as_str())
-            .collect::<Vec<_>>();
-        assert!(!names.contains(&"db_save_state"), "只读时仍供出了写工具：{names:?}");
-        assert!(names.contains(&"db_load_state"), "只读时读工具应保留");
-        set_readonly(false);
-        let writable = tool_schemas().as_array().unwrap().len();
-        assert_eq!(
-            writable,
-            all_tool_schemas().as_array().unwrap().len(),
-            "非只读时应列出全部工具"
+            .filter_map(|schema| schema["name"].as_str().map(str::to_string))
+            .collect()
+    }
+
+    #[test]
+    fn readonly_hides_and_rejects_write_tools() {
+        super::super::with_context(context(true), || {
+            let err = handle_call("db_save_state", &json!({ "payload": {} }));
+            assert!(err.is_err());
+            assert_eq!(err.unwrap_err().0, -32602);
+            let names = listed_names();
+            assert!(!names.contains(&"db_save_state".to_string()), "只读时仍供出了写工具：{names:?}");
+            assert!(names.contains(&"db_load_state".to_string()), "只读时读工具应保留");
+        });
+        super::super::with_context(context(false), || {
+            assert_eq!(
+                listed_names().len(),
+                all_tool_schemas().as_array().unwrap().len(),
+                "非只读时应列出全部工具"
+            );
+        });
+    }
+
+    /// 没有上下文（传输层忘了注入）必须按只读处理，不能放行写操作
+    #[test]
+    fn missing_context_is_readonly() {
+        assert!(is_readonly());
+        assert!(resolve_db_file().is_err(), "无上下文不得猜数据源");
+    }
+
+    #[test]
+    fn audit_target_summarises_without_payload() {
+        let git = audit_target(
+            "git_commits_between",
+            &json!({ "repo": "C:/repo", "branch": "dev", "since": "x", "until": "y" }),
         );
+        assert_eq!(git, "C:/repo dev");
+        let save = audit_target(
+            "db_save_state",
+            &json!({ "payload": { "todos": [{ "id": "t1", "note": "秘密正文" }, { "id": "t2" }], "projects": [] } }),
+        );
+        assert_eq!(save, "todos=2 [t1,t2]", "只记 id，不记内容：{save}");
+        assert!(!save.contains("秘密正文"));
+        assert_eq!(audit_target("db_load_state", &json!({})), "");
     }
 
     #[test]
