@@ -366,11 +366,14 @@ pub struct GcSummary {
 /// 默认全局固定 MCP 授权 Token（设置页可修改；MCP server 启动认证用）
 pub const DEFAULT_MCP_TOKEN: &str = "sk-GLOBAl_MCP_BY_ADMIN";
 
-/// MCP 集成设置（app_meta 持久化；缺失回默认：启用 + 全局固定授权 Token）
+/// MCP 集成设置（app_meta 持久化；缺失回默认：启用 + 可写 + 全局固定授权 Token）
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct McpSettings {
     pub enabled: bool,
+    /// **只读模式由这里决定，不由环境变量 / 命令行决定**（见 ADR-022）。
+    /// 开启后 mcp-server 隐藏并拒绝全部写工具；每个业务请求重新读取，改完立即生效。
+    pub readonly: bool,
     pub token: String,
 }
 
@@ -378,6 +381,7 @@ impl Default for McpSettings {
     fn default() -> Self {
         McpSettings {
             enabled: true,
+            readonly: false,
             token: DEFAULT_MCP_TOKEN.to_string(),
         }
     }

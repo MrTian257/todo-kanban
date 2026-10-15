@@ -561,6 +561,7 @@ fn demo_todo(spec: DemoTodoSpec, now: i64, day: i64) -> DbTodo {
 // ── MCP 集成设置（app_meta 持久化；MCP server 启动校验复用） ─────────────
 
 const MCP_ENABLED_KEY: &str = "mcp_enabled";
+const MCP_READONLY_KEY: &str = "mcp_readonly";
 const MCP_TOKEN_KEY: &str = "mcp_token";
 
 fn read_meta(conn: &Connection, key: &str) -> AppResult<Option<String>> {
@@ -586,6 +587,10 @@ fn mcp_settings_from_conn(conn: &Connection) -> AppResult<McpSettings> {
     if let Some(v) = read_meta(conn, MCP_ENABLED_KEY)? {
         s.enabled = v == "1" || v.eq_ignore_ascii_case("true");
     }
+    // 只读开关同样存在 app_meta（旧库缺键 → 默认 false，保持升级前可写行为）。
+    if let Some(v) = read_meta(conn, MCP_READONLY_KEY)? {
+        s.readonly = v == "1" || v.eq_ignore_ascii_case("true");
+    }
     if let Some(v) = read_meta(conn, MCP_TOKEN_KEY)? {
         let t = v.trim();
         if !t.is_empty() {
@@ -604,7 +609,7 @@ pub fn mcp_read_from_db(path: &Path) -> AppResult<McpSettings> {
     Ok(settings)
 }
 
-/// 读取 MCP 集成设置（无数据源 / key 缺失 → 默认：启用 + 全局固定授权 Token）
+/// 读取 MCP 集成设置（无数据源 / key 缺失 → 默认：启用 + 可写 + 全局固定授权 Token）
 pub fn mcp_get_config() -> AppResult<McpSettings> {
     let path = db_path()?;
     if !path.exists() {
@@ -613,12 +618,14 @@ pub fn mcp_get_config() -> AppResult<McpSettings> {
     mcp_read_from_db(&path)
 }
 
-/// 保存 MCP 集成设置（写 app_meta）
+/// 保存 MCP 集成设置（写 app_meta）。只读模式也只在这里决定，
+/// mcp-server 每个业务请求重读一次（见 bridge::verify_startup）。
 pub fn mcp_set_config(s: McpSettings) -> AppResult<()> {
     let path = db_path()?;
     let conn = db::open(&path)?;
     db::init(&conn)?;
     write_meta(&conn, MCP_ENABLED_KEY, if s.enabled { "1" } else { "0" })?;
+    write_meta(&conn, MCP_READONLY_KEY, if s.readonly { "1" } else { "0" })?;
     write_meta(&conn, MCP_TOKEN_KEY, &s.token)?;
     Ok(())
 }

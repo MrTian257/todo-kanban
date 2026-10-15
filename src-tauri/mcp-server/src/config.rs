@@ -1,15 +1,20 @@
-//! MCP server 配置：数据源目录解析（--db-config / MCP_TODO_DB_CONFIG 覆盖 → exe_dir 回退）+ 只读开关。
+//! MCP server 配置：数据源目录解析（--db-config / MCP_TODO_DB_CONFIG 覆盖 → exe_dir 回退）+ 授权 Token。
 //! 实际库文件固定为 <目录>/todo-kanban.db。
+//! **只读模式不在这里**：它由 todo-kanban 设置页（app_meta 的 mcp_readonly）决定，
+//! 每个业务请求重读（见 ADR-022）；旧的 --readonly / MCP_TODO_READONLY 会被明确拒绝而不是静默忽略。
 
 use std::path::PathBuf;
 use std::sync::Mutex;
+
+/// 只读开关已从环变量 / 命令行迁到设置页。仍传进来时**拒绝启动**：
+/// 静默忽略会让调用方以为自已在只读保护下，实际却把生产库开放了写入。
+pub const READONLY_MOVED: &str = "只读模式已改由应用内设置决定（todo-kanban 设置 → MCP 集成 → 「MCP 只读模式」），不再支持 --readonly / MCP_TODO_READONLY。请移除该配置后重连；若原本靠它做写保护，请先在设置页打开只读模式。";
 
 /// 进程内配置（bridge 使用）
 #[derive(Clone)]
 pub struct McpConfig {
     /// 覆盖的数据源目录（None → 回退 app 的 exe_dir/todo-kanban.db）
     pub db_config_dir: Option<PathBuf>,
-    pub readonly: bool,
     /// 启动授权 Token（--token / MCP_TODO_TOKEN；需与设置页授权 Token 匹配）
     pub token: Option<String>,
 }
@@ -30,15 +35,11 @@ pub fn get() -> Option<McpConfig> {
 pub fn parse(args: &[String]) -> Result<McpConfig, String> {
     let mut dir = None;
     let mut token = None;
-    let mut cli_readonly = false;
     let mut index = 1;
     while index < args.len() {
         let flag = args[index].as_str();
         match flag {
-            "--readonly" => {
-                cli_readonly = true;
-                index += 1;
-            }
+            "--readonly" => return Err(READONLY_MOVED.to_string()),
             "--db-config" | "--token" => {
                 let value = args
                     .get(index + 1)
@@ -57,7 +58,7 @@ pub fn parse(args: &[String]) -> Result<McpConfig, String> {
                 }
                 index += 2;
             }
-            _ => return Err("存在未知命令行选项；仅支持 --db-config、--token、--readonly".into()),
+            _ => return Err("存在未知命令行选项；仅支持 --db-config 与 --token（只读模式请在设置页开启）".into()),
         }
     }
     if dir.is_none() {
@@ -71,19 +72,23 @@ pub fn parse(args: &[String]) -> Result<McpConfig, String> {
             .ok()
             .filter(|value| !value.trim().is_empty());
     }
-    let readonly_setting = match std::env::var("MCP_TODO_READONLY") {
-        Ok(value) => value,
-        Err(std::env::VarError::NotPresent) => String::new(),
-        Err(_) => return Err("MCP_TODO_READONLY 编码无效，请使用 0/1/false/true".into()),
-    };
-    let readonly = match readonly_setting.trim().to_ascii_lowercase().as_str() {
-        "" | "0" | "false" => cli_readonly,
-        "1" | "true" => true,
-        _ => return Err("MCP_TODO_READONLY 仅接受 0/1/false/true".into()),
-    };
+    // 只读不再由环变量决定。显式要求只读（truthy）或值不可解析 → 拒绝启动；
+    // 只有明确表达「不要只读」的 falsy 值（0/false/no/off/空）才当残留配置忽略。
+    match std::env::var("MCP_TODO_READONLY") {
+        Ok(value) => {
+            if !matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "" | "0" | "false" | "no" | "off"
+            ) {
+                return Err(READONLY_MOVED.to_string());
+            }
+        }
+        // 非 UTF-8 等不可解析的值不能当成“没设”：宁可启动失败，不可默默放行写操作。
+        Err(std::env::VarError::NotPresent) => {}
+        Err(_) => return Err(READONLY_MOVED.to_string()),
+    }
     Ok(McpConfig {
         db_config_dir: dir,
-        readonly,
         token,
     })
 }
@@ -96,8 +101,23 @@ mod tests {
     fn parse_args_ok() {
         let cfg = parse(&["mcp-server".into(), "--db-config".into(), "C:/data".into()]).unwrap();
         assert_eq!(cfg.db_config_dir, Some(PathBuf::from("C:/data")));
-        assert!(!cfg.readonly);
         assert!(cfg.token.is_none());
+    }
+
+    /// 只读开关已迁到设置页：传 --readonly 必须拒绝启动，不能静默忽略。
+    #[test]
+    fn readonly_flag_is_rejected() {
+        let err = parse(&["mcp-server".into(), "--readonly".into()]).unwrap_err();
+        assert!(
+            err.contains("设置") && err.contains("MCP 只读模式"),
+            "报错必须告诉用户去哪里开：{err}"
+        );
+    }
+
+    #[test]
+    fn unknown_flag_message_no_longer_advertises_readonly() {
+        let err = parse(&["mcp-server".into(), "--nope".into()]).unwrap_err();
+        assert!(!err.contains("--readonly"), "支持列表不应再包含已移除的选项：{err}");
     }
 
     #[test]

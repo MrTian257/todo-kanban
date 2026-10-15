@@ -1,10 +1,13 @@
 //! MCP bridge：11 tools + 6 resources ↔ core::svc。
-//! 参数错误返回 JSON-RPC 错误；执行失败返回 MCP isError；只读模式隐藏并拒绝写工具。
+//! 参数错误返回 JSON-RPC 错误；执行失败返回 MCP isError。
+//! 只读模式**来自应用设置（app_meta mcp_readonly）**，由 verify_startup 每个业务请求刷新；
+//! 只读时写工具既不出现在 tools/list、调用时也被拒（见 ADR-022）。
 //! 数据源固定为程序运行目录 todo-kanban.db；--db-config 仍支持覆盖到指定目录。
 //! MCP 的 git_info 保持直读语义（不经 app 侧缓存）；git_info_refresh / git_info_remote 为 app 专属不暴露。
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde_json::{json, Value};
 use todo_kanban_core::db;
@@ -41,8 +44,22 @@ const WRITE_TOOLS: [&str; 5] = [
     "db_preview_state",
 ];
 
+/// 只读开关的**运行时快照**：由 `verify_startup` 在每次业务请求前从设置（app_meta）刷新。
+/// 初值 true = 还没读到设置时按只读处理（fail-closed），避免启动早期或读库失败时误放行写操作。
+/// 只读不再取自环境变量 / 命令行（见 ADR-022）。
+static READONLY: AtomicBool = AtomicBool::new(true);
+
 fn is_readonly() -> bool {
-    config::get().map(|c| c.readonly).unwrap_or(true)
+    READONLY.load(Ordering::Relaxed)
+}
+
+/// 供测试与启动校验写入当前只读状态
+fn set_readonly(value: bool) {
+    READONLY.store(value, Ordering::Relaxed);
+}
+
+fn readonly_denial() -> AppError {
+    AppError::invalid("只读模式已开启（todo-kanban 设置 → MCP 集成 → 「MCP 只读模式」），写操作被拒绝")
 }
 
 /// 数据源路径：--db-config 指定目录 → 该目录下 todo-kanban.db；否则回退 app 运行目录。
@@ -77,9 +94,7 @@ fn load_state() -> AppResult<Option<DbState>> {
 
 fn save_state(state: DbState, expected: &DbState) -> AppResult<DbState> {
     if is_readonly() {
-        return Err(AppError::invalid(
-            "只读模式（MCP_TODO_READONLY=1），写操作被拒绝",
-        ));
+        return Err(readonly_denial());
     }
     let Some(path) = resolve_db_file()? else {
         return Err(AppError::invalid("未配置数据文件，无法保存"));
@@ -102,11 +117,9 @@ fn call_tool(name: &str, args: &Value) -> AppResult<Value> {
     let path = resolve_db_file()?
         .ok_or_else(|| AppError::invalid("数据文件不存在，请恢复数据源后重试"))?;
     let _database = todo_kanban_core::svc::gitlab::database_scope(Some(path));
-    // 写工具在只读模式下拒绝
+    // 写工具在只读模式下拒绝（只读状态由上一个业务请求的 verify_startup 从设置刷新）
     if is_readonly() && WRITE_TOOLS.contains(&name) {
-        return Err(AppError::invalid(
-            "只读模式（MCP_TODO_READONLY=1），写操作被拒绝",
-        ));
+        return Err(readonly_denial());
     }
     let s = |k: &str| -> String {
         args.get(k)
@@ -249,7 +262,9 @@ fn apply_ai_markers(state: &mut DbState, existing: &DbState) {
     }
 }
 
-/// 启动校验：数据源可用 + MCP 已启用 + Token 匹配（不通过 → Err 中文提示，main 退出）
+/// 启动与**每个业务请求**都会跑一遍：数据源可用 + MCP 已启用 + 只读开关同步 + Token 匹配。
+/// 不通过 → Err 中文提示（启动时退出，请求时返回 -32001）。
+/// 只读模式也从这里的应用设置读一次，所以设置页改「MCP 只读模式」无需重启 mcp-server。
 pub fn verify_startup() -> Result<(), String> {
     let Some(path) = resolve_db_file().map_err(|e| e.to_string())? else {
         return Err(
@@ -261,6 +276,8 @@ pub fn verify_startup() -> Result<(), String> {
     if !settings.enabled {
         return Err("MCP 已在 todo-kanban 设置页中被禁用，请先在应用中启用".to_string());
     }
+    // 必须在返回 Ok 之前写入：否则本请求的写工具会沿用上一个请求的只读快照。
+    set_readonly(settings.readonly);
     let provided = config::get()
         .and_then(|c| c.token.clone())
         .filter(|t| !t.trim().is_empty());
@@ -534,21 +551,27 @@ mod tests {
 
     #[test]
     fn readonly_rejects_writes() {
-        let cfg = config::McpConfig {
-            db_config_dir: None,
-            readonly: true,
-            token: None,
-        };
-        config::set(cfg).unwrap();
+        // 只读状态现在来自应用设置（verify_startup 写入的快照），测试直接预置该快照。
+        set_readonly(true);
         let err = handle_call("db_save_state", &json!({ "payload": {} }));
         assert!(err.is_err());
         assert_eq!(err.unwrap_err().0, -32602);
-        config::set(config::McpConfig {
-            db_config_dir: None,
-            readonly: false,
-            token: None,
-        })
-        .unwrap();
+        // 只读模式下写工具不得出现在 tools/list 里
+        let names = tool_schemas()
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|schema| schema["name"].as_str())
+            .collect::<Vec<_>>();
+        assert!(!names.contains(&"db_save_state"), "只读时仍供出了写工具：{names:?}");
+        assert!(names.contains(&"db_load_state"), "只读时读工具应保留");
+        set_readonly(false);
+        let writable = tool_schemas().as_array().unwrap().len();
+        assert_eq!(
+            writable,
+            all_tool_schemas().as_array().unwrap().len(),
+            "非只读时应列出全部工具"
+        );
     }
 
     #[test]
