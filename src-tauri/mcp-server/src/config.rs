@@ -105,9 +105,13 @@ mod tests {
     }
 
     /// 只读开关已迁到设置页：传 --readonly 必须拒绝启动，不能静默忽略。
+    /// 用 match 而不是 unwrap_err：McpConfig 持有 Token，故意不实现 Debug，避免凭据被打印。
     #[test]
     fn readonly_flag_is_rejected() {
-        let err = parse(&["mcp-server".into(), "--readonly".into()]).unwrap_err();
+        let err = match parse(&["mcp-server".into(), "--readonly".into()]) {
+            Err(message) => message,
+            Ok(_) => panic!("--readonly 应被拒绝启动，不能静默接受"),
+        };
         assert!(
             err.contains("设置") && err.contains("MCP 只读模式"),
             "报错必须告诉用户去哪里开：{err}"
@@ -116,7 +120,10 @@ mod tests {
 
     #[test]
     fn unknown_flag_message_no_longer_advertises_readonly() {
-        let err = parse(&["mcp-server".into(), "--nope".into()]).unwrap_err();
+        let err = match parse(&["mcp-server".into(), "--nope".into()]) {
+            Err(message) => message,
+            Ok(_) => panic!("未知选项必须报错"),
+        };
         assert!(!err.contains("--readonly"), "支持列表不应再包含已移除的选项：{err}");
     }
 

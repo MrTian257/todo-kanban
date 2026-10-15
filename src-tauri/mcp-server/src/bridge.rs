@@ -557,7 +557,8 @@ mod tests {
         assert!(err.is_err());
         assert_eq!(err.unwrap_err().0, -32602);
         // 只读模式下写工具不得出现在 tools/list 里
-        let names = tool_schemas()
+        let listed = tool_schemas();
+        let names = listed
             .as_array()
             .unwrap()
             .iter()
