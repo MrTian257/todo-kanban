@@ -32,15 +32,34 @@ MCP 只有 stdio 传输（ADR-007），且只有一把全局管理 Key。三个�
 bridge 内部几十个调用点不必层层加参数；取不到上下文时按「无数据源 + 只读」处理（fail-closed）。
 HTTP 侧的调度放在 `spawn_blocking` 里同步执行，保证设置与使用在同一条线程上。
 
-### 2. HTTP 端点是 MCP Streamable HTTP 的**无状态子集**
+### 2. HTTP 端点是 MCP Streamable HTTP 的**无状态子集**（对齐 2025-03-26 / 2025-06-18 规范）
 
 `POST /mcp` 一条 JSON-RPC、返回 `application/json`，不推 SSE；`initialize` 成功后响应头发
 `Mcp-Session-Id`，后续请求必须带回（未知 id → 404，让客户端重新握手）。
-`GET /mcp` → 405 + `Allow: POST, DELETE`；`DELETE /mcp` 结束会话；`GET /health` 免鉴权探活；
-其它路径返回一张自解释的说明页（避免用户把 URL 贴进浏览器看到 404 以为服务坏了）。
+`GET /mcp` → 405 + `Allow: POST, DELETE`（规范明确允许服务端不提供 SSE 流）；
+`DELETE /mcp` 结束会话；`GET /health` 免鉴权探活；其它路径返回一张自解释的说明页
+（避免用户把 URL 贴进浏览器看到 404 以为服务坏了）。
 
-刻意不支持批量数组（与 stdio 逐行语义一致）；刻意保留协议层的"必须先 initialize"，
-因为它同时是权限判定的前置。
+刻意不支持批量数组（2025-03-26 已从规范移除，也与 stdio 逐行语义一致）；
+刻意保留协议层的「必须先 initialize」，因为它同时是权限判定的前置。
+
+**协议版本协商**（`core/src/mcp/protocol.rs`）：`SUPPORTED_PROTOCOL_VERSIONS = [2025-06-18, 2025-03-26, 2024-11-05]`。
+`initialize` 时客户端请求的版本若受支持就**原样回显**，否则回本端最新版本，由客户端决定断开还是继续。
+这一条不是可选项：Streamable HTTP 是 2025-03-26 才引入的，写死 `2024-11-05` 会让走 HTTP 的通用客户端
+（TS / Python SDK 都会校验返回版本）拿到「不支持的版本」而直接断开。`Session` 记住协商结果，
+HTTP 层在后续响应头回显 `MCP-Protocol-Version`；客户端带了该头但版本不受支持 → 400，
+不静默按别的版本处理。
+
+**规范 MUST 的安全项**（2025-06-18「Security Warning」四条）：
+
+| 要求 | 本实现 |
+| --- | --- |
+| 校验 `Origin` 防 DNS 重绑定 | 无该头放行（原生客户端与浏览器顶层导航都不发）；有则必须与 `Host` 同主机，`localhost` / `127.0.0.1` / `::1` 互为别名；不匹配 → 403 **并落审计** |
+| 本机运行时只绑回环 | 默认 `127.0.0.1`；`0.0.0.0` 需显式勾选「允许局域网访问」并显示风险提示 |
+| 所有连接都要鉴权 | Bearer / `X-MCP-Token`；**不接受查询串 Token**（URL 会进代理与访问日志） |
+| 内容协商 | 客户端 `Accept` 明确不含 `application/json`（例如只要 `text/event-stream`）→ 406；缺失或 `*/*` 放行 |
+
+另外：通知类返回 **202 且无响应体**（早期实现回了字面量 `null`，严格客户端会当畸形响应）。
 
 ### 3. 多 AI Token 存 `app_meta`，只读**取严**
 
@@ -125,10 +144,13 @@ HTTP 侧的调度放在 `spawn_blocking` 里同步执行，保证设置与使用
 
 ## 验证
 
-- `cargo test -p todo-kanban --lib mcp_http`：9 项集成测试（真起 axum + 真临时 SQLite + 裸 HTTP 客户端）——
-  鉴权三类失败并留痕、会话头发放与未知会话 404、通知 202、`tools/list` 11 个工具、
-  只读 Token 被拒且归属正确、可写 Token 成功写入并留痕、全局只读压过可写 Token、
-  批量请求拒绝、`GET /mcp` 405 + Allow、`/health` 与根路径免鉴权、MCP 总开关同时关掉 HTTP。
+- `cargo test -p todo-kanban --lib mcp_http`：17 项集成测试（真起 axum + 真临时 SQLite + 裸 HTTP 客户端）——
+  鉴权三类失败并留痕、会话头发放与未知会话 404、通知 202 **空响应体**、`tools/list` 11 个工具、
+  只读 Token 被拒且归属正确、可写 Token 成功写入并留痕、全局只读压过可写 Token、批量请求拒绝、
+  `GET /mcp` 405 + Allow、`/health` 与根路径免鉴权、MCP 总开关同时关掉 HTTP、
+  **三个协议版本原样回显 + 不支持版本回落 + `MCP-Protocol-Version` 头回显与 400**、
+  **跨站 Origin 403 并落审计 / 回环别名放行 / 无 Origin 放行**、`Accept` 不含 json 时 406、
+  `ping` 可用且未声明的 `prompts` / `resources/templates` 回 -32601。
 - `cargo test -p todo-kanban-core --lib mcp::`：24 项（Token 判定矩阵、上下文嵌套与 fail-closed、
   审计筛选/裁剪/文本清洗、只读隐藏写工具、`audit_target` 不含正文）。
 - `cargo test --workspace`、`cargo clippy --workspace --all-targets -- -D warnings`、`npm run build`、

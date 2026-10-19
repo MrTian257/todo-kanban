@@ -4,7 +4,20 @@
 use super::bridge;
 use serde_json::{json, Value};
 
-pub const PROTOCOL_VERSION: &str = "2024-11-05";
+/// 本实现支持的 MCP 协议版本（新→旧）。
+/// 2025-03-26 引入 Streamable HTTP（取代旧的 HTTP+SSE）与 OAuth 授权；
+/// 2025-06-18 强化了 HTTP 服务端的安全要求（Origin 校验等）。
+/// 只声明 2024-11-05 会让走 HTTP 的通用客户端拿到一个「不支持的版本」而直接断开，
+/// 因此 initialize 必须回显客户端请求的版本，而不是写死一个。
+pub const SUPPORTED_PROTOCOL_VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
+
+/// 默认（也是协商失败时回给客户端的）版本 = 支持列表里最新的一个
+pub const PROTOCOL_VERSION: &str = "2025-06-18";
+
+/// 是否支持该协议版本
+pub fn is_supported_version(value: &str) -> bool {
+    SUPPORTED_PROTOCOL_VERSIONS.contains(&value)
+}
 pub const SERVER_NAME: &str = "mcp-server";
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -20,6 +33,15 @@ pub fn error(id: Value, code: i64, message: impl Into<String>) -> Value {
 pub struct Session {
     initialized: bool,
     ready: bool,
+    /// initialize 协商确定的协议版本；HTTP 层据此回 `MCP-Protocol-Version` 头
+    negotiated: Option<String>,
+}
+
+impl Session {
+    /// 协商后的协议版本（未 initialize 时为 None）
+    pub fn protocol_version(&self) -> Option<&str> {
+        self.negotiated.as_deref()
+    }
 }
 impl Session {
     pub fn handle(&mut self, req: &Value, authorize: Authorize<'_>) -> Option<Value> {
@@ -58,6 +80,11 @@ impl Session {
                 .is_some_and(|value| value.get("result").is_some())
         {
             self.initialized = true;
+            // 记住协商结果，HTTP 层要在响应头上回显（stdio 忽略）
+            self.negotiated = response
+                .as_ref()
+                .and_then(|value| value["result"]["protocolVersion"].as_str())
+                .map(str::to_string);
         }
         response
     }
@@ -90,11 +117,16 @@ pub fn handle_request(req: &Value) -> Option<Value> {
     let params = req.get("params").unwrap_or(&empty);
     let result: Result<Value, (i64, String)> = match method {
         "initialize" => {
+            let requested = params["protocolVersion"].as_str().unwrap_or("");
             if !params["protocolVersion"].is_string() || !params["capabilities"].is_object()
                 || !params["clientInfo"]["name"].is_string() || !params["clientInfo"]["version"].is_string() {
                 Err((-32602, "initialize 需要 protocolVersion、capabilities 和 clientInfo".into()))
-            } else { Ok(json!({ "protocolVersion": PROTOCOL_VERSION, "capabilities": { "tools": {}, "resources": {} },
-                "serverInfo": { "name": SERVER_NAME, "version": SERVER_VERSION } })) }
+            } else {
+                // 规范：支持则原样回显客户端请求的版本；不支持则回本服务端最新版本，
+                // 由客户端决定断开还是继续。写死一个旧版本会让 HTTP 通用客户端直接失败。
+                let negotiated = if is_supported_version(requested) { requested } else { PROTOCOL_VERSION };
+                Ok(json!({ "protocolVersion": negotiated, "capabilities": { "tools": {}, "resources": {} },
+                    "serverInfo": { "name": SERVER_NAME, "version": SERVER_VERSION } })) }
         }
         "ping" => Ok(json!({})),
         "tools/list" | "resources/list" if params.get("cursor").is_some() => Err((-32602, "当前列表一次性返回，不接受 cursor".into())),
@@ -125,6 +157,33 @@ mod tests {
 
     fn initialize_req() -> Value {
         json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": { "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "test", "version": "1" } } })
+    }
+
+    #[test]
+    fn negotiates_supported_versions_and_falls_back_to_latest() {
+        for version in SUPPORTED_PROTOCOL_VERSIONS {
+            let resp = handle_request(&json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+                "protocolVersion": version, "capabilities": {}, "clientInfo": { "name": "t", "version": "1" } } }))
+                .unwrap();
+            assert_eq!(resp["result"]["protocolVersion"].as_str(), Some(version), "{version} 应原样回显");
+        }
+        let resp = handle_request(&json!({ "jsonrpc": "2.0", "id": 2, "method": "initialize", "params": {
+            "protocolVersion": "1999-01-01", "capabilities": {}, "clientInfo": { "name": "t", "version": "1" } } }))
+            .unwrap();
+        assert_eq!(resp["result"]["protocolVersion"].as_str(), Some(PROTOCOL_VERSION));
+        assert!(is_supported_version("2025-06-18"));
+        assert!(!is_supported_version("2025-06-19"));
+    }
+
+    #[test]
+    fn session_records_negotiated_version() {
+        let mut session = Session::default();
+        assert_eq!(session.protocol_version(), None, "未 initialize 前没有版本");
+        let authorize = || Ok(());
+        session.handle(&json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+            "protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": { "name": "t", "version": "1" } } }), &authorize);
+        session.handle(&json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }), &authorize);
+        assert_eq!(session.protocol_version(), Some("2025-03-26"));
     }
 
     #[test]

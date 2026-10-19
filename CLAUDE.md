@@ -132,7 +132,13 @@ MCP 的 git_info 保持直读语义（不经 app 侧缓存），`git_info_refres
 **HTTP 传输**（`mcp_http.rs`，进程内 axum，默认关闭 + 只绑 127.0.0.1）：
 `POST /mcp` 一条 JSON-RPC 返回 `application/json`（无状态子集：不推 SSE、不支持批量数组）；
 `initialize` 响应头发 `Mcp-Session-Id`，未 initialize 的业务请求按协议层拒绝（-32002，
-同时也是权限前置）；`GET /mcp` → 405 + Allow；`GET /health` 免鉴权探活；其它路径回自解释说明页。
+同时也是权限前置）；通知类回 **202 且无响应体**；`GET /mcp` → 405 + Allow；`GET /health` 免鉴权探活；
+其它路径回自解释说明页。**协议版本必须协商**：`protocol::SUPPORTED_PROTOCOL_VERSIONS`
+= 2025-06-18 / 2025-03-26 / 2024-11-05，`initialize` 原样回显客户端请求的版本（不支持则回本端最新），
+后续响应头回显 `MCP-Protocol-Version`——**Streamable HTTP 是 2025-03-26 才引入的，写死旧版本会让
+TS/Python SDK 类通用客户端直接断开**。**必须校验 `Origin`**（2025-06-18 规范 MUST，防 DNS 重绑定：
+无该头放行，有则须与 `Host` 同主机，`localhost`/`127.0.0.1`/`::1` 互为别名，不匹配 403 并落审计）；
+`Accept` 明确不含 `application/json` → 406。
 Token 只认 `Authorization: Bearer` / `X-MCP-Token`，**不接受查询串传 Token**（URL 会进代理日志）。
 启停与端口由设置决定（app_meta `mcp_http_settings`，默认端口 42900 与局域网共享 42800 错开），
 「允许局域网访问」才绑 0.0.0.0 并显示风险提示。
@@ -168,7 +174,7 @@ ADR-021 的膨胀教训不能重演）；字段级前后值看 `change_history`�
 | 局域网共享 | 内嵌 HTTP 服务 `src-tauri/src/lan_server.rs`（axum + SSE；`GET /` 访客面板、`/api/state`、`/api/save`、`/api/events`；绑定 `0.0.0.0:<port>`）+ 访客面板 `src-tauri/src/lan_guest.html`（单文件 `include_str!`）；共享范围过滤/脱敏/合并 `core/src/svc/lan.rs`（纯逻辑含单测）+ 配置与访客读写 `core/src/svc/db_cmds.rs`（app_meta `lan_share_settings`，不新增表/数据版本）；设置页「局域网共享」卡片 + 项目卡片快捷开关（`src/pages/ProjectListPage.tsx`）+ `src/lib/lan.ts`；桌面端实时刷新监听 Tauri 事件 `lan-state-changed`；命令 `lan_get_settings/lan_set_settings/lan_status/lan_stop`；决策见 ADR-019 |
 | 自定义字段 / 自动脚本 | 词表与纯逻辑：`src/lib/customFields.ts` ↔ `core/src/svc/fields.rs` + `svc/automation.rs`（同规则，后端为准）；定义与规则存 workflow_state（`core/src/svc/workflow.rs` 的 fieldDefs / automations）；值存 `todos.custom_fields`（schema v11）；执行点 `db::save_state_inner`；UI 在设置页 `/settings/fields`（`src/pages/FieldSettingsPage.tsx` + `src/components/workflow/` 的 FieldDefsPanel / AutomationsPanel / CustomFieldInputs，ADR-014）；存量任务补写命令 `automation_backfill` |
 | 新增/改 MCP 工具 | **`core/src/mcp/bridge.rs`**（映射 + `audit_target`）+ **`core/src/mcp/protocol.rs`**（tools 表/inputSchema/JSON-RPC 会话），业务仍走 core/svc。**stdio 与 HTTP 共用这一份**，不要在传输层各自实现一遍（ADR-023） |
-| MCP HTTP 端点 / 多 AI Token / 审计 | 服务与命令 `src-tauri/src/mcp_http.rs`（axum：`POST /mcp` + `GET /health` + 会话头 `Mcp-Session-Id`；app_meta `mcp_http_settings` / `mcp_tokens`）；鉴权与只读取严 `core/src/mcp/tokens.rs`；审计读写 `core/src/mcp/audit.rs`（v15 表 `mcp_audit`，**只存元数据不存正文**）；设置 UI `src/components/settings/McpAccessPanel.tsx`，审计页 `src/pages/McpAuditPage.tsx`（`/settings/mcp-audit`）；决策见 ADR-023 |
+| MCP HTTP 端点 / 多 AI Token / 审计 | 服务与命令 `src-tauri/src/mcp_http.rs`（axum：`POST /mcp` + `GET /health` + 会话头 `Mcp-Session-Id` + 版本协商/Origin 校验；app_meta `mcp_http_settings` / `mcp_tokens`）；鉴权与只读取严 `core/src/mcp/tokens.rs`；审计读写 `core/src/mcp/audit.rs`（v15 表 `mcp_audit`，**只存元数据不存正文**）；设置 UI `src/components/settings/McpAccessPanel.tsx`，审计页 `src/pages/McpAuditPage.tsx`（`/settings/mcp-audit`）；决策见 ADR-023 |
 
 ## 代码规范
 

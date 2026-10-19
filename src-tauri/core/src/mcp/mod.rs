@@ -21,7 +21,10 @@ pub use audit::{
     AuditPage, KEEP_ROWS, MAX_ERROR_CHARS,
 };
 pub use bridge::{handle_call, handle_resource_read, tool_schemas, RESOURCES, WRITE_TOOLS};
-pub use protocol::{error, handle_request, Session, PROTOCOL_VERSION, SERVER_NAME};
+pub use protocol::{
+    error, handle_request, is_supported_version, Session, SUPPORTED_PROTOCOL_VERSIONS, PROTOCOL_VERSION,
+    SERVER_NAME,
+};
 pub use protocol::Authorize;
 pub use tokens::{authenticate, Authenticated};
 

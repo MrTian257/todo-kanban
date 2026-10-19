@@ -41,6 +41,8 @@ const SESSION_IDLE_SECS: u64 = 12 * 3600;
 const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
 /// MCP 规范里的会话头
 const SESSION_HEADER: &str = "mcp-session-id";
+/// 规范要求的协议版本头（HTTP 头名大小写不敏感，这里按规范写法回显）
+const PROTOCOL_VERSION_HEADER: &str = "MCP-Protocol-Version";
 /// 审计里的传输标签
 const TRANSPORT: &str = "http";
 
@@ -257,6 +259,58 @@ pub fn auto_start() {
 
 // ── 请求处理 ────────────────────────────────────────────
 
+/// DNS rebinding / 跨站防护：规范 MUST 校验 Origin。
+/// 规则：没有 Origin 头就放行（原生客户端、CLI、服务端到服务端都不发这个头；
+/// 浏览器顶层导航也不发，所以把 URL 贴进浏览器看说明页仍然可用）；
+/// 有 Origin 就必须与 Host 指向同一台主机，否则拒绝——这正好挡住
+/// 「远程网页借 DNS 重绑定访问本机 MCP 端点」这条攻击路径。
+fn origin_allowed(origin: Option<&str>, host: Option<&str>) -> bool {
+    let Some(origin) = origin.map(str::trim).filter(|value| !value.is_empty()) else {
+        return true;
+    };
+    let Some(host) = host.map(str::trim).filter(|value| !value.is_empty()) else {
+        return false; // 浏览器声称来自某站点，却没给 Host：不予信任
+    };
+    let Some(rest) = origin.split_once("://").map(|(_, rest)| rest) else {
+        return false; // 不是绝对 URI
+    };
+    let origin_authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let origin_name = origin_authority.rsplit_once(':').map(|(name, _)| name).unwrap_or(origin_authority);
+    let host_name = host
+        .strip_prefix('[')
+        .map(|value| value.split_once(']').map(|(addr, _)| addr).unwrap_or(value))
+        .unwrap_or_else(|| host.rsplit_once(':').map(|(name, _)| name).unwrap_or(host));
+    // localhost 与 127.0.0.1（以及 ::1）是同一台机器的不同写法，必须互相认账
+    // 局部函数而不是闭包：闭包在这里需要两个不同的省略生命周期，写成函数最省事也最清楚
+    fn normalize(name: &str) -> &str {
+        match name {
+            "localhost" | "127.0.0.1" | "::1" | "[::1]" => "loopback",
+            other => other,
+        }
+    }
+    normalize(origin_name) == normalize(host_name) || origin_authority.eq_ignore_ascii_case(host)
+}
+
+/// Accept 协商：客户端按规范应同时接受 json 与 event-stream。
+/// 只有当它**明确不接受** application/json（例如只写 text/event-stream）时才回 406，
+/// 缺失或 */* 一律放行，避免为兼容性差的客户端制造障碍。
+fn accept_allows_json(headers: &HeaderMap) -> bool {
+    let Some(value) = headers
+        .get(header::ACCEPT)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return true;
+    };
+    value.split(',').any(|entry| {
+        let media = entry.split(';').next().unwrap_or("").trim();
+        media.eq_ignore_ascii_case("*/*")
+            || media.eq_ignore_ascii_case("application/json")
+            || media.eq_ignore_ascii_case("application/*")
+    })
+}
+
 /// 取 Token：只认头，不认查询串（见模块注释）。
 fn provided_token(headers: &HeaderMap) -> Option<String> {
     if let Some(value) = headers
@@ -279,14 +333,30 @@ fn provided_token(headers: &HeaderMap) -> Option<String> {
 }
 
 fn json_response(status: StatusCode, body: &Value, session_id: Option<&str>) -> Response {
-    let mut builder = Response::builder()
-        .status(status)
-        .header(header::CONTENT_TYPE, "application/json");
+    json_response_full(status, body, session_id, None, false)
+}
+
+/// 组装 HTTP 响应。`empty_body` 用于通知类：规范要求 202 Accepted **无响应体**，
+/// 之前回了一个字面量 "null"，严格客户端会当成畸形响应。
+fn json_response_full(
+    status: StatusCode,
+    body: &Value,
+    session_id: Option<&str>,
+    protocol_version: Option<&str>,
+    empty_body: bool,
+) -> Response {
+    let mut builder = Response::builder().status(status);
+    if !empty_body {
+        builder = builder.header(header::CONTENT_TYPE, "application/json");
+    }
     if let Some(id) = session_id {
         builder = builder.header(SESSION_HEADER, id);
     }
+    if let Some(version) = protocol_version {
+        builder = builder.header(PROTOCOL_VERSION_HEADER, version);
+    }
     builder
-        .body(axum::body::Body::from(body.to_string()))
+        .body(axum::body::Body::from(if empty_body { String::new() } else { body.to_string() }))
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
@@ -337,16 +407,35 @@ async fn handle_post(
     body: Bytes,
 ) -> Response {
     let started = Instant::now();
-    let request: Value = match serde_json::from_slice(&body) {
-        Ok(value) => value,
-        Err(_) => {
-            return json_response(
-                StatusCode::OK,
-                &mcp::error(Value::Null, -32700, "JSON 解析失败"),
-                None,
-            )
-        }
-    };
+    // 先解析出请求体：Origin 被拒也要能记下「它想调什么」，审计才有价值
+    let request: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    // 安全前置：Origin / Accept 不合规直接回 HTTP 错误，不进入协议层
+    let origin = headers.get(header::ORIGIN).and_then(|value| value.to_str().ok());
+    if !origin_allowed(origin, headers.get(header::HOST).and_then(|value| value.to_str().ok())) {
+        let message = "Origin 与 Host 不匹配：已按 MCP 规范拒绝跨站请求（防 DNS 重绑定）";
+        log::warn!("MCP HTTP 拒绝跨站请求：Origin={origin:?} peer={peer}");
+        // 跨站尝试是安全事件，必须留痕（此时没有可信 actor，按「未授权」记）
+        mcp::audit_denied(&ctx.db_path, TRANSPORT, &peer.to_string(), &request, message);
+        return json_response(StatusCode::FORBIDDEN, &mcp::error(Value::Null, -32000, message), None);
+    }
+    if !accept_allows_json(&headers) {
+        return json_response(
+            StatusCode::NOT_ACCEPTABLE,
+            &mcp::error(
+                Value::Null,
+                -32000,
+                "本端点不提供服务端 SSE 流，请在 Accept 中包含 application/json",
+            ),
+            None,
+        );
+    }
+    if request.is_null() {
+        return json_response(
+            StatusCode::OK,
+            &mcp::error(Value::Null, -32700, "JSON 解析失败"),
+            None,
+        );
+    }
     if request.is_array() {
         return json_response(
             StatusCode::OK,
@@ -368,14 +457,45 @@ async fn handle_post(
     let db_path = ctx.db_path.clone();
     let sessions = ctx.sessions.clone();
     let peer_text = peer.to_string();
+    // 客户端按规范应在后续请求带 MCP-Protocol-Version；带了就必须是我们支持的版本
+    let declared = headers
+        .get("mcp-protocol-version")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    if let Some(value) = &declared {
+        if !mcp::is_supported_version(value) {
+            return json_response(
+                StatusCode::BAD_REQUEST,
+                &mcp::error(
+                    request.get("id").cloned().unwrap_or(Value::Null),
+                    -32000,
+                    format!("不支持的协议版本 {value}；本端支持 {}", mcp::SUPPORTED_PROTOCOL_VERSIONS.join(", ")),
+                ),
+                None,
+            );
+        }
+    }
     // 调度内部是同步 SQLite / git 调用，放 blocking 池里跑，别占住 async worker；
     // 同时 core::mcp 的上下文是 thread_local，必须保证设置与使用在同一条线程上。
     let outcome = tokio::task::spawn_blocking(move || {
-        dispatch(&db_path, &sessions, provided.as_deref(), &peer_text, header_session.as_deref(), &request, started)
+        dispatch(
+            &db_path,
+            &sessions,
+            &HttpRequest {
+                provided: provided.as_deref(),
+                peer: &peer_text,
+                session: header_session.as_deref(),
+                declared_version: declared.as_deref(),
+                body: &request,
+                started,
+            },
+        )
     })
     .await;
     match outcome {
-        Ok((status, body, session_id)) => json_response(status, &body, session_id.as_deref()),
+        Ok(reply) => reply.into_response(),
         Err(error) => {
             set_error(format!("MCP HTTP 工作线程异常：{error}"));
             json_response(
@@ -388,15 +508,27 @@ async fn handle_post(
 }
 
 /// 真正的同步调度：鉴权 → 会话 → core::mcp → 审计。返回 (状态码, 响应体, 会话头)。
+/// 一次 HTTP 请求的输入。打包成结构体是因为平铺 8 个参数既会被 clippy 拦下，
+/// 更容易在调用点传错顺序（都是 Option<&str>，编译器看不出来）。
+struct HttpRequest<'a> {
+    /// Bearer / X-MCP-Token 里的凭据
+    provided: Option<&'a str>,
+    /// 客户端地址，写进审计
+    peer: &'a str,
+    /// 客户端带回的 Mcp-Session-Id
+    session: Option<&'a str>,
+    /// 客户端声明的 MCP-Protocol-Version（已确认受支持）
+    declared_version: Option<&'a str>,
+    body: &'a Value,
+    started: Instant,
+}
+
 fn dispatch(
     db_path: &Path,
     sessions: &Arc<Mutex<HashMap<String, SessionEntry>>>,
-    provided: Option<&str>,
-    peer: &str,
-    header_session: Option<&str>,
-    request: &Value,
-    started: Instant,
-) -> (StatusCode, Value, Option<String>) {
+    input: &HttpRequest<'_>,
+) -> Response {
+    let HttpRequest { provided, peer, session: header_session, declared_version: declared, body: request, started } = input;
     let method = request["method"].as_str().unwrap_or("");
     let is_initialize = method == "initialize";
     // 会话解析：initialize 总是新建（两个客户端各拿一个 id，互不干扰）；
@@ -422,9 +554,9 @@ fn dispatch(
             None => true,
         };
         if !known {
-            return (
+            return json_response(
                 StatusCode::NOT_FOUND,
-                mcp::error(
+                &mcp::error(
                     request.get("id").cloned().unwrap_or(Value::Null),
                     -32000,
                     "未知会话：请重新 initialize",
@@ -435,7 +567,7 @@ fn dispatch(
     }
 
     // 鉴权（读 app_meta：启用状态 + 全局只读 + 管理 Key / 多 AI Token）
-    let authenticated = mcp::authorize(db_path, provided);
+    let authenticated = mcp::authorize(db_path, *provided);
     let context = match &authenticated {
         Ok(done) => McpContext {
             db_path: db_path.to_path_buf(),
@@ -468,28 +600,27 @@ fn dispatch(
         if let Err(error) = mcp::audit_append(db_path, &entry) {
             log::warn!("MCP 审计写入失败：{error}");
         }
-        return (StatusCode::UNAUTHORIZED, response, None);
+        return json_response(StatusCode::UNAUTHORIZED, &response, None);
     }
 
-    let run = || {
-        let key = session_key.clone();
+    // 返回（响应, 协商版本）：协商版本要回显到 MCP-Protocol-Version 头
+    let run = || -> (Option<Value>, Option<String>) {
         let perform = |session: &mut mcp::Session| {
-            mcp::with_context(context.clone(), || {
+            let response = mcp::with_context(context.clone(), || {
                 session.handle(request, &|| Ok::<(), String>(()))
-            })
+            });
+            (response, session.protocol_version().map(str::to_string))
         };
-        match key {
-            Some(id) => with_session(sessions, &id, perform).unwrap_or_else(|| {
-                mcp::with_context(context.clone(), || {
-                    mcp::Session::default().handle(request, &|| Ok::<(), String>(()))
-                })
-            }),
-            None => mcp::with_context(context.clone(), || {
-                mcp::Session::default().handle(request, &|| Ok::<(), String>(()))
-            }),
+        // 带会话头但表里没有（服务重启 / 已回收）时退化为一次性会话，而不是直接失败
+        let mut fresh = mcp::Session::default();
+        match &session_key {
+            Some(id) => with_session(sessions, id, perform).unwrap_or_else(|| perform(&mut fresh)),
+            None => perform(&mut fresh),
         }
     };
-    let response = run();
+    let (response, negotiated) = run();
+    // 协商版本：本次 initialize 的结果优先，其次沿用客户端声明的版本
+    let echo_version = negotiated.or_else(|| declared.map(str::to_string));
     // 审计：notifications/* 无响应也无副作用，不记
     if !method.starts_with("notifications/") {
         let mut entry = mcp::audit_from(
@@ -507,9 +638,15 @@ fn dispatch(
         }
     }
     match response {
-        Some(value) => (StatusCode::OK, value, issued),
-        // 通知类没有响应体：规范用 202 Accepted
-        None => (StatusCode::ACCEPTED, Value::Null, issued),
+        Some(value) => json_response_full(StatusCode::OK, &value, issued.as_deref(), echo_version.as_deref(), false),
+        // 通知/响应类：规范要求 202 Accepted 且**无响应体**
+        None => json_response_full(
+            StatusCode::ACCEPTED,
+            &Value::Null,
+            issued.as_deref(),
+            echo_version.as_deref(),
+            true,
+        ),
     }
 }
 
@@ -1106,5 +1243,193 @@ mod http_tests {
         let (status, _, body) = post_mcp(srv.port, Some("sk-admin"), initialize(1));
         assert_eq!(status, 401);
         assert!(body["error"]["message"].as_str().is_some_and(|t| t.contains("禁用")), "{body}");
+    }
+
+    // ── 规范一致性（2025-03-26 / 2025-06-18 Streamable HTTP）──────────
+
+    fn initialize_with(id: i64, version: &str) -> Value {
+        json!({"jsonrpc":"2.0","id":id,"method":"initialize","params":{
+            "protocolVersion":version,"capabilities":{},
+            "clientInfo":{"name":"test","version":"1"}}})
+    }
+
+    /// 协商：客户端请求的版本必须原样回显（写死旧版本会让通用客户端直接断开）
+    #[test]
+    fn negotiates_requested_protocol_version() {
+        let srv = server(&base_meta());
+        for version in ["2025-06-18", "2025-03-26", "2024-11-05"] {
+            let (_, _, body) = post_mcp(srv.port, Some("sk-admin"), initialize_with(1, version));
+            assert_eq!(
+                body["result"]["protocolVersion"].as_str(),
+                Some(version),
+                "{version} 应被原样回显：{body}"
+            );
+        }
+        // 不认识的版本 → 回本端支持的最新版本，由客户端决定断开
+        let (_, _, body) = post_mcp(srv.port, Some("sk-admin"), initialize_with(2, "1999-01-01"));
+        assert_eq!(
+            body["result"]["protocolVersion"].as_str(),
+            Some(mcp::PROTOCOL_VERSION),
+            "{body}"
+        );
+    }
+
+    /// 协商后的版本要回显到 MCP-Protocol-Version 头
+    #[test]
+    fn echoes_protocol_version_header_on_later_requests() {
+        let srv = server(&base_meta());
+        let (_, headers, _) = post_mcp(srv.port, Some("sk-admin"), initialize_with(1, "2025-06-18"));
+        let session = headers
+            .iter()
+            .find(|(name, _)| name == SESSION_HEADER)
+            .map(|(_, value)| value.clone())
+            .unwrap();
+        let (_, headers, _) = request(
+            srv.port,
+            "POST",
+            "/mcp",
+            &[
+                ("content-type", "application/json".to_string()),
+                ("authorization", "Bearer sk-admin".to_string()),
+                (SESSION_HEADER, session),
+            ],
+            &json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}).to_string(),
+        );
+        let echoed = headers
+            .iter()
+            .find(|(name, _)| name == "mcp-protocol-version")
+            .map(|(_, value)| value.clone());
+        assert_eq!(echoed.as_deref(), Some("2025-06-18"), "响应头要回显协商版本：{headers:?}");
+    }
+
+    /// 规范 MUST：校验 Origin 防 DNS 重绑定。跨站 Origin 拒绝，同源与回环别名放行，无 Origin 放行
+    #[test]
+    fn cross_origin_is_rejected_loopback_aliases_allowed() {
+        let srv = server(&base_meta());
+        let headers = vec![
+            ("content-type", "application/json".to_string()),
+            ("authorization", "Bearer sk-admin".to_string()),
+        ];
+        let evil = format!("http://evil.example:{}", srv.port);
+        let (status, _, body) = request_with_origin(&srv, Some(&evil), &headers, &initialize_with(1, "2025-06-18").to_string());
+        assert_eq!(status, 403, "跨站 Origin 必须拒绝：{body}");
+        assert!(body.contains("Origin"), "{body}");
+
+        // 客户端用 localhost 连、Origin 也是 localhost：等价于 127.0.0.1，放行
+        for origin in [format!("http://localhost:{}", srv.port), format!("http://127.0.0.1:{}", srv.port)] {
+            let (status, _, _) = request_with_origin(&srv, Some(&origin), &headers, &initialize_with(1, "2025-06-18").to_string());
+            assert_eq!(status, 200, "{origin} 应放行");
+        }
+        // 原生客户端不发 Origin：放行
+        let (status, _, _) = request_with_origin(&srv, None, &headers, &initialize_with(1, "2025-06-18").to_string());
+        assert_eq!(status, 200);
+    }
+
+    /// 跨站尝试要留痕（安全事件不能只进日志文件）
+    #[test]
+    fn cross_origin_attempt_is_audited() {
+        let srv = server(&base_meta());
+        let headers = vec![("content-type", "application/json".to_string())];
+        let evil = format!("http://evil.example:{}", srv.port);
+        let (status, _, _) = request_with_origin(
+            &srv,
+            Some(&evil),
+            &headers,
+            &json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}).to_string(),
+        );
+        assert_eq!(status, 403);
+        let rows = audit_rows(&srv);
+        assert!(
+            rows.iter().any(|(actor, _, ok, state)| actor == "未授权" && *ok == 0 && state == "AUTH_DENIED"),
+            "跨站拒绝必须落审计：{rows:?}"
+        );
+    }
+
+    fn request_with_origin(
+        srv: &TestServer,
+        origin: Option<&str>,
+        base: &[(&str, String)],
+        body: &str,
+    ) -> (u16, Vec<(String, String)>, String) {
+        let mut headers: Vec<(&str, String)> = base.to_vec();
+        if let Some(value) = origin {
+            headers.push(("origin", value.to_string()));
+        }
+        request(srv.port, "POST", "/mcp", &headers, body)
+    }
+
+    /// Accept 明确不含 application/json → 406（本端不推 SSE）
+    #[test]
+    fn accept_without_json_is_406() {
+        let srv = server(&base_meta());
+        let headers = vec![
+            ("content-type", "application/json".to_string()),
+            ("authorization", "Bearer sk-admin".to_string()),
+            ("accept", "text/event-stream".to_string()),
+        ];
+        let (status, _, body) = request(srv.port, "POST", "/mcp", &headers, &initialize_with(1, "2025-06-18").to_string());
+        assert_eq!(status, 406, "{body}");
+        // 规范要求的「两者都列」写法必须放行
+        let ok = vec![
+            ("content-type", "application/json".to_string()),
+            ("authorization", "Bearer sk-admin".to_string()),
+            ("accept", "application/json, text/event-stream".to_string()),
+        ];
+        let (status, _, _) = request(srv.port, "POST", "/mcp", &ok, &initialize_with(2, "2025-06-18").to_string());
+        assert_eq!(status, 200);
+    }
+
+    /// 通知：202 且**无响应体**（规范明确 no body）
+    #[test]
+    fn notification_returns_202_with_no_body() {
+        let srv = server(&base_meta());
+        let session = handshake(srv.port, "sk-admin");
+        let (status, _, body) = request(
+            srv.port,
+            "POST",
+            "/mcp",
+            &[
+                ("content-type", "application/json".to_string()),
+                ("authorization", "Bearer sk-admin".to_string()),
+                (SESSION_HEADER, session),
+            ],
+            &json!({"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":9}}).to_string(),
+        );
+        assert_eq!(status, 202);
+        assert!(body.trim().is_empty(), "202 必须无响应体，实际={body:?}");
+    }
+
+    /// MCP-Protocol-Version 头带了不支持的版本 → 400（不能默默按另一版本处理）
+    #[test]
+    fn unsupported_protocol_version_header_is_400() {
+        let srv = server(&base_meta());
+        let session = handshake(srv.port, "sk-admin");
+        let (status, _, body) = request(
+            srv.port,
+            "POST",
+            "/mcp",
+            &[
+                ("content-type", "application/json".to_string()),
+                ("authorization", "Bearer sk-admin".to_string()),
+                (SESSION_HEADER, session),
+                ("mcp-protocol-version", "1999-01-01".to_string()),
+            ],
+            &json!({"jsonrpc":"2.0","id":3,"method":"tools/list"}).to_string(),
+        );
+        assert_eq!(status, 400, "{body}");
+        assert!(body.contains("不支持的协议版本"), "{body}");
+    }
+
+    /// ping 是规范方法；prompts 未声明能力，应回 -32601 而不是崩溃
+    #[test]
+    fn ping_works_and_undeclared_capabilities_are_method_not_found() {
+        let srv = server(&base_meta());
+        let (status, body) = call(srv.port, "sk-admin", json!({"jsonrpc":"2.0","id":9,"method":"ping"}));
+        assert_eq!(status, 200);
+        assert!(body["result"].is_object(), "{body}");
+        let (_, body) = call(srv.port, "sk-admin", json!({"jsonrpc":"2.0","id":10,"method":"prompts/list"}));
+        assert_eq!(body["error"]["code"], -32601, "未声明 prompts 能力：{body}");
+        let (_, body) = call(srv.port, "sk-admin", json!({"jsonrpc":"2.0","id":11,"method":"resources/templates/list"}));
+        assert_eq!(body["error"]["code"], -32601, "未声明 templates 能力：{body}");
     }
 }
