@@ -55,3 +55,7 @@
 | `docs/后端业务逻辑与数据存储设计.md` | **拆分并入** data-model（存储语义）+ frontend-guide（store/写链/外部同步）+ refactor-notes（其中漂移未修正的部分） |
 
 > 注：本文档描述 todo-git 当前实际实现（以源码为准）；重构时可整体作为需求与设计输入，但不要求逐字复刻实现细节。
+
+## MCP 接入
+
+- [02-development/mcp-access.md](02-development/mcp-access.md) —— 面向使用者的接入指南（stdio / HTTP、Token 发放、只读、审计、故障排查）。

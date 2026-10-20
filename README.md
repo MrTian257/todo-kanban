@@ -40,6 +40,7 @@ npm run tauri dev     # 桌面窗口开发（1440×900）
 | --- | --- |
 | [docs/软件设计文档.md](docs/软件设计文档.md) | 整合视图（推荐入口）：产品 / 架构 / 数据 / 接口 / UI / 流程 + 实现状态 |
 | [docs/README.md](docs/README.md) | 设计基线文档地图 |
+| [docs/02-development/mcp-access.md](docs/02-development/mcp-access.md) | **MCP 接入指南**：stdio / HTTP 两种接法、多 AI Token、只读、审计日志、常见问题 |
 | [docs/decisions/](docs/decisions/) | 架构决策记录 ADR-001 ~ ADR-023 |
 | [docs/01-design/prd-swimlane.md](docs/01-design/prd-swimlane.md) | 泳道看板重构 PRD（已实施） |
 | docs/01-design/ · docs/02-development/ | 设计分册与开发指南 |

@@ -31,7 +31,7 @@ npm run tauri build          # 打包桌面应用（release 为 GUI 子系统，
 
 - 桌面端启动：后端直接使用**程序运行目录**下的 `todo-kanban.db`；首次启动时自动创建并写入演示数据。
   - 数据文件损坏/读取失败 → toast 提示并回退空态（不崩溃）
-- MCP server 运行：`target/release/mcp-server.exe`（与 app 同目录部署时自动命中同一 `todo-kanban.db`；可用 `MCP_TODO_DB_CONFIG` 或 `--db-config <dir>` 覆盖数据源目录）。**只读模式**：只能在应用「设置 → MCP 集成 → MCP 只读模式」里开关（存 `app_meta.mcp_readonly`，每个请求重读、无需重启）；`--readonly` 与 `MCP_TODO_READONLY` 已移除，传了会**直接拒绝启动**并给出迁移指引（ADR-022）。**认证**：需携带授权 Token（`--token <key>` 或 `MCP_TODO_TOKEN=<key>`，默认全局固定 `sk-GLOBAl_MCP_BY_ADMIN`）；设置页可启用/禁用 MCP、切换只读与修改 Token——禁用或 Token 不匹配时 mcp-server 启动即退出（stderr 中文提示）；数据文件未初始化也会拒绝启动。**HTTP 传输**：在应用「设置 → MCP 集成 → HTTP 传输」启用后得到
+- MCP server 运行：`target/release/mcp-server.exe`（与 app 同目录部署时自动命中同一 `todo-kanban.db`；可用 `MCP_TODO_DB_CONFIG` 或 `--db-config <dir>` 覆盖数据源目录）。**只读模式**：只能在应用「设置 → MCP 集成 → MCP 只读模式」里开关（存 `app_meta.mcp_readonly`，每个请求重读、无需重启）；`--readonly` 与 `MCP_TODO_READONLY` 已移除，传了会**直接拒绝启动**并给出迁移指引（ADR-022）。**完整接入说明（含多 AI Token、审计日志、故障排查）见 [mcp-access.md](mcp-access.md)**。**认证**：需携带授权 Token（`--token <key>` 或 `MCP_TODO_TOKEN=<key>`，默认全局固定 `sk-GLOBAl_MCP_BY_ADMIN`）；设置页可启用/禁用 MCP、切换只读与修改 Token——禁用或 Token 不匹配时 mcp-server 启动即退出（stderr 中文提示）；数据文件未初始化也会拒绝启动。**HTTP 传输**：在应用「设置 → MCP 集成 → HTTP 传输」启用后得到
 `http://127.0.0.1:<端口>/mcp`（默认端口 42900，默认只绑回环；勾选「允许局域网访问」才绑 0.0.0.0）。
 客户端用 `Authorization: Bearer <token>` 或 `X-MCP-Token` 传凭据（不支持查询串传 Token），
 先 `initialize` 拿 `Mcp-Session-Id` 再发业务请求。每个 AI 建议在「接入 Token」里单独发一把，

@@ -17,7 +17,7 @@ todo-kanban/
 ├── src/              # React SPA（pages → components → lib 单向分层）
 │   └── grokbot/      # 可迁移的表情宠物模块包（零框架依赖，自定义能力见其 README.md）
 ├── src-tauri/        # Cargo workspace：config ← upgrade ← core（含 mcp 调度）← 壳 crate + mcp-server
-├── docs/             # 设计文档 + ADR-001..023（部分文档有漂移，以源码为准）
+├── docs/             # 设计文档 + ADR-001..023 + 02-development/mcp-access.md（MCP 接入指南）
 ├── scripts/          # .mjs 验证脚本（esbuild + node assert，无测试框架）
 ├── public/vendor/vditor/  # gitignored，predev/prebuild 自动同步
 ├── release/          # 打包产物（gitignored）：todo-kanban.exe + mcp-server.exe
@@ -36,7 +36,7 @@ todo-kanban/
 | Git 报告（日报/周报/月报） | 平台识别与分发 `core/src/svc/forge.rs`（GitLab/GitHub 按域名自动识别，ADR-016）、各平台实现 `svc/gitlab.rs` + `svc/github.rs`；聚合在 `core/src/svc/git_report.rs`（命令 `git_report_fetch`，纯查询不写库）；前端 `src/pages/GitReportPage.tsx` + `src/lib/gitReport.ts` + `src/lib/gitReportPeriod.ts`（周期口径有 node 测试）；开发人员归类存 workflow_state 的 `gitReportDevs`（页面内「开发人员归类」对话框编辑，见 ADR-015） |
 | Rust 业务逻辑 | `src-tauri/core/src/`（svc/ 编排、db/ 存储、tool/ git CLI） |
 | 数据版本升级 | `src-tauri/config/src/lib.rs` + `upgrade/` + schema.rs/row.rs/db 三处（ADR-011） |
-| MCP 工具（stdio + HTTP 共用） | `src-tauri/core/src/mcp/bridge.rs` + `protocol.rs` + `tokens.rs` + `audit.rs`；HTTP 服务与命令 `src-tauri/src/mcp_http.rs`；见 ADR-023 |
+| MCP 工具（stdio + HTTP 共用） | `src-tauri/core/src/mcp/bridge.rs` + `protocol.rs` + `tokens.rs` + `audit.rs`；HTTP 服务与命令 `src-tauri/src/mcp_http.rs`；**对外行为变了要同步 `docs/02-development/mcp-access.md`**；见 ADR-023 |
 | 自定义字段 / 自动脚本 | 定义与规则 `core/src/svc/workflow.rs`（fieldDefs / automations）+ `svc/fields.rs` + `svc/automation.rs`；值 `todos.custom_fields`（v11）；执行点 `db/mod.rs::save_state_inner`；前端词表 `src/lib/customFields.ts` + `src/components/workflow/*Panel.tsx`；UI 入口为设置页 `/settings/fields`（`src/pages/FieldSettingsPage.tsx`），存量任务补写走 `automation_backfill` |
 | 主题/皮肤 | `src/lib/theme.ts` + `src/index.css` |
 | 番茄钟 / GrokBot 宠物 | 前端纯逻辑 `src/lib/pomodoro.ts` + 运行态 `src/lib/pomodoroStore.ts` + 宠物 `src/lib/petState.ts` / `petStore.ts`；页面 `src/pages/PomodoroPage.tsx` + `src/components/pomodoro/` + `src/components/pet/GrokBot.tsx`；后端 `core/src/svc/pomodoro.rs`（v14 表 `pomodoro_sessions`）+ `commands.rs` 三个 `pomodoro_*` 命令；MCP 只读资源 `todo-kanban://pomodoro`；决策 ADR-017 |
@@ -86,6 +86,7 @@ node scripts/test-pet-state.mjs    # GrokBot 应用侧状态机（心情优先�
 node scripts/test-grokbot.mjs      # GrokBot 模块包（表情点集/形变纯函数/样式作用域隔离/状态映射）
 node scripts/test-shortcut-keys.mjs # 快捷键（组合键匹配/平台化展示/浮层与富文本抑制）
 CDP_PORT=9222 node scripts/verify-dnd.mjs  # 浏览器：看板拖拽 8 场景（需 dev server + 远程调试端口）
+CDP_PORT=9222 node scripts/verify-shortcuts.mjs  # 浏览器：全局快捷键 8 项（Ctrl+S/N、Ctrl+/、搜索、侧栏、浮层抑制）
 npm run test:logic            # 前端纯逻辑 11 条断言（改 lib/ 纯函数后必跑）
 bash build.sh               # 发布打包 → ./release/
 ```

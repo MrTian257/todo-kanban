@@ -10,6 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `docs/软件设计文档.md` — 整合视图（产品/架构/数据/接口/UI/流程）
 - `docs/02-development/directory-map.md` — 「去哪里改」文件地图（部分文件名仍为 todo-git 旧称，如 TodoCard.tsx、todo-git-core 已更名/移除）
 - `docs/decisions/` — ADR-001 ~ ADR-023 架构决策（文件名自描述：hash-router / system-cli-git-curl / sqlite-storage / db-config-data-source / workspace-split / global-seq-and-commit-dedupe / mcp-handwritten-protocol / single-store-write-chain / swimlane-board / swimlane-order-persistence / data-version-upgrade / fixed-db-path / custom-fields-and-automations / git-report / github-and-gitlab-forge / pomodoro-and-pet / keyboard-shortcuts / lan-sharing / board-lane-width-and-density / history-order-skip-and-report-scope / mcp-readonly-from-settings / mcp-http-tokens-and-audit）。**注意 ADR-007 的 env 只读决策已被 ADR-022 取代**。
+- `docs/02-development/mcp-access.md` — **MCP 接入指南**（给使用者/AI 看的 how-to：stdio 与 HTTP 配置、多 AI Token、只读取严、审计日志、常见问题）。改 MCP 对外行为（工具、鉴权、只读、审计、传输）时**必须同步它**。
 - `docs/README.md` 的文档地图已漂移（列出多份不存在的文件），只作背景参考
 
 ## 环境与常用命令
@@ -37,7 +38,7 @@ cargo test -p mcp-server         # MCP 单测（握手 / 工具清单 / 映射 /
 
 前端纯逻辑无测试框架，用 esbuild 打包后跑 node 断言，**十一条已全部并入 `npm run test:logic`**（改任一纯逻辑文件后跑这一条）：`test-board-order.mjs`（泳道排序）、`test-day-clock.mjs`（跨天刷新）、`test-state-optimizations.mjs`（保存期编辑保护/远端合并/预热）、`test-list-performance.mjs`（列表统计与搜索）、`test-custom-fields.mjs`（自定义字段词表）、`test-manual-order.mjs`（手工排序）、`test-git-report-period.mjs`（报告周期口径）、`test-pomodoro.mjs`（番茄阶段流转与统计）、`test-pet-state.mjs`（宠物心情优先级）、`test-grokbot.mjs`（宠物模块包数据自洽与形变纯函数）、`test-shortcut-keys.mjs`（快捷键匹配与浮层抑制）。
 
-需要真实浏览器的验证脚本（CDP，先起 `npm run dev` 并用 `--remote-debugging-port` 打开页面，端口用 `CDP_PORT` 覆盖，默认 9222）：
+需要真实浏览器的验证脚本（CDP，先起 `npm run dev` 并用 `--remote-debugging-port` 打开页面，端口用 `CDP_PORT` 覆盖，默认 9222）：`node scripts/verify-shortcuts.mjs`（全局快捷键 8 项，含 Ctrl+S 保存——**改 shortcuts.ts 的 preventDefault 顺序后必跑**，纯逻辑测试抓不到这类失效）、
 `node scripts/verify-dnd.mjs`（跨泳道/空白区落点/泳道内重排/按钮不误触/resize 后落点/原地放开不改顺序/紧凑行视图）、`verify-project-steps.mjs`（分支规则步骤编辑与回显）、`verify-daterange.mjs`（日期范围两击选择）、`probe-daterange.mjs`。
 
 发布打包：`bash build.sh`（一体化：Windows 本机构建 + 经 GitHub Actions 远程构建 macOS，产物收集到 `artifacts/<platform>/`，Windows exe 同步拷贝 `release/` 运行目录）。`--windows-only` / `--mac-only` 只打单平台。macOS 产物（.dmg）无法在 Windows 交叉构建，必须走 CI：经 `.github/workflows/build-macos.yml`（macos runner 出 dmg + mcp-server 双架构），触发要求该文件已 push 到当前分支；凭据自动获取（GITHUB_TOKEN → gh auth token → git credential），无需配置。
