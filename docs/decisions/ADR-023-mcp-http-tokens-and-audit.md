@@ -61,6 +61,16 @@ HTTP 层在后续响应头回显 `MCP-Protocol-Version`；客户端带了该头�
 
 另外：通知类返回 **202 且无响应体**（早期实现回了字面量 `null`，严格客户端会当畸形响应）。
 
+**工具元数据与结构化结果**（同一轮补齐，两种传输共用）：
+
+- 每个工具都带 `title` 与 MCP 标准 `annotations`（`readOnlyHint` / `destructiveHint` / `idempotentHint` /
+  `openWorldHint`）。客户端据此决定自动放行还是弹确认：`git_checkout_branch`（改工作区）与
+  `db_save_state`（差异写会删差集行）标 `destructiveHint`，纯查询工具标 `readOnlyHint`，
+  `db_preview_state`（只提案不改任务）两个 hint 都为假。**不写注解等于让客户端对破坏性操作盲批或盲拒**。
+- `tools/call` 在业务结果是 JSON 对象时额外返回 `structuredContent`（2025-06-18 起客户端优先读它），
+  同时**保留** `content[0].text` 兼容老客户端。规范限定 `structuredContent` 必须是对象，
+  因此数组/字符串结果只提供 text。
+
 ### 3. 多 AI Token 存 `app_meta`，只读**取严**
 
 `McpSettings` 增加 `readonly`（ADR-022），并新增 app_meta 键 `mcp_tokens`（数组）：
@@ -144,13 +154,14 @@ HTTP 层在后续响应头回显 `MCP-Protocol-Version`；客户端带了该头�
 
 ## 验证
 
-- `cargo test -p todo-kanban --lib mcp_http`：17 项集成测试（真起 axum + 真临时 SQLite + 裸 HTTP 客户端）——
+- `cargo test -p todo-kanban --lib mcp_http`：18 项集成测试（真起 axum + 真临时 SQLite + 裸 HTTP 客户端）——
   鉴权三类失败并留痕、会话头发放与未知会话 404、通知 202 **空响应体**、`tools/list` 11 个工具、
   只读 Token 被拒且归属正确、可写 Token 成功写入并留痕、全局只读压过可写 Token、批量请求拒绝、
   `GET /mcp` 405 + Allow、`/health` 与根路径免鉴权、MCP 总开关同时关掉 HTTP、
   **三个协议版本原样回显 + 不支持版本回落 + `MCP-Protocol-Version` 头回显与 400**、
   **跨站 Origin 403 并落审计 / 回环别名放行 / 无 Origin 放行**、`Accept` 不含 json 时 406、
-  `ping` 可用且未声明的 `prompts` / `resources/templates` 回 -32601。
+  `ping` 可用且未声明的 `prompts` / `resources/templates` 回 -32601、
+  工具 `title`/`annotations` 与 `structuredContent` 能穿过 HTTP 传输到达客户端。
 - `cargo test -p todo-kanban-core --lib mcp::`：24 项（Token 判定矩阵、上下文嵌套与 fail-closed、
   审计筛选/裁剪/文本清洗、只读隐藏写工具、`audit_target` 不含正文）。
 - `cargo test --workspace`、`cargo clippy --workspace --all-targets -- -D warnings`、`npm run build`、

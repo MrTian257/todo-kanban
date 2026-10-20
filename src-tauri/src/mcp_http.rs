@@ -1235,6 +1235,26 @@ mod http_tests {
         );
     }
 
+    /// 工具注解与结构化结果要能穿过 HTTP 传输到达客户端
+    #[test]
+    fn tools_expose_annotations_and_structured_content() {
+        let srv = server(&base_meta());
+        let (status, body) = call(srv.port, "sk-admin", json!({"jsonrpc":"2.0","id":5,"method":"tools/list"}));
+        assert_eq!(status, 200, "{body}");
+        let tools = body["result"]["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 11);
+        for tool in tools {
+            assert!(tool["annotations"]["readOnlyHint"].is_boolean(), "注解未透传：{tool}");
+            assert!(tool["title"].is_string(), "title 未透传：{tool}");
+        }
+        // 业务结果是 JSON 对象的调用要额外给 structuredContent（text 仍保留，兼容老客户端）
+        let (status, body) = call(srv.port, "sk-admin", json!({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"db_load_state","arguments":{}}}));
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body["result"]["isError"], json!(false), "{body}");
+        assert!(body["result"]["content"][0]["text"].is_string(), "text 必须保留");
+        assert!(body["result"]["structuredContent"]["todos"].is_array(), "缺 structuredContent");
+    }
+
     #[test]
     fn disabled_mcp_blocks_http_too() {
         let mut meta = base_meta();

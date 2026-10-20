@@ -342,9 +342,16 @@ pub fn handle_call(name: &str, args: &Value) -> Result<Value, (i64, String)> {
     validate_arguments(name, args).map_err(|message| (-32602, message))?;
     // 参数/工具名错误属于协议错误；执行失败通过 isError 告知客户端。
     match call_tool(name, args) {
-        Ok(value) => Ok(
-            json!({ "content": [{ "type": "text", "text": value.to_string() }], "isError": false }),
-        ),
+        Ok(value) => {
+            // content[0].text 保留：老客户端与只读文本的客户端靠它。
+            // structuredContent 额外给一份（2025-06-18 起客户端优先读它，省掉「解析字符串里的 JSON」）。
+            // 规范限定它必须是 JSON 对象，所以数组/字符串结果只提供 text。
+            let mut result = json!({ "content": [{ "type": "text", "text": value.to_string() }], "isError": false });
+            if value.is_object() {
+                result["structuredContent"] = value;
+            }
+            Ok(result)
+        }
         Err(error) => Ok(
             json!({ "content": [{ "type": "text", "text": error.to_string() }], "isError": true }),
         ),
@@ -548,17 +555,17 @@ pub fn tool_schemas() -> Value {
 
 fn all_tool_schemas() -> Value {
     json!([
-        { "name": "git_info", "description": "仓库校验 + 分支列表（直读）", "inputSchema": { "type": "object", "properties": { "repo": { "type": "string" } }, "required": ["repo"] } },
-        { "name": "git_create_branch", "description": "基于当前 HEAD 新建分支（不切换），创建后推送远端同名分支并建立上游", "inputSchema": { "type": "object", "properties": { "repo": { "type": "string" }, "branch": { "type": "string" } }, "required": ["repo", "branch"] } },
-        { "name": "git_create_branch_from", "description": "从切出源新建分支（先 fetch origin 源，失败回退本地），创建后推送远端同名分支并建立上游", "inputSchema": { "type": "object", "properties": { "repo": { "type": "string" }, "branch": { "type": "string" }, "from": { "type": "string" } }, "required": ["repo", "branch", "from"] } },
-        { "name": "git_checkout_branch", "description": "检出目标分支", "inputSchema": { "type": "object", "properties": { "repo": { "type": "string" }, "branch": { "type": "string" } }, "required": ["repo", "branch"] } },
-        { "name": "git_sync_commits", "description": "API 优先按标记 todo-<n> 全分支检索提交（可选 branch 仅用于本地回退时的来源标注）", "inputSchema": { "type": "object", "properties": { "repo": { "type": "string" }, "tag": { "type": "string" }, "branch": { "type": "string" } }, "required": ["repo", "tag"] } },
-        { "name": "git_sync_commits_batch", "description": "按仓库批量查询多个待办标记的提交；API 历史只拉取一次，返回每条结果及 API/本地来源、回退原因", "inputSchema": { "type": "object", "properties": { "repo": { "type": "string" }, "requests": { "type": "array", "minItems": 1, "maxItems": 1000, "items": { "type": "object", "properties": { "id": { "type": "string" }, "tag": { "type": "string" }, "branch": { "type": "string" } }, "required": ["id", "tag"], "additionalProperties": false } } }, "required": ["repo", "requests"] } },
-        { "name": "git_commits_between", "description": "API 优先时间窗抓取提交（ISO 8601 起止；branch 可选，省略查询全部分支；本地回退可按 branch 标注来源）", "inputSchema": { "type": "object", "properties": { "repo": { "type": "string" }, "branch": { "type": "string" }, "since": { "type": "string" }, "until": { "type": "string" } }, "required": ["repo", "since", "until"] } },
-        { "name": "git_commit_info", "description": "按短 hash 查询单条提交", "inputSchema": { "type": "object", "properties": { "repo": { "type": "string" }, "hash": { "type": "string" } }, "required": ["repo", "hash"] } },
-        { "name": "db_load_state", "description": "全量读取状态 { projects, todos, resources }", "inputSchema": { "type": "object", "properties": { } } },
-        { "name": "db_preview_state", "description": "生成待确认的批量修改提案，不修改任务。用户在应用中查看差异后批准或拒绝；不能修改 Token。", "inputSchema": { "type": "object", "properties": { "payload": { "type": "object" }, "expected": { "type": "object" } }, "required": ["payload", "expected"] } },
-        { "name": "db_save_state", "description": "保存状态；expected 使用 db_load_state 或上次保存结果的 state。返回 {ok,state} 权威快照；冲突需重新读取，禁止直接覆盖", "inputSchema": { "type": "object", "properties": { "payload": { "type": "object" }, "expected": { "type": "object" } }, "required": ["payload", "expected"] } },
+        { "name": "git_info", "description": "仓库校验 + 分支列表（直读）", "inputSchema": { "type": "object", "properties": { "repo": { "type": "string" } }, "required": ["repo"] } , "title": "读取仓库信息与分支列表", "annotations": {"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false}},
+        { "name": "git_create_branch", "description": "基于当前 HEAD 新建分支（不切换），创建后推送远端同名分支并建立上游", "inputSchema": { "type": "object", "properties": { "repo": { "type": "string" }, "branch": { "type": "string" } }, "required": ["repo", "branch"] } , "title": "新建分支", "annotations": {"readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": true}},
+        { "name": "git_create_branch_from", "description": "从切出源新建分支（先 fetch origin 源，失败回退本地），创建后推送远端同名分支并建立上游", "inputSchema": { "type": "object", "properties": { "repo": { "type": "string" }, "branch": { "type": "string" }, "from": { "type": "string" } }, "required": ["repo", "branch", "from"] } , "title": "从切出源新建分支", "annotations": {"readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": true}},
+        { "name": "git_checkout_branch", "description": "检出目标分支", "inputSchema": { "type": "object", "properties": { "repo": { "type": "string" }, "branch": { "type": "string" } }, "required": ["repo", "branch"] } , "title": "检出分支", "annotations": {"readOnlyHint": false, "destructiveHint": true, "idempotentHint": true, "openWorldHint": true}},
+        { "name": "git_sync_commits", "description": "API 优先按标记 todo-<n> 全分支检索提交（可选 branch 仅用于本地回退时的来源标注）", "inputSchema": { "type": "object", "properties": { "repo": { "type": "string" }, "tag": { "type": "string" }, "branch": { "type": "string" } }, "required": ["repo", "tag"] } , "title": "按标记同步提交", "annotations": {"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": true}},
+        { "name": "git_sync_commits_batch", "description": "按仓库批量查询多个待办标记的提交；API 历史只拉取一次，返回每条结果及 API/本地来源、回退原因", "inputSchema": { "type": "object", "properties": { "repo": { "type": "string" }, "requests": { "type": "array", "minItems": 1, "maxItems": 1000, "items": { "type": "object", "properties": { "id": { "type": "string" }, "tag": { "type": "string" }, "branch": { "type": "string" } }, "required": ["id", "tag"], "additionalProperties": false } } }, "required": ["repo", "requests"] } , "title": "批量按标记同步提交", "annotations": {"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": true}},
+        { "name": "git_commits_between", "description": "API 优先时间窗抓取提交（ISO 8601 起止；branch 可选，省略查询全部分支；本地回退可按 branch 标注来源）", "inputSchema": { "type": "object", "properties": { "repo": { "type": "string" }, "branch": { "type": "string" }, "since": { "type": "string" }, "until": { "type": "string" } }, "required": ["repo", "since", "until"] } , "title": "按时间窗查询提交", "annotations": {"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": true}},
+        { "name": "git_commit_info", "description": "按短 hash 查询单条提交", "inputSchema": { "type": "object", "properties": { "repo": { "type": "string" }, "hash": { "type": "string" } }, "required": ["repo", "hash"] } , "title": "查询单条提交", "annotations": {"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false}},
+        { "name": "db_load_state", "description": "全量读取状态 { projects, todos, resources }", "inputSchema": { "type": "object", "properties": { } } , "title": "读取全部状态", "annotations": {"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false}},
+        { "name": "db_preview_state", "description": "生成待确认的批量修改提案，不修改任务。用户在应用中查看差异后批准或拒绝；不能修改 Token。", "inputSchema": { "type": "object", "properties": { "payload": { "type": "object" }, "expected": { "type": "object" } }, "required": ["payload", "expected"] } , "title": "生成修改提案", "annotations": {"readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false}},
+        { "name": "db_save_state", "description": "保存状态；expected 使用 db_load_state 或上次保存结果的 state。返回 {ok,state} 权威快照；冲突需重新读取，禁止直接覆盖", "inputSchema": { "type": "object", "properties": { "payload": { "type": "object" }, "expected": { "type": "object" } }, "required": ["payload", "expected"] } , "title": "保存状态", "annotations": {"readOnlyHint": false, "destructiveHint": true, "idempotentHint": true, "openWorldHint": true}},
     ])
 }
 
@@ -611,6 +618,35 @@ mod tests {
     fn missing_context_is_readonly() {
         assert!(is_readonly());
         assert!(resolve_db_file().is_err(), "无上下文不得猜数据源");
+    }
+
+    /// 每个工具都要有 title 与 annotations：客户端（Claude Code / Cursor 等）靠
+    /// readOnlyHint / destructiveHint 决定是否自动放行，缺注解等于让用户对破坏性操作盲批。
+    #[test]
+    fn every_tool_has_title_and_annotations() {
+        let tools = all_tool_schemas();
+        let list = tools.as_array().unwrap();
+        assert_eq!(list.len(), 11);
+        for tool in list {
+            let name = tool["name"].as_str().unwrap();
+            assert!(tool["title"].is_string(), "{name} 缺 title");
+            let ann = &tool["annotations"];
+            for field in ["readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"] {
+                assert!(ann[field].is_boolean(), "{name} 的 annotations.{field} 缺失");
+            }
+        }
+        let flags = |name: &str| {
+            let tool = list.iter().find(|t| t["name"].as_str() == Some(name)).unwrap();
+            (
+                tool["annotations"]["readOnlyHint"].as_bool().unwrap(),
+                tool["annotations"]["destructiveHint"].as_bool().unwrap(),
+            )
+        };
+        assert_eq!(flags("db_load_state"), (true, false), "读工具必须标 readOnly");
+        assert_eq!(flags("git_info"), (true, false));
+        assert_eq!(flags("git_checkout_branch"), (false, true), "检出分支会改工作区，必须标 destructive");
+        assert_eq!(flags("db_save_state"), (false, true), "差异写会删差集行，必须标 destructive");
+        assert_eq!(flags("db_preview_state"), (false, false), "提案不改任务，不该吓客户端");
     }
 
     #[test]
