@@ -107,3 +107,18 @@ Tauri WebView 虽无这些默认行为，统一处理更可预测。Esc 不在�
 - **键位重映射**：见 D6。
 - **命令面板（⌘K 唤起一切）**：与「固定键位、小步补齐」的本轮目标不符，且改动面覆盖全应用。
 - **把 Tooltip 也算浮层**：见 D3 的实测原因。
+
+## 已知坑（2026-10-15 修复）
+
+`shortcuts.ts` 的 `onKeyDown` 里，「为保留键先 `preventDefault`」与「`defaultPrevented` 表示已被别的处理者消化」
+两条规则写在同一个函数里。原实现先 `preventDefault()` 再把它传给 `resolveShortcut` 判断，
+于是**自己的拦截被误判成别人已处理**，`Ctrl+S` / `Ctrl+N` / `Ctrl+/` 三个保留键**全部静默失效**：
+不报错、不提示，纯逻辑单测也发现不了（测试传的是假事件，没有这层顺序）。
+
+修复：进入处理函数时先记录 `consumedByOthers = event.defaultPrevented`，之后一律用这个快照判断，
+自己调用 `preventDefault()` 不再影响路由。
+
+防复发：`scripts/verify-shortcuts.mjs` 用 CDP **真实按键**跑 8 项（保存 / 编辑器内保存 / 新建 / 速查 /
+搜索聚焦 / 侧栏切换 / 浮层抑制）。注意两点测试写法：
+- `Ctrl+N` 必须用合成事件——Chrome 会把它当浏览器快捷键开新窗口，页面收不到；
+- 清 `sessionStorage` 后必须真 `Page.reload`，否则 store 的 expected 快照与存储不一致，保存必然 STATE_CONFLICT。

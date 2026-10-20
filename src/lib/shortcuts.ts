@@ -62,15 +62,35 @@ function onKeyDown(event: KeyboardEvent): void {
   // 普通字符输入直接返回：不查 DOM、不建集合，键击热路径保持零开销
   if (!hasModifier && !isEscape) return;
 
+  // 关键顺序：必须在 preventDefault **之前**记录「进入本处理函数时是否已被别人消化」。
+  // 下面我们会为保留键自己调用 preventDefault（压掉浏览器「保存网页」/新建窗口），
+  // 若之后再读 event.defaultPrevented，resolveShortcut 会把**自己的拦截**误判成
+  // 「已有别的处理者处理过」而返回 null —— 那会让 Ctrl+S / Ctrl+N / Ctrl+/ 全部失效。
+  const consumedByOthers = event.defaultPrevented;
+
   // 保留键先拦默认行为：浏览器预览下 Ctrl+S 会弹「保存网页」、Ctrl+N 会开新窗口
   if (shouldPreventDefault(event, isMacOS)) event.preventDefault();
 
   if (handlers.size === 0) return;
-  const def = resolveShortcut(event, {
-    isMac: isMacOS,
-    blockingOverlay: hasBlockingOverlay(document),
-    registered: new Set(handlers.keys()),
-  });
+  const def = resolveShortcut(
+    {
+      key: event.key,
+      code: event.code,
+      ctrlKey: event.ctrlKey,
+      metaKey: event.metaKey,
+      altKey: event.altKey,
+      shiftKey: event.shiftKey,
+      isComposing: event.isComposing,
+      target: event.target,
+      // 用进入时的值，而不是我们自己 preventDefault 之后的值
+      defaultPrevented: consumedByOthers,
+    },
+    {
+      isMac: isMacOS,
+      blockingOverlay: hasBlockingOverlay(document),
+      registered: new Set(handlers.keys()),
+    },
+  );
   if (!def) return;
   const handler = handlers.get(def.id);
   if (!handler) return;
