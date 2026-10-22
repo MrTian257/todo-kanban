@@ -110,12 +110,13 @@
 
 ## 4. `npm run test:logic` 的变化
 
-现状 11 条。本次先并入 **3 条**（合计 14 条）：
+现状 11 条。本次并入 **4 条**（合计 15 条）：
 
 | 新脚本 | 覆盖 |
 | --- | --- |
 | `scripts/test-markdown-blocks.mjs` | 逐字往返恒等、透明块逐字节、空串进出、Setext/缩进代码规则、非 1 起始序号、转义竖线、内部三反引号、耗时上界 |
 | `scripts/test-block-order.mjs` | 顶层块重排纯函数（复用 `boardOrder.ts` 语义）、原地放开不改序、转换合法性表 |
+| `scripts/test-block-document.mjs` | mdast ↔ Lexical 桥的**语义往返**（17 例恒等 + 脚注/行内 HTML 的明写降级 + 空值边界 + 围栏按内部加长 + 表格列数不被转义竖线打乱）。断言的是 AST 等价而非字符串等价 —— 与 `test-markdown-blocks.mjs` 的分工是「未碰→逐字节；碰过→逐语义」 |
 | `scripts/test-markdown-plugins.mjs` | 断言编辑期与只读侧 import **同一份** remark/rehype 配置（防双栈漂移） |
 | ——（**实施首日记的更正**：原计划新增 `test-markdown-images.mjs`，但 `markdownImages.ts` 走 canvas、`attachments.ts` 顶层 import `@tauri-apps/api/core`，**两者在 node 环境都不适合直接 bundle 断言** ⇒ 图片压缩、批次上限、引用形态 ↔ 展示 URL 互换这三组断言**全部并入 CDP 脚本** `verify-block-editor.mjs`。合计 14 条而非 15 条） |
 
