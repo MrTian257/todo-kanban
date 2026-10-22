@@ -183,17 +183,24 @@ finish() {
 # STAGES: author this section. One stage() per step the human takes.
 # Replace the example below. Set TOTAL_STAGES to match the stages you write.
 # ──────────────────────────────────────────────────────────────────────────
-TOTAL_STAGES=6
+TOTAL_STAGES=7
 
-# 本机（Windows）+ Git Bash 专用向导：装 GitHub CLI → 关遥测 → 登录 → 验收。
-# 请用 Git Bash 运行（C:\Program Files\Git\bin\bash.exe）：winget / setx / Windows
-# 凭据管理器都在 Windows 侧，WSL 里跑不通（本机的 bash 默认还是 WSL 的）。
-# REPO_ROOT：脚本放在 <repo>/scripts/ 下，验收阶段要在仓库根里跑 gh repo view。
+# 本机（Windows + Git Bash）专用：让 gh 能真正连上 GitHub。
+#   已完成（2026-10-22 实测）：gh 2.103.0 已装、遥测已关、Machine PATH 已含安装目录。
+#   未完成：gh 未登录；而且此刻到 GitHub 的 TLS 通道是断的（直连超时；经 127.0.0.1:7890
+#   只建起 CONNECT 就握手失败，连 google/equivalent 海外站也一起 000）。
+#   所以阶段 1 先做通道自检 —— 不通过就别往下走：设备码登录会卡在「等待授权」上，
+#   看起来像登录失败，其实是网络问题。这是本向导相对上一版最大的改动。
+# 为什么必须用 Git Bash 而不是 WSL：winget / setx / Windows 凭据管理器都在 Windows 侧。
+# 本向导不写 .env：gh 读进程环境变量 + 凭据管理器里自己的凭据，不读 .env。
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+PROXY_URL="http://127.0.0.1:7890"          # 系统代理（WinINET ProxyEnable=1，监听进程是 verge-mihomo）
+INTRANET_HOSTS="git.novogene.com,172.17.165.229,.novogene.com,localhost,127.0.0.1"
+# docs/agents/issue-tracker.md 要求的标签全集：bug + triage 五角色 + wayfinder 五标签 = 11
+REQUIRED_LABELS="bug needs-triage needs-info ready-for-agent ready-for-human wontfix wayfinder:map wayfinder:research wayfinder:prototype wayfinder:grilling wayfinder:task"
 
-# _ghbin 定位 gh 可执行文件。安装器改的是注册表里的 PATH，已经开着的终端读不到新值，
-# 所以 PATH 找不到时回退到 MSI 的默认安装目录（Git Bash 的 /c/ 写法），
-# 这样向导装完就能立刻自检，不必先重开终端。命中返回 0，否则返回 1 由调用方提示。
+# _ghbin 定位 gh。安装器改的是注册表 PATH，已开着的终端不会重读，所以 PATH 找不到时
+# 回退到 MSI 默认目录（Git Bash 的 /c/ 写法）—— 装完立刻能自检，不必先重开终端。
 GH_BIN=""
 _ghbin() {
   if command -v gh >/dev/null 2>&1; then GH_BIN="gh"
@@ -203,169 +210,237 @@ _ghbin() {
   return 0
 }
 
+# _code URL：打印且只打印一个 HTTP 状态码。用状态码而不是退出码，是因为 000 能把
+# DNS 挂了 / TCP 不通 / TLS 握手死 / 被网关拒绝归成同一类「不通」，正是这里要判的东西。
+# 别再写成 ... || printf '000'：curl 的 -w 连不上时自己就输出 000，再补一次会拼成
+# "000000"，于是「完全没反应」被读成「有响应」—— 上一版就栽在这里，实测复现过。
+_code() {
+  local c
+  c=$(curl -sS -m 15 -o /dev/null -w '%{http_code}' "$1" 2>/dev/null) || true
+  if [ -z "$c" ]; then c=000; fi
+  printf '%s' "$c"
+}
+
+# _code_via URL PROXY：同一个目标走代理再取一次码。只有码不为 000 才算隧道真能用；
+# 直接对代理端口发 GET 会回 400，那只证明进程在听，不代表能出网。
+_code_via() {
+  local c
+  c=$(curl -sS -m 15 -o /dev/null -w '%{http_code}' -x "$2" "$1" 2>/dev/null) || true
+  if [ -z "$c" ]; then c=000; fi
+  printf '%s' "$c"
+}
+
 # ──────────────────────────────────────────────────────────────────────────
-# 阶段 1：安装 gh（winget 官方包；失败/拒绝则回退官方 MSI 手动路线）
+# 阶段 1：到 GitHub 的通道自检（不通就在这里停住）
+# ──────────────────────────────────────────────────────────────────────────
+stage "通道自检：GitHub 的两条路"
+say "登录需要**两条都通**：gh 自己轮询 api.github.com，你在浏览器里打开的是 github.com。"
+say "只通一条照样登不上，而卡住时 gh 不报错、只干等 —— 所以这一步放在最前面。"
+_api_direct="$(_code https://api.github.com/meta)"
+_api_proxy="$(_code_via https://api.github.com/meta "$PROXY_URL")"
+_web_direct="$(_code https://github.com)"
+_web_proxy="$(_code_via https://github.com "$PROXY_URL")"
+say "  api.github.com   直连=$_api_direct  经代理=$_api_proxy"
+say "  github.com 网页  直连=$_web_direct  经代理=$_web_proxy"
+note "对照：baidu=$(_code https://www.baidu.com)（200=本机网络活着） 内网 GitLab=$(_code http://git.novogene.com)（302=内网直连正常）"
+# 判定口径：不为 000 就算这条路通 —— 200/301/302/401/404 都说明 TLS 与 HTTP 往返成功了，
+# 而 meta 这类端点未登录时本来就会回 4xx，那不是通道问题。
+_ok_api=0; if [ "$_api_direct" != "000" ] || [ "$_api_proxy" != "000" ]; then _ok_api=1; fi
+_ok_web=0; if [ "$_web_direct" != "000" ] || [ "$_web_proxy" != "000" ]; then _ok_web=1; fi
+if [ "$_ok_api" = 1 ] && [ "$_ok_web" = 1 ]; then
+  say "✓ 两条都通：可以一路跑到阶段 6 登录。"
+elif [ "$_ok_api" = 1 ]; then
+  say "⚠ gh 能连 api.github.com，但 github.com 打不开 → 授权页会白屏。"
+  warn "  浏览器用的是系统代理（WinINET，本机 7890）：先在 Clash Verge 里把节点修好，"
+  warn "  或临时关掉系统代理 —— 只给命令行 export 代理救不了浏览器，这是两个不同的开关。"
+else
+  say "✗ 命令行到 GitHub 完全不通（api 与网页都 000）：登录必然卡住。"
+fi
+step "要修的是代理客户端：本机监听 7890 的进程是 verge-mihomo（Clash Verge）。"
+say "  1) 从系统托盘打开 Clash Verge；"
+say "  2) 在「代理 / Proxies」换一个能连通海外站点的节点（或先去「订阅 / Profiles」点更新）；"
+say "  3) 界面中文用词以你本机版本为准 —— 我不确定它的按钮叫什么，别照我猜的名字硬找。"
+note "复测两条（一条探浏览器要开的网页，一条探 gh 要轮询的 API + 代理）："
+note "  curl -sS -m 15 -o /dev/null -w '%{http_code}\n' https://github.com"
+note "  curl -sS -m 15 -o /dev/null -w '%{http_code}\n' -x $PROXY_URL https://api.github.com/meta"
+if confirm "通道已经修好（或你确认现在能连 GitHub）？"; then
+  say "继续。"
+else
+  finish
+  printf '%s  先修代理再重跑本向导：阶段 1 会重新自检，已完成的阶段自动跳过。%s\n' "$BOLD" "$RESET"
+  exit 0
+fi
+
+# ──────────────────────────────────────────────────────────────────────────
+# 阶段 2：给命令行配代理（会话内先给，持久化要你点头）
+# ──────────────────────────────────────────────────────────────────────────
+stage "命令行的代理：HTTPS_PROXY + NO_PROXY"
+say "系统代理只管浏览器/.NET；gh、git、curl 读的是环境变量，而实测本机三个代理环境变量全空"
+say "—— 这就是「浏览器能开 GitHub、命令行不行」的原因（build.sh 里检索远端分支也走 curl）。"
+ask PROXY_URL "代理地址（直接回车用默认 http://127.0.0.1:7890）："
+if [ -z "$PROXY_URL" ]; then PROXY_URL="http://127.0.0.1:7890"; fi
+export HTTPS_PROXY="$PROXY_URL" HTTP_PROXY="$PROXY_URL" NO_PROXY="$INTRANET_HOSTS"
+say "✓ 已在本向导进程内导出 HTTPS_PROXY / HTTP_PROXY / NO_PROXY"
+note "NO_PROXY 必须带上内网：实测 git.novogene.com 与 172.17.165.229 直连可用（302），"
+note "而本仓库的 Git 报告功能经系统 curl 访问 GitLab（CLAUDE.md「git 集成」/ ADR-016）。"
+note "内网地址一旦被 Clash 接走，GitLab 侧就断 —— 这是这步刻意配 NO_PROXY 的原因。"
+if confirm "持久化成用户环境变量（setx，新终端也生效）？"; then
+  if setx HTTPS_PROXY "$PROXY_URL" >/dev/null 2>&1 && setx HTTP_PROXY "$PROXY_URL" >/dev/null 2>&1 && setx NO_PROXY "$INTRANET_HOSTS" >/dev/null 2>&1; then
+    say "✓ 已写入用户环境变量（撤销：reg delete HKCU\\Environment /v HTTPS_PROXY /f，依次删三个）"
+    note "注意：带着 NO_PROXY 离开公司网络时，内网那条只是冗余，不影响外网走代理。"
+  else
+    warn "setx 失败，可手动在「系统属性 → 环境变量」里加这三条"
+  fi
+else
+  note "跳过持久化：只有本向导（和它拉起的 gh）用得到代理。"
+  SKIPPED+=("代理未持久化：以后单独用 gh/git 前先 export HTTPS_PROXY=$PROXY_URL NO_PROXY=$INTRANET_HOSTS")
+fi
+
+# ──────────────────────────────────────────────────────────────────────────
+# 阶段 3：安装 gh（已装自动跳过）
 # ──────────────────────────────────────────────────────────────────────────
 stage "安装 GitHub CLI"
-say "为什么需要它：本仓库 build.sh 的 github_token() 依次取 GITHUB_TOKEN → gh auth token"
-say "→ git credential；装上并登录 gh，bash build.sh 才能自动触发 macOS 远程打包。"
 open_url "https://cli.github.com/"
-note "winget 里的官方包名是 GitHub.cli（Publisher: GitHub, Inc.），默认装到"
-note "C:\\Program Files\\GitHub CLI\\ 并写入系统 PATH。"
-
 if _ghbin; then
-  say "✓ 已检测到 gh：$GH_BIN（跳过安装）"
+  say "✓ 已装：$GH_BIN（$("$GH_BIN" --version 2>/dev/null | head -n1)）—— 跳过安装"
 elif ! command -v winget >/dev/null 2>&1; then
-  warn "本机找不到 winget，直接走官方 MSI 手动安装。"
+  warn "找不到 winget，走官方 MSI：打开 releases 页下载 gh_x.y.z_windows_amd64.msi 双击安装。"
+  open_url "https://github.com/cli/cli/releases/latest"
+  pause "装完按 Enter 继续"
 else
-  step "即将执行（会弹 UAC 窗口，请点「是」）："
+  step "即将执行（会弹 UAC，请点「是」）："
   note "winget install -e --id GitHub.cli --source winget --silent --accept-package-agreements --accept-source-agreements"
-  if confirm "同意现在执行安装？"; then
-    # --silent：MSI 无安装界面，只留 UAC；两个 --accept-* 是脚本里必须的免交互协议确认。
-    # --source winget 是实测踩坑补上的：本机 msstore 源连不通（0x80072efd）时，winget 会在
-    # 「Please specify one of them using the --source option」处直接退出，装不上也报不到真错误。
+  if confirm "同意现在安装？"; then
+    # --source winget 是实测踩坑补的：msstore 源连不通（0x80072efd）时 winget 只丢一句
+    # 「请用 --source 指定」就退出，装不上也看不到真错误。--silent 让 MSI 不弹界面、只留 UAC。
     if winget install -e --id GitHub.cli --source winget --silent --accept-package-agreements --accept-source-agreements; then
-      say "✓ winget 报告安装完成"
+      say "✓ 安装完成"
     else
-      warn "winget 安装失败，或你在 UAC 点了「否」。"
-      SKIPPED+=("winget 安装 gh 失败：改走 MSI 手动路线")
+      warn "winget 失败或你在 UAC 点了「否」，改用上面的 MSI。"
+      SKIPPED+=("winget 安装 gh 失败")
     fi
-  else
-    note "已跳过自动安装。"
   fi
 fi
 
-if ! _ghbin; then
-  step "手动路线：在 releases 页下载 gh_x.y.z_windows_amd64.msi（本机 x64），双击安装并保持默认勾选的 Add to PATH。"
-  open_url "https://github.com/cli/cli/releases/latest"
-  pause "装完回来按 Enter（下一步用绝对路径复核，不依赖你重开终端）"
-fi
-
 # ──────────────────────────────────────────────────────────────────────────
-# 阶段 2：验证 gh 可执行（PATH 生效要重开终端）
+# 阶段 4：验证 gh 可执行
 # ──────────────────────────────────────────────────────────────────────────
 stage "验证 gh 可执行"
 if _ghbin; then
-  say "✓ 找到 gh：$GH_BIN"
-  note "版本：$("$GH_BIN" --version 2>/dev/null | head -n1 || echo '（调用失败）')"
-  step "请另外开一个**全新**的 Git Bash，敲 gh --version 确认可用。"
-  note "为什么要重开：安装器只更新了注册表里的 PATH，已开着的终端不会重新读取；"
-  note "本向导后面用的是回退绝对路径，能跑通不代表你的终端已经找到 gh。"
+  say "✓ gh = $GH_BIN"
+  note "版本：$("$GH_BIN" --version 2>/dev/null | head -n1)"
+  step "请另外开一个**全新**的 Git Bash 敲 gh --version。"
+  note "安装器只更新了注册表 PATH，已开着的终端读不到新值；本向导后面用的是回退绝对路径，"
+  note "它能跑通不代表你的终端已经找到 gh。"
 else
-  warn "既不在 PATH，也不在默认安装目录 —— gh 还没装上，请走上面的 MSI 路线。"
-  SKIPPED+=("gh 未安装：关闭遥测/登录/验收都做不了，装好后重跑本向导")
+  warn "还是找不到 gh —— 装好后重跑本向导。"
+  SKIPPED+=("gh 未安装：后续阶段都做不了")
 fi
-pause "确认完成后继续"
+pause "继续"
 
 # ──────────────────────────────────────────────────────────────────────────
-# 阶段 3：关闭遥测（gh 默认上报伪匿名使用数据）
+# 阶段 5：确认遥测已关（命令幂等，重复跑无害）
 # ──────────────────────────────────────────────────────────────────────────
-stage "关闭 GitHub CLI 遥测"
-say "gh 会向 GitHub 分析后台上报伪匿名事件（device_id、系统/架构、命令名、是否 CI 等）。"
-say "官方文档：docs.github.com → GitHub CLI telemetry。这里两条一起关，双保险："
-note "配置项由 gh 自己读；环境变量 GH_TELEMETRY 优先级更高，重装或同步配置时也不会漏掉。"
+stage "确认遥测已关闭"
+say "gh 默认上报伪匿名使用数据（device_id / 系统架构 / 命令名 / 是否 CI）。"
+say "官方口径：docs.github.com → GitHub CLI telemetry。本机约定：第三方工具默认关上报。"
 if _ghbin; then
-  step "写 CLI 配置：gh config set telemetry disabled"
-  if "$GH_BIN" config set telemetry disabled; then say "✓ telemetry = disabled"; else warn "写入失败（不影响下一步）"; fi
-  step "写用户环境变量：setx GH_TELEMETRY false（新终端才生效）"
-  setx GH_TELEMETRY false >/dev/null 2>&1 && say "✓ 已写入用户环境变量" || warn "setx 失败，可稍后手动添加"
-  if confirm "顺带按 DO_NOT_TRACK 约定，给所有支持该约定的本机工具一并关掉上报？"; then
-    setx DO_NOT_TRACK true >/dev/null 2>&1 && say "✓ DO_NOT_TRACK=true（影响其它工具，不只是 gh）" || warn "setx 失败"
-  else
-    note "跳过 DO_NOT_TRACK，只关 gh 自己。"
+  if "$GH_BIN" config set telemetry disabled 2>/dev/null; then say "✓ telemetry=disabled（配置项，重复执行无害）"; else warn "配置写入失败"; fi
+  if [ -n "$(printenv GH_TELEMETRY)" ]; then note "本会话已见 GH_TELEMETRY=$(printenv GH_TELEMETRY)"; else note "本会话未见 GH_TELEMETRY（setx 要新终端才生效）"; fi
+  _reg="$(reg query HKCU\\Environment /v GH_TELEMETRY 2>/dev/null | grep -o 'false' || true)"
+  if [ -n "$_reg" ]; then
+    say "✓ HKCU\\Environment 里已有 GH_TELEMETRY=false（环境变量优先级高于配置项）"
+  elif confirm "补写 GH_TELEMETRY=false（持久，且不依赖 gh 的配置文件）？"; then
+    setx GH_TELEMETRY false >/dev/null 2>&1 && say "✓ 已写入" || warn "setx 失败"
   fi
-  note "自检（应出现 telemetry: disabled）："
-  "$GH_BIN" config list 2>/dev/null | sed 's/^/    /' || true
+  note "当前 gh 配置：$("$GH_BIN" config list 2>/dev/null | tr '\n' ' ')"
 else
-  SKIPPED+=("关闭 gh 遥测：装好后跑 gh config set telemetry disabled && setx GH_TELEMETRY false")
+  SKIPPED+=("关闭 gh 遥测：装好后跑 gh config set telemetry disabled")
   warn "gh 不可用，跳过。"
 fi
 pause "继续"
 
 # ──────────────────────────────────────────────────────────────────────────
-# 阶段 4：认证登录（浏览器设备码 / 经典 PAT 二选一）
+# 阶段 6：登录（这一步只能你来：要么在浏览器点 Authorize，要么粘一个 PAT）
 # ──────────────────────────────────────────────────────────────────────────
 stage "登录 github.com"
-say "本仓库远端：$(git -C "$REPO_ROOT" remote get-url origin 2>/dev/null || echo '（读不到 origin）')"
-say "凭据由 gh 存进 Windows 凭据管理器：不写 .env，也不写 GitHub secret（本仓库两个 workflow"
-say "都不引用 secrets.* / vars.*，所以本向导没有任何需要落盘的密钥）。"
-note "浏览器里请先确认当前登录的是你自己的账号，否则设备码会授权到别的账号上。"
+# 选哪条分支要看阶段 1 的四格探测，不能一律推荐设备码：本机实测 api.github.com 与
+# github.com 是**分开坏**的（两个域名解析到不同 IP 段，被区别对待）——
+# 2026-10-22 采样 4 轮：api 直连 4/4=200，而 github.com 与 /login/device 直连/经代理全 000。
+# 设备码授权页在 github.com 上；gh 校验 PAT 只打 api.github.com。两者依赖的路不一样。
+if [ "$_ok_api" != 1 ]; then
+  warn "api.github.com 也不通：设备码和 PAT 两种都会卡住。先回阶段 1 修通道，再重跑本向导。"
+elif [ "$_ok_web" != 1 ]; then
+  warn "当前只有 api.github.com 通，github.com 打不开 —— 设备码的授权页会白屏，别在这干等。"
+  say "可行路线：在另一台能上网的设备（手机热点也行）打开 https://github.com/settings/tokens/new"
+  say "建一个经典 PAT，再在这里选 N 走粘贴分支 —— gh 校验 PAT 走的是 api.github.com，那条是通的。"
+else
+  say "两条都通 → 直接选设备码（默认，最省事，不用自己管 token 过期）。"
+fi
 if ! _ghbin; then
-  SKIPPED+=("gh 登录：装好后跑 gh auth login")
-  warn "gh 不可用，跳过登录。"
-elif confirm "用推荐的「浏览器设备码」方式登录？（选 N = 粘贴经典 Personal Access Token）"; then
-  step "下面启动交互式登录，按提示依次选：GitHub.com → HTTPS → Yes → Login with a web browser"
-  note "它会打印一次性码（形如 XXXX-XXXX）并自动打开验证页；这里先替你打开，省一次等待："
+  SKIPPED+=("gh 登录：装好后跑 gh auth login"); warn "gh 不可用，跳过。"
+elif confirm "用浏览器设备码登录？（选 N = 粘贴经典 PAT）"; then
+  # 下面这条是 docs/agents/issue-tracker.md「本机环境备注」里实测用过的形式。
+  # --web 会打印一次性码并等你按回车开浏览器；-c/--clipboard 会额外把码写进剪贴板
+  # （覆盖你的剪贴板，所以默认不加，需要时自己补 -c）。
+  step "将执行：gh auth login --hostname github.com --git-protocol https --web --scopes repo,read:org,workflow"
+  note "按提示走：GitHub.com → HTTPS → 是否用 GitHub 凭据认证 Git 选 Yes → Login with a web browser。"
+  note "终端打印形如 XXXX-XXXX 的一次性码；浏览器打开 https://github.com/login/device 粘码 → Authorize。"
+  note "浏览器和命令行依赖同一个代理：标签页打不开就是阶段 1 没修好，别在这一步干等。"
   open_url "https://github.com/login/device"
-  pause "准备好后回车启动 gh auth login（之后的交互界面归你操作）"
-  "$GH_BIN" auth login || warn "gh auth login 没走完；可重跑本向导或手动执行 gh auth login"
+  pause "准备好后回车启动交互式登录（之后的界面归你操作）"
+  "$GH_BIN" auth login --hostname github.com --git-protocol https --web --scopes repo,read:org,workflow \
+    || warn "没走完：重跑本向导，或手动执行上面那条命令"
 else
   step "打开经典 PAT 创建页（URL 已预填 scopes=repo,read:org,gist,workflow）"
   open_url "https://github.com/settings/tokens/new?scopes=repo,read:org,gist,workflow&description=todo-kanban%20(gh%20CLI%20local)"
-  note "过期时间建议 90 天以内。workflow 作用域用于 push .github/workflows 下的文件"
-  note "（build-macos.yml 就属于这一类）；gh 官方要求的最小作用域是 repo、read:org、gist。"
-  note "若页面没有自动勾选，手动勾上再 Generate token。"
+  note "过期建议 90 天内。workflow 作用域用于 push .github/workflows 下的文件；"
+  note "gh 手册要求的最小作用域是 repo、read:org、gist。页面没自动勾选就手动勾。"
+  note "PAT 也要能访问 api.github.com 才算登录成功，所以同样依赖阶段 1 的通道。"
   ask_secret GH_PAT "粘贴 token（输入不回显）："
   if [ -n "$GH_PAT" ]; then
-    # --with-token 从 stdin 读 classic PAT：走管道而不是命令行参数，避免 token 进进程列表与 shell 历史
-    if printf '%s' "$GH_PAT" | "$GH_BIN" auth login --with-token; then say "✓ 已用 PAT 登录"; else warn "登录失败：检查 token 是否过期或作用域不足"; fi
-    unset GH_PAT   # 立刻从当前进程环境抹掉，别留在后续命令可继承的环境里
-  else
-    note "空输入，跳过。"
+    # 走 stdin 而不是命令行参数：避免 token 进进程列表与 shell 历史
+    if printf '%s' "$GH_PAT" | "$GH_BIN" auth login --with-token; then say "✓ 已用 PAT 登录"; else warn "失败：token 过期或作用域不足"; fi
+    unset GH_PAT   # 立刻从本进程环境抹掉，别留给后续命令继承
   fi
 fi
 if _ghbin; then
-  step "核对身份：gh auth status（只列账号与作用域，默认不显示 token）"
-  if "$GH_BIN" auth status 2>&1 | sed 's/^/    /'; then :
-  else SKIPPED+=("gh 尚未登录：完成后执行 gh auth login"); fi
+  step "核对：gh auth status（只列账号与作用域，默认不显示 token）"
+  if "$GH_BIN" auth status 2>&1 | sed 's/^/    /'; then :; else SKIPPED+=("gh 未登录：完成后跑 gh auth login"); fi
 fi
 pause "继续"
 
 # ──────────────────────────────────────────────────────────────────────────
-# 阶段 5：让 git 复用 gh 的凭据（可选，但对 build.sh 的取凭据顺序有意义）
+# 阶段 7：验收 —— issue-tracker.md 的三项口径，全部只读
 # ──────────────────────────────────────────────────────────────────────────
-stage "git 凭据交给 gh（可选）"
-say "本机 Git Credential Manager 里已经存了一条 git:https://github.com —— 它和 gh 的凭据是两份，会各自过期。"
-say "让 gh 接管后，git push/pull 与 gh api 用同一份 token，轮换时只需重跑 gh auth login。"
+stage "验收：gh:authed / gh:repoAccess / gh:labels"
+say "AGENTS.md 现在规定 issue 与 map 票「读写一律走 gh」，这三项就是技能能不能开工的前提。"
+say "全只读：不建票、不打标签、不触发任何构建。"
 if _ghbin; then
-  if confirm "执行 gh auth setup-git（把 gh 注册成 github.com 的 git 凭据助手）？"; then
-    if "$GH_BIN" auth setup-git; then say "✓ git 的 github.com 凭据助手已指向 gh"
-    else warn "失败：通常是还没登录成功，先完成阶段 4"; fi
-    note "想彻底不留两份凭据：控制面板 → 凭据管理器 → 删除「git:https://github.com」，"
-    note "但建议先确认 gh 可用再删（删掉后 git push 会转向 gh 要凭据）。"
-  else
-    note "跳过。build.sh 取凭据顺序是 GITHUB_TOKEN → gh auth token → git credential，现有那条仍可用。"
-  fi
-else
-  warn "gh 不可用，跳过。"
-fi
-pause "继续"
-
-# ──────────────────────────────────────────────────────────────────────────
-# 阶段 6：验收 —— 全部只读，不触发任何构建
-# ──────────────────────────────────────────────────────────────────────────
-stage "验收：本仓库与 Actions 访问"
-say "下面三条就是 build.sh 触发 macOS 打包真正依赖的能力，全部只读（不启动构建、不消耗额度）。"
-if _ghbin; then
-  step "1) gh auth token 必须非空 —— build.sh 的 github_token() 读的就是它"
+  step "gh:authed —— 凭据在不在"
   _tok="$("$GH_BIN" auth token 2>/dev/null || true)"
-  if [ -n "$_tok" ]; then say "    ✓ 已拿到凭据（刻意不回显，长度见 gh auth status）"
-  else warn "    拿不到 token：还没登录或凭据已失效"; SKIPPED+=("gh auth token 为空"); fi
+  if [ -n "$_tok" ]; then say "    ✓ gh:authed 绿（已取到凭据，刻意不回显）"; else warn "    ✗ gh:authed 红：还没登录"; SKIPPED+=("gh:authed 红"); fi
   unset _tok
 
-  step "2) gh repo view：能否读到本仓库"
-  if (cd "$REPO_ROOT" && "$GH_BIN" repo view --json nameWithOwner,visibility,defaultBranchRef 2>&1 | sed 's/^/    /'); then :
-  else warn "    读取失败：多为未登录，或该账号对仓库无权限"; SKIPPED+=("gh repo view 失败"); fi
+  step "gh:repoAccess —— 能否读到本仓库"
+  if (cd "$REPO_ROOT" && "$GH_BIN" repo view --json nameWithOwner,visibility,defaultBranchRef 2>&1 | sed 's/^/    /'); then say "    ✓ gh:repoAccess 绿"
+  else warn "    ✗ gh:repoAccess 红：未登录 / 无权限 / 通道仍不通"; SKIPPED+=("gh:repoAccess 红"); fi
 
-  step "3) gh run list：Actions 只读访问（列表为空也算通过）"
-  if (cd "$REPO_ROOT" && "$GH_BIN" run list --limit 3 2>&1 | sed 's/^/    /'); then say "    ✓ Actions 可访问"
-  else warn "    失败：检查仓库权限或 Actions 是否可用"; SKIPPED+=("gh run list 失败"); fi
+  step "gh:labels —— 11 个技能标签是否齐备（bug + triage 五角色 + wayfinder 五标签）"
+  # --limit 100 是必需的：gh label list 默认只取 30 个（本机 --help 实测 "default 30"），
+  # 仓库现在 19 个标签，将来加到 30+ 就会因截断而假红 —— 判「齐不齐」不能建立在截断列表上。
+  _got="$(cd "$REPO_ROOT" && "$GH_BIN" label list --json name --limit 100 --jq '.[].name' 2>/dev/null || true)"
+  if [ -n "$_got" ]; then
+    _miss=""
+    for l in $REQUIRED_LABELS; do printf '%s\n' "$_got" | grep -qxF "$l" || _miss="$_miss $l"; done
+    if [ -z "$_miss" ]; then say "    ✓ gh:labels 绿：11 个都在位"
+    else warn "    ✗ gh:labels 缺：$_miss"; warn "      缺哪个补哪个：gh label create \"<名字>\" --description \"...\""; SKIPPED+=("缺标签:$_miss"); fi
+  else warn "    读不到标签列表（多半还没登录，或通道不通）"; fi
 
-  note "三条都过 → 之后直接 bash build.sh 即可自动触发 macOS 远程构建（要求 build-macos.yml"
-  note "已 push 到当前分支）；只打 macOS 用 bash build.sh --mac-only。"
+  note "三项全绿 → issue-tracker.md / triage-labels.md 描述的技能即可直接开工。"
+  note "任何一项红 → 先回阶段 1 修通道：网络问题会让后面每条 gh 命令静默卡住。"
 else
-  warn "gh 仍不可用：装好后重跑本向导 —— 阶段 1 会自动识别已安装，配置类命令都可重复执行。"
-  note "本向导不写 .env、不写 GitHub secret：gh 的凭据存在 Windows 凭据管理器里。"
+  warn "gh 仍不可用。"
 fi
 pause "看完结果再结束"
 

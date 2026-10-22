@@ -6,6 +6,8 @@
 
 环境要求：Node.js（npm）、Rust 工具链、git ≥ 2.20 在 PATH（启动时检测，不足中文提示、不阻塞）；可选系统 curl（GitLab 远端分支增强，Windows 10+ 自带）。
 
+需要 `gh`（GitHub CLI）的两处：`bash build.sh` 触发 macOS 远程打包（`github_token()` 取 `gh auth token`），以及 `docs/agents/issue-tracker.md` 里 issue / 地图票的读写。Windows 上一次配好（安装 → 关遥测 → 代理 → 登录 → 自检）请跑 [`scripts/setup-github-cli.sh`](scripts/setup-github-cli.sh)，**必须在 Git Bash 里跑**（`C:\Program Files\Git\bin\bash.exe`），别用 WSL 的 bash——`winget` / `setx` / Windows 凭据管理器都在 Windows 侧。
+
 ```bash
 npm install
 npm run tauri dev     # 桌面窗口开发（1440×900）

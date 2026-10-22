@@ -52,7 +52,10 @@ GitHub 里 issue 与 PR 共用一个编号空间，所以裸写的 `#42` 两种�
 - **Claim**：`gh issue edit <n> --add-assignee @me`，本次会话的第一次写。
 - **Resolve**：`gh issue comment <n> --body "<答案>"`，然后 `gh issue close <n>`，最后把上下文指针（要点 + 链接）追加到地图的 Decisions-so-far。
 
-## 本机环境备注
+## 本机环境备注（实测于初始化当天）
 
-- 本机直连 `github.com:443` 不通，HTTP 代理在 `127.0.0.1:7890`：`gh` / curl 需要 `HTTPS_PROXY`（`api.github.com` 可直连，git over HTTPS 走代理更稳）。
-- `gh` 需已安装并完成 `gh auth login`（scope 至少 `repo`）；未登录时 GitHub 后端的检查项一律红牌，先登录再动票。
+- **gh 已在** `C:\Program\ Files\GitHub CLI\gh.exe`（v2.103.0），Machine PATH 也含该目录；但**已经在运行的进程不会重新读 PATH**——从 DSH / 编辑器里调 `gh` 报"找不到命令"时，重启该进程（或在 Git Bash 里用绝对路径）即可。
+- **GitHub 域名必须走代理 `127.0.0.1:7890`**：直连 `github.com` / `api.github.com` 的 TLS 都握不上手（.NET 走系统代理时正常，git 直连超时）。所以 `gh` 需要 `HTTPS_PROXY`：`$env:HTTPS_PROXY='http://127.0.0.1:7890'; gh ...`（设备码登录轮询 `github.com/login/device`，没有代理会一直等不到授权）。
+- **登录**：`gh auth login --hostname github.com --git-protocol https --web -s repo,read:org,workflow`。未登录时 `gh:authed` / `gh:repoAccess` / `gh:labels` 三项必然红牌。
+- **遥测**：`gh config set telemetry disabled` + 用户环境变量 `GH_TELEMETRY=false` 均已设置（本机约定：第三方工具默认关掉上报）。
+- **标签**：仓库现有 19 个标签，技能所需的 10 个核心标签（`bug` + 四个 triage 角色 + 五个 `wayfinder:*`）与 `wontfix` 都在位。
