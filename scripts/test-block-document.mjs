@@ -70,7 +70,11 @@ try {
   {
     const inner = FENCE + 'md\n' + FENCE + 'x\n' + FENCE + '\n';
     const out = editorJsonToMarkdown(markdownToEditorJson(inner));
-    assert.ok(out.includes(F3 + F3), '外层围栏必须比内部长，实际=' + JSON.stringify(out));
+    // 外层围栏只需比**内部最长反引号串**长一位（4 个即可包住 3 个），不是要凑到 6 个。
+    const runs = (out.match(/`{3,}/g) ?? []).map(run => run.length);
+    const outer = Math.max(...runs);
+    const innerLongest = Math.max(...(FENCE + 'x' + FENCE).match(/`{3,}/g).map(run => run.length));
+    assert.ok(outer > innerLongest, '外层围栏必须严格长于内部最长串：outer=' + outer + ' inner=' + innerLongest + ' out=' + JSON.stringify(out));
     assert.deepEqual(norm(parse(out)), norm(parse(inner)), '加长围栏后语义仍等价');
   }
   // 表格列数不得因单元格里的竖线而错位

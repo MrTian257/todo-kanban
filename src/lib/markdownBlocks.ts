@@ -44,6 +44,11 @@ export interface BlockDoc {
   /** 打开时读到的原始备注；本模块永不改写它，脏判定靠与它做逐字比较（§7）。 */
   source: string;
   blocks: Block[];
+  /**
+   * 结构是否被改过（重排 / 插入 / 删除块）。**任何改动块序列的操作都必须置真**，
+   * 否则 joinBlocks 会走「零改动直接返回原文」这条快路，把那次结构改动吞掉。
+   */
+  structureChanged: boolean;
   /** gaps[i] = 第 i 个块**之前**的源文（gaps[0] 是文档前导空白）。间隙单独存，重排时才敢归一。 */
   gaps: string[];
   /** 最后一个块之后的源文（通常是结尾换行）。 */
@@ -97,6 +102,7 @@ function kindOf(node: Content): BlockKind {
 export function splitBlocks(markdown: string): BlockDoc {
   const whole = (): BlockDoc => ({
     source: markdown,
+    structureChanged: false,
     blocks: markdown.length
       ? [{ id: 0, kind: "verbatim", start: 0, end: markdown.length, source: markdown, touched: false, node: null }]
       : [],
@@ -119,21 +125,25 @@ export function splitBlocks(markdown: string): BlockDoc {
       // 异常 AST：从 cursor 到文末整段收尾为 verbatim，保证零丢弃。
       gaps.push(markdown.slice(cursor, markdown.length));
       out.push({ id: out.length, kind: "verbatim", start: cursor, end: markdown.length, source: markdown.slice(cursor), touched: false, node: null });
-      return { source: markdown, blocks: out, gaps, tail: "" };
+      return { source: markdown, blocks: out, gaps, tail: "", structureChanged: false };
     }
     gaps.push(markdown.slice(cursor, start));
+    const kind = kindOf(node);
     out.push({
       id: out.length,
-      kind: kindOf(node),
+      kind,
       start,
       end,
       source: markdown.slice(start, end),
       touched: false,
-      node,
+      // **透明块一律不存 AST**：它的契约就是「不解析、原样进出」。
+      // 存了节点，serializeBlock 就会拿旧节点去重序列化，把用户手改的源文吞掉
+      // （这条是 scripts/test-markdown-blocks.mjs「透明块逐字进出」断言抓到的真 bug）。
+      node: kind === "verbatim" ? null : node,
     });
     cursor = end;
   }
-  return { source: markdown, blocks: out, gaps, tail: markdown.slice(cursor) };
+  return { source: markdown, blocks: out, gaps, tail: markdown.slice(cursor), structureChanged: false };
 }
 
 /**
@@ -157,6 +167,12 @@ export function serializeBlock(block: Block): string {
  *   否则「打开→保存」会造出一次无意义 diff，被 change_history 记成真实字段变更。
  */
 export function joinBlocks(doc: BlockDoc): string {
+  // **零改动快路**：没有任何块被碰过、结构也没动 → 直接返回原文。
+  // 这把 §4「未碰块逐字保留」从"靠序列化碰巧一致"升级成结构性保证：
+  // 无论 remark 的 stringify 将来怎么改写法（标记符、缩进、转义），未编辑的备注都不可能被动过。
+  // 也修掉一个真实缺陷：旧实现会把只含换行的备注（"\n"）按「空文档归一为空串」规则清空，
+  // 那是拿 §7 的"不许凭空造内容"去删用户已存的内容 —— §4 优先。
+  if (!doc.structureChanged && !doc.blocks.some(block => block.touched)) return doc.source;
   let out = "";
   doc.blocks.forEach((block, i) => {
     out += (doc.gaps[i] ?? "") + (block.touched ? serializeBlock(block) : block.source);
@@ -200,10 +216,12 @@ export function reparseBlock(doc: BlockDoc, id: number): BlockDoc {
  */
 export function reorderBlocks(doc: BlockDoc, from: number, to: number): BlockDoc {
   const order = moveTopLevelIndex(doc.blocks.length, from, to);
-  if (!order.changed) return doc;
+  if (!order.changed) return doc;   // 原地放开：连 structureChanged 都不置真
   const blocks = order.indexes.map(i => doc.blocks[i]).map((block, i) => ({ ...block, id: i }));
-  const gaps = blocks.map((_, i) => (i === 0 ? (doc.gaps[order.indexes[0]] ?? "") : GAP_AFTER_REORDER));
-  return { source: doc.source, blocks, gaps, tail: doc.tail };
+  // 前导空白**只取文档自己的 gaps[0]**；块与块之间的间隙一律归一为一个空行。
+  // （旧写法取的是「被移动块自己前面那段间隙」，会把四个连续换行搬到文档开头 —— 重排凭空多出空白。）
+  const gaps = blocks.map((_, i) => (i === 0 ? (doc.gaps[0] ?? "") : GAP_AFTER_REORDER));
+  return { source: doc.source, blocks, gaps, tail: doc.tail, structureChanged: true };
 }
 
 

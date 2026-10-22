@@ -11,7 +11,8 @@
 //   节点类的注册与编辑器装配在 components/todo/BlockEditor.tsx。这样它能在 node 里直接断言，
 //   不必等浏览器（ADR-0003 加 @lexical/headless 就是为了这个）。
 
-import type { Content, Root } from "mdast";
+// Root 不在这层出现：桥按「一块 ↔ 一个顶层节点」工作，整篇的 root 由组件侧拼。
+import type { Content } from "mdast";
 import { splitBlocks, type Block, type BlockDoc } from "./markdownBlocks";
 
 /** Lexical 序列化节点的最小形态；自定义节点用 sourceblock / imagerow 两个 type。 */
@@ -55,9 +56,11 @@ export function blockToLexicalNodes(block: Block): LexicalNode[] {
   }
 }
 
-interface MdNode { type: string; children?: Content[]; value?: string; depth?: number; lang?: string | null; ordered?: boolean; start?: number | null; checked?: boolean | null; spread?: boolean; align?: (string | null)[] | null; url?: string; title?: string | null; alt?: string | null; }
+interface MdNode { type: string; children?: Content[]; value?: string; identifier?: string; depth?: number; lang?: string | null; ordered?: boolean; start?: number | null; checked?: boolean | null; spread?: boolean; align?: (string | null)[] | null; url?: string; title?: string | null; alt?: string | null; }
 type MdList = MdNode & { children: MdNode[] };
-type MdTable = MdNode & { rows?: MdNode[] };
+// mdast 的 Table / TableRow / TableCell 一律用 children 存下级（**没有 rows 字段**；
+// GFM 语法文档里的 "row list" 是说法不是属性名）。读错字段会让整张表静默消失。
+type MdTable = MdNode & { align?: (string | null)[] | null };
 
 function blockChildrenToLexical(children: Content[]): LexicalNode[] {
   // 引用块内部：把每个子节点当块处理，但只支持段落/列表/标题三类（嵌套引用退化为文本，
@@ -112,9 +115,15 @@ function itemChildrenToLexical(children: Content[]): LexicalNode[] {
 }
 
 function tableToLexical(node: MdTable): LexicalNode {
-  const rows = (node.rows ?? []) as MdNode[];
+  const rows = (node.children ?? []) as unknown as MdNode[];
   return {
     type: "table", version: 1,
+    // 对齐存在 **table 节点**上（mdast 的 align 数组），不在行或单元格里 —— 两头都必须带上它，
+    // 否则 :--- / ---: 会在往返中被静默抹平。
+    // ⚠ 对组件的显式要求：Lexical 内置 TableNode 的序列化里**没有 align 字段**，
+    //   直接用它会在 importJSON 时丢掉对齐 ⇒ 组件必须注册一个携带 align 的自定义表格节点，
+    //   或把 align 折进单元格 headerState 之外的自有字段。这条不能靠桥这边解决。
+    align: node.align ?? [],
     children: rows.map((row, rowIndex) => ({
       type: "tablerow", version: 1,
       children: ((row.children ?? []) as MdNode[]).map(cell => ({
@@ -156,7 +165,11 @@ function inlineToLexical(children: Content[]): LexicalNode[] {
       case "delete":
         out.push(...withFormat(inlineToLexical(node.children ?? []), 4)); break;   // 4 = strikethrough
       case "link":
-        out.push({ type: "link", version: 1, url: node.url ?? "", target: "_blank", children: inlineToLexical(node.children ?? []) }); break;
+        // title 是**内容**不是样式：mdast 的 link.title 丢了就是语义丢失，不属于 §4 允许的"规范化"。
+        // ⚠ 组件侧约束：@lexical/link 的 LinkNode 有 __title/getTitle/setTitle，但 SerializedLinkNode
+        //   是否回传 title 未证实 ⇒ 装配时必须核实；不回传就得用自定义 link 节点或 import 后 setTitle 回填。
+        out.push({ type: "link", version: 1, url: node.url ?? "", target: "_blank", title: node.title ?? null, children: inlineToLexical(node.children ?? []) });
+        break;
       case "image":
         out.push({ type: "image", version: 1, src: node.url ?? "", altText: node.alt ?? "", width: null, height: null }); break;
       case "break":
@@ -264,7 +277,16 @@ function tableToMarkdown(node: LexicalNode): string {
   const width = Math.max(...rows.map(row => row.length));
   const normalized = rows.map(row => [...row, ...Array(Math.max(0, width - row.length)).fill("")]);
   const head = normalized[0];
-  const divider = head.map(() => "---");
+  const align = Array.isArray(node.align) ? (node.align as (string | null)[]) : [];
+  // 分隔行按 mdast 的 align 还原：left→:---  right→---:  center→:---:  null→---
+  const divider = head.map((_, col) => {
+    switch (align[col]) {
+      case "left": return ":---";
+      case "right": return "---:";
+      case "center": return ":---:";
+      default: return "---";
+    }
+  });
   const body = normalized.slice(1);
   const line = (cells: string[]) => `| ${cells.map(escapeCell).join(" | ")} |`;
   return [line(head), line(divider), ...body.map(line)].join("\n");
@@ -286,7 +308,17 @@ function inlineToMarkdown(nodes: LexicalNode[]): string {
       case "text": out += wrapFormat(String(node.text ?? ""), Number(node.format ?? 0)); break;
       case "linebreak": out += "  \n"; break;          // 两尾随空格硬换行（§6：序列化不产反斜杠）
       case "lineboundary": out += "\n"; break;
-      case "link": out += `[${inlineToMarkdown(node.children ?? [])}](${String(node.url ?? "")})`; break;
+      case "link": {
+        const label = inlineToMarkdown(node.children ?? []);
+        const url = String(node.url ?? "");
+        // 有 title 必须写回 [label](url "title")，否则链接的说明文字在往返中消失。
+        // title 里的双引号换成单引号，避免提前闭合 title 段。
+        const rawTitle = node.title == null ? "" : String(node.title);
+        const safeTitle = rawTitle.split('"').join("'");
+        const title = safeTitle.length ? ' "' + safeTitle + '"' : "";
+        out += "[" + label + "](" + url + title + ")";
+        break;
+      }
       case "image": out += `![${String(node.altText ?? "")}](${String(node.src ?? "")})`; break;
       case "list": out += listToMarkdown(node, 0); break;
       case "sourceblock": out += String(node.source ?? node[BLOCK_SOURCE_KEY] ?? ""); break;
@@ -296,13 +328,22 @@ function inlineToMarkdown(nodes: LexicalNode[]): string {
   return out;
 }
 
-/** Lexical format 位掩码 → Markdown 标记。位值与 lexical 包一致：1 bold / 2 italic / 4 strike / 8 code / 16 underline… */
+/**
+ * Lexical format 位掩码 → Markdown 标记。
+ *
+ * 位值取自 lexical 包的权威常量（node_modules/lexical/dist/*.d.ts）：
+ *   IS_BOLD=1 / IS_ITALIC=2 / IS_STRIKETHROUGH=4 / IS_UNDERLINE=8 / **IS_CODE=16**
+ *   / IS_SUBSCRIPT=32 / IS_SUPERSCRIPT=64 / IS_HIGHLIGHT=128
+ * 注意别踩：8 是下划线不是代码 —— 早期版本这里写成 8，导致行内代码在往返中被静默降级成普通文字
+ * （scripts/test-block-document.mjs 的「行内格式组合」断言抓到的）。
+ * 下划线/高亮/上下标在 CommonMark 里没有对应写法，被碰过时按纯文本输出（明写取舍，不引入 HTML）。
+ */
 function wrapFormat(text: string, format: number): string {
   let out = text;
-  if (format & 8) return `${T}${out}${T}`;   // 行内代码：反引号包裹后不再叠加其它标记（Markdown 里 code 优先）
-  if (format & 4) out = `~~${out}~~`;
-  if (format & 1) out = `**${out}**`;
-  if (format & 2) out = `_${out}_`;
+  if (format & 16) return T + out + T;   // 行内代码：反引号包裹后不再叠加其它标记（Markdown 里 code 优先）
+  if (format & 4) out = "~~" + out + "~~";
+  if (format & 1) out = "**" + out + "**";
+  if (format & 2) out = "_" + out + "_";
   return out;
 }
 

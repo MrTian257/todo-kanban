@@ -108,6 +108,30 @@
 | Vite 1500 KB raw 警告 | 现状已触发；本次要求**主入口 raw 下降**（Vditor 移出后应明显回落），编辑页 chunk 单独看 |
 | 数字口径 | 调研笔记里的 gzip 是**仓库外 esbuild 单包实测**，且存在两套口径（按需 import vs `import *` 不摇树）；**正式门禁数字只认一次真实 `npm run build` + bundle 分析** |
 
+### 3.1 实测基线（2026-10-22，`npm run build` 真跑一次，`vite build` 输出）
+
+**此前所有文档与 ADR 里的"主包约 1.5 MB / gzip 484 KB、已有 1500 KB 警告"是过期数字**（来自更早的一次构建），本次实测推翻：
+
+| chunk | raw | gzip | 说明 |
+| --- | --- | --- | --- |
+| `index-*.js`（主入口，首屏必载） | 649.45 KB | **215.45 KB** | 本次构建**未触发** Vite 的 chunk 体积警告 |
+| `TodoDetailPage-*.js` | 408.50 KB | 109.32 KB | 含 Vditor 的包内部分（调研测得约 73 KB gz）——块编辑器接管后可摘除 |
+| `MarkdownRenderer-*.js` | 312.72 KB | 94.34 KB | 只读渲染，懒加载 |
+| `MarkdownMath-*.js` | 269.33 KB | 80.71 KB | KaTeX 通道，按需 |
+| `MarkdownCode-*.js` | 174.42 KB | 53.03 KB | 高亮通道，按需 |
+| `types-*.js` / `sortable-*.js` | 90.81 / 51.08 KB | 25.71 / 17.03 KB | 共享 |
+
+**对预算的影响（放宽，不是收紧）**：ADR-0003 决策 4 的「新增 ≤ 200 KB gzip 且主入口净减少」在真实基线下更容易满足 ——
+块编辑器落在**编辑页自己的懒加载 chunk**里（与今天的 `TodoDetailPage` 同层），主入口 215 KB gz 本就不含编辑器；
+摘掉 Vditor 后 `TodoDetailPage` 那一档会明显下降。**门禁数字改成本次实测的口径**：
+
+- 主入口 gzip：**≤ 215 KB**（不得因本次重构变大；摘 Vditor 后应显著下降）。
+- 编辑页 chunk gzip：**≤ 320 KB**（现状 109.32 KB + 新增 ≤ 200 KB）。
+- Vite chunk 警告：保持**不触发**。
+
+> 同步义务：`CLAUDE.md` / `AGENTS.md` / `ADR-0003` 里"约 1.5 MB / 484 KB / 已有 1500 KB 警告"的表述已过期，
+> 下次改动这些文件时按本节实测值修正（本轮只改验收文档，避免把与代码无关的表述散在多处一起动）。
+
 ## 4. `npm run test:logic` 的变化
 
 现状 11 条。本次并入 **4 条**（合计 15 条）：

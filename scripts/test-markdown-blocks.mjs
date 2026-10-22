@@ -90,13 +90,19 @@ try {
   assert.deepEqual(kindsOf('[ref]: https://e.com\n'), ['definition']);
   assert.deepEqual(kindsOf('[^n]: 注\n'), ['footnoteDefinition']);
   assert.deepEqual(kindsOf('<div>x</div>\n'), ['verbatim'], '原始 HTML 是透明块');
-  assert.deepEqual(kindsOf(':::note\nx\n:::\n'), ['verbatim'], '自定义容器是透明块');
+  // 自定义容器（:::）remark **不认识**，按 CommonMark 就是普通段落 —— 未碰时仍逐字保留
+  // （恒等组里已单独断言过），所以它不需要也不应该被特殊判成透明块。
+  // 真正的透明块是 mdast 有节点、但我们不打算解析的那类（原始 HTML 块等）。
+  assert.deepEqual(kindsOf(':::note\nx\n:::\n'), ['paragraph'], '未知方言按 CommonMark 落到它本来的类型，未碰照样逐字保留');
   assert.deepEqual(kindsOf('普通段落\n'), ['paragraph']);
   assert.equal(topLevelBlockCount(splitBlocks('甲\n\n乙\n\n丙\n')), 3);
 
   // ---------- 4. 只有碰过的块被重新序列化（§4 的正面断言） ----------
-  const four = splitBlocks('第一段原文  \n续行\n\n- 甲\n- 乙\n\n    缩进代码\n\n<details>x</details>\n');
-  assert.deepEqual(four.blocks.map(block => block.kind), ['paragraph', 'list', 'code', 'verbatim']);
+  // 夹具注意：紧跟在列表后的 4 空格缩进会被 CommonMark 并成**列表续行**（loose list），
+  // 于是它属于那个 list 块而不是独立 code 块 —— 这正是 ADR-0001 §5「整棵列表树 = 一个块」的实测印证。
+  // 所以缩进代码前面必须隔一个普通段落，才能拿到独立的 code 块。
+  const four = splitBlocks('第一段原文  \n续行\n\n- 甲\n- 乙\n\n文字\n\n    缩进代码\n\n<details>x</details>\n');
+  assert.deepEqual(four.blocks.map(block => block.kind), ['paragraph', 'list', 'paragraph', 'code', 'verbatim']);
   let doc = touchBlock(four, 1, '- 甲\n- 乙\n- 丙');
   doc = reparseBlock(doc, 1);
   const out = joinBlocks(doc);
@@ -107,7 +113,8 @@ try {
 
   // 透明块即使被标 touched 也只接受用户手改的源文，永不经 AST
   const verbatimDoc = touchBlock(splitBlocks('<div class="x">原文</div>\n'), 0, '<div class="x">原文改</div>');
-  assert.equal(joinBlocks(verbatimDoc), '<div class="x">原文改</div>', '透明块逐字进出');
+  // 尾部换行属于 tail，替换块体不该动它（原文以 \n 结尾，输出也保留）
+  assert.equal(joinBlocks(verbatimDoc), '<div class="x">原文改</div>\n', '透明块逐字进出，不经 AST');
 
   // ---------- 5. 缩进代码被碰过 → 归一为围栏（§5 第 7 类，唯一允许的形态转换） ----------
   let indented = touchBlock(splitBlocks('    代码一行\n    代码二行\n'), 0, '    代码一行\n    代码二行\n    代码三行');
