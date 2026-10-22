@@ -285,27 +285,6 @@ body {
 .tk-rise-4 { animation-delay: 0.12s; }
 .tk-rise-5 { animation-delay: 0.15s; }
 
-/* Single-surface instant Markdown editing. */
-.md-instant .vditor {
-  --border-color: var(--border);
-  --second-color: var(--muted-foreground);
-  --panel-background-color: var(--popover);
-  --toolbar-background-color: var(--background);
-  --toolbar-icon-color: var(--muted-foreground);
-  --toolbar-icon-hover-color: var(--foreground);
-  --textarea-background-color: var(--background);
-  --textarea-text-color: var(--foreground);
-  border: 0;
-  border-radius: 0;
-  min-width: 0;
-}
-.md-instant .vditor-toolbar { padding: 8px 12px !important; border-bottom: 1px solid var(--border); }
-.md-instant .vditor-ir { min-width: 0; }
-.md-instant .vditor-reset { padding: 20px !important; font-size: 14px; overflow-wrap: anywhere; }
-.md-instant .vditor-reset img { max-width: 100%; height: auto; }
-.md-instant .vditor-reset pre { overflow-x: auto; }
-.md-instant .vditor-reset .katex-display { overflow-x: auto; overflow-y: hidden; }
-.md-instant .vditor-ir:focus-within { box-shadow: inset 0 0 0 1px var(--ring); }
 
 /* Shared read-only Markdown typography. */
 .md-editor { overflow-wrap: anywhere; min-width: 0; }
@@ -421,9 +400,9 @@ input, textarea, select, button { font-family: inherit; }
 .dark select { background-color: var(--background); }
 .dark input::placeholder, .dark textarea::placeholder { color: var(--muted-foreground); opacity: 1; }
 
-/* 编辑器与预览统一字体，避免内容主题引入其他字体栈。 */
-.vditor-reset, .md-editor { font-family: var(--font-sans); }
-.vditor-reset code, .vditor-reset pre, .md-editor code, .md-editor pre { font-family: var(--font-mono); }
+/* 只读预览统一字体，避免内容主题引入其他字体栈（块编辑器用 .tk-block-* 自己的字栈）。 */
+.md-editor { font-family: var(--font-sans); }
+.md-editor code, .md-editor pre { font-family: var(--font-mono); }
 
 /* macOS 桌面：保留系统标题栏，应用工具栏使用紧凑的原生式层次。 */
 :root[data-platform="macos"] .tk-desktop-shell { --tk-toolbar-height: 48px; }
@@ -786,4 +765,28 @@ input, textarea, select, button { font-family: inherit; }
   .tk-pomodoro-indicator-text { display: none; }
 }
 
-
+   颜色一律吃 [data-theme] 的 CSS 变量，所以明暗 + 5 套皮肤零额外适配；
+   不再调用任何 Vditor 主题 API（那是旧 MarkdownEditor 的 setTheme 路径）。 */
+.tk-block-editor { background: var(--card); }
+.tk-block-content { overflow-wrap: anywhere; }
+.tk-block-content:focus-within { box-shadow: inset 0 0 0 1px var(--ring); }
+.tk-block-paragraph { margin: 0 0 0.6em; }
+.tk-block-h1 { font-size: 1.6em; font-weight: 650; margin: 0.8em 0 0.4em; }
+.tk-block-h2 { font-size: 1.35em; font-weight: 650; margin: 0.8em 0 0.4em; }
+.tk-block-h3 { font-size: 1.18em; font-weight: 600; margin: 0.7em 0 0.35em; }
+.tk-block-h4, .tk-block-h5, .tk-block-h6 { font-size: 1.05em; font-weight: 600; margin: 0.6em 0 0.3em; }
+.tk-block-quote { border-left: 3px solid var(--border); padding-left: 0.9em; margin: 0 0 0.6em; color: var(--muted-foreground); }
+.tk-block-ul, .tk-block-ol { margin: 0 0 0.6em 1.3em; padding: 0; }
+.tk-block-li { margin: 0.15em 0; }
+.tk-block-code { background: color-mix(in oklab, var(--muted) 70%, transparent); border-radius: 8px; padding: 10px 12px; margin: 0 0 0.6em; overflow-x: auto; font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.92em; white-space: pre; }
+.tk-block-table { width: 100%; border-collapse: collapse; margin: 0 0 0.6em; display: table; overflow-x: auto; }
+.tk-block-table td, .tk-block-table th { border: 1px solid var(--border); padding: 4px 8px; }
+.tk-block-link { color: var(--primary); text-decoration: underline; }
+.tk-block-inline-code { background: color-mix(in oklab, var(--muted) 70%, transparent); border-radius: 4px; padding: 1px 4px; font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.92em; }
+.tk-block-source { margin: 0 0 0.6em; }
+.tk-block-source > summary { cursor: default; list-style: none; }
+.tk-block-source > summary::-webkit-details-marker { display: none; }
+.tk-block-source-hint { display: block; font-size: 11px; color: var(--muted-foreground); }
+.tk-block-source pre { white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.92em; margin: 2px 0 0; }
+.tk-block-source textarea { width: 100%; min-height: 80px; margin-top: 6px; border: 1px solid var(--border); border-radius: 8px; background: var(--background); padding: 8px; font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.92em; }
+.tk-block-editor img { max-width: 100%; height: auto; }

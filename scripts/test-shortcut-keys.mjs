@@ -20,7 +20,8 @@ try {
   // 构造假节点：closest 命中 kinds 里任意一个子串即视为匹配（够了，测的是判定逻辑）
   const node = (kinds) => ({ closest: (selector) => (kinds.some((kind) => selector.includes(kind)) ? { nodeName: 'DIV' } : null) });
   const INPUT = node(['input']);
-  const RICH = node(['[contenteditable="true" i]', '.vditor']);
+  // 富文本命中面：contenteditable 与块编辑器容器属性（旧实现这里是 .vditor，Vditor 已摘）
+  const RICH = node(['[contenteditable="true" i]', '[data-block-editor="on"]']);
 
   const comboOf = (id) => SHORTCUTS.find((item) => item.id === id).combos[0];
   const ids = SHORTCUTS.map((item) => item.id);
@@ -82,6 +83,10 @@ try {
   assert.ok(isRichTextTarget(RICH), '富文本目标应被识别');
   assert.ok(!isRichTextTarget(INPUT), '普通 input 不算富文本');
   assert.ok(!isRichTextTarget(null));
+  // 块编辑器（票 05 §7）：抑制规则按容器属性判定，换引擎不用改键位表
+  // 块编辑器（票 05 §7）：抑制规则按容器属性判定，换底座不用回来改键位表
+  assert.ok(isRichTextTarget(node(['[data-block-editor="on"]'])), '块编辑器内部必须让 Esc 留给编辑器');
+  assert.ok(!isRichTextTarget(node(['textarea'])), '普通 textarea 不算富文本，Esc 照常退页');
 
   const registered = new Set(['save', 'close-detail', 'new-todo', 'search', 'toggle-sidebar', 'help']);
   const ctx = (over = {}) => ({ isMac: false, blockingOverlay: false, registered, ...over });

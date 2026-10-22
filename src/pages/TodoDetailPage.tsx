@@ -23,7 +23,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { BranchSelect } from "@/components/board/BranchSelect";
 import { DateRangePicker, type DateRangeValue } from "@/components/board/DateRangePicker";
-import { MarkdownEditor } from "@/components/todo/MarkdownEditor";
+import { BlockEditor } from "@/components/todo/BlockEditor";
 import { flushPersistence, useAppStore } from "@/lib/store";
 import {
   gitCreateBranchFrom,
@@ -428,9 +428,12 @@ function TodoDetailForm() {
           />
           {errors.title && <p className="text-xs text-destructive">{errors.title.message}</p>}
           <div className="min-h-0 flex-1">
-            <MarkdownEditor
+            <BlockEditor
               value={watch("note")}
-              todoId={editing?.id ?? newTodoId.current}
+              /* 附件归属：新建待办用预生成 id，保证贴图能落到自己的目录（ADR-0002） */
+              owner={{ kind: "todo", id: editing?.id ?? newTodoId.current }}
+              label="任务备注"
+              placeholder="直接输入任务备注，Markdown 格式即时显示…"
               disabled={isSubmitting}
               onProcessingChange={handleDescriptionProcessing}
               onChange={(md) => setValue("note", md, { shouldDirty: true })}

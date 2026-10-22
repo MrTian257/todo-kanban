@@ -178,14 +178,19 @@ function closest(target: EventTarget | null, selector: string): Element | null {
 }
 
 /**
- * 是否位于富文本编辑器内（Vditor 的 contenteditable 与它自己的工具栏）。
- * 这类位置必须让 Esc 留给编辑器本身。
+ * 是否位于富文本编辑器内 —— 这类位置必须让 Esc 留给编辑器本身（ADR-0018）。
+ *
+ * **按容器属性判定，不按具体引擎的类名判定**：块编辑器根节点挂 `data-block-editor="on"`，
+ * 这样换底座（ADR-0003 的退路：Lexical 被否就退自研 contenteditable）时不必再回来改键位表。
+ * 旧实现写的是 `.vditor, .vditor-toolbar`，Vditor 一摘就永久失配 —— 表现是「在编辑器里按 Esc
+ * 直接把详情页关了」，而票 05 §7 要求 Esc 的优先级是 关 slash 菜单 → 关块菜单 → 失焦出编辑器。
+ * contenteditable 那三条保留：它们与引擎无关，且覆盖浏览器原生可编辑区。
  */
 export function isRichTextTarget(target: EventTarget | null): boolean {
   return (
     closest(
       target,
-      '[contenteditable="true" i], [contenteditable="plaintext-only" i], [contenteditable="" i], .vditor, .vditor-toolbar',
+      '[data-block-editor="on"], [data-block-editor="on"] *, [contenteditable="true" i], [contenteditable="plaintext-only" i], [contenteditable="" i]',
     ) !== null
   );
 }

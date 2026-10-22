@@ -10,7 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
+import { BlockEditor } from "@/components/todo/BlockEditor";
 import { useEditingGuard } from "@/lib/editingGuard";
 import { normalizeResourceTags } from "@/lib/normalize";
 import { frontSortOrder } from "@/lib/manualOrder";
@@ -209,13 +209,14 @@ function ResourceEditorForm({ resourceId }: { resourceId: string }) {
           />
           {fieldErrors.title && <p role="alert" className="px-7 pb-2 text-xs text-destructive">{fieldErrors.title}</p>}
           <div className="min-h-0 flex-1">
-            <Textarea
-              id="resource-note"
-              aria-label="资料笔记"
-              placeholder="记录使用场景、关键结论或注意事项（支持 Markdown）…"
-              className="h-full min-h-0 resize-none rounded-none border-0 bg-transparent px-7 pb-5 font-mono text-sm shadow-none focus-visible:ring-0"
+            {/* 资料正文与待办正文共用同一个块编辑器；附件归属键换成 resource（ADR-0002），
+                所以资料备注从此可以贴图，且保存时引用回写 attachment://<resourceId>/<file>。 */}
+            <BlockEditor
               value={form.note}
-              onChange={(event) => setField("note", event.target.value)}
+              owner={{ kind: "resource", id: resource?.id ?? newId() }}
+              label="资料备注"
+              placeholder="记录使用场景、关键结论或注意事项…"
+              onChange={(markdown) => setField("note", markdown)}
             />
           </div>
         </div>
