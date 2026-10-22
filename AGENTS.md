@@ -46,7 +46,7 @@ todo-kanban/
 | Tauri 命令 | 业务函数在 `core/svc/` → 薄壳 `src-tauri/src/commands.rs` → 注册 `src-tauri/src/lib.rs` → 前端封装 `src/lib/git.ts` |
 | Git 报告（日报/周报/月报） | 平台识别与分发 `core/src/svc/forge.rs`（GitLab/GitHub 按域名自动识别，ADR-016）、各平台实现 `svc/gitlab.rs` + `svc/github.rs`；聚合在 `core/src/svc/git_report.rs`（命令 `git_report_fetch`，纯查询不写库）；前端 `src/pages/GitReportPage.tsx` + `src/lib/gitReport.ts` + `src/lib/gitReportPeriod.ts`（周期口径有 node 测试）；开发人员归类存 workflow_state 的 `gitReportDevs`（页面内「开发人员归类」对话框编辑，见 ADR-015） |
 | Rust 业务逻辑 | `src-tauri/core/src/`（svc/ 编排、db/ 存储、tool/ git CLI） |
-| 数据版本升级 | `src-tauri/config/src/lib.rs` + `upgrade/` + schema.rs/row.rs/db 三处（ADR-011） |
+| 数据版本升级 | `src-tauri/config/src/lib.rs` + `upgrade/` + schema.rs/row.rs/db 三处（ADR-011）。当前 **16**（v16 = 附件归属泛化 ADR-0002，已实施）|
 | MCP 工具（stdio + HTTP 共用） | `src-tauri/core/src/mcp/bridge.rs` + `protocol.rs` + `tokens.rs` + `audit.rs`；HTTP 服务与命令 `src-tauri/src/mcp_http.rs`；**对外行为变了要同步 `docs/02-development/mcp-access.md`**；见 ADR-023 |
 | 自定义字段 / 自动脚本 | 定义与规则 `core/src/svc/workflow.rs`（fieldDefs / automations）+ `svc/fields.rs` + `svc/automation.rs`；值 `todos.custom_fields`（v11）；执行点 `db/mod.rs::save_state_inner`；前端词表 `src/lib/customFields.ts` + `src/components/workflow/*Panel.tsx`；UI 入口为设置页 `/settings/fields`（`src/pages/FieldSettingsPage.tsx`），存量任务补写走 `automation_backfill` |
 | 主题/皮肤 | `src/lib/theme.ts` + `src/index.css` |
@@ -98,7 +98,7 @@ node scripts/test-grokbot.mjs      # GrokBot 模块包（表情点集/形变纯�
 node scripts/test-shortcut-keys.mjs # 快捷键（组合键匹配/平台化展示/浮层与富文本抑制）
 CDP_PORT=9222 node scripts/verify-dnd.mjs  # 浏览器：看板拖拽 8 场景（需 dev server + 远程调试端口）
 CDP_PORT=9222 node scripts/verify-shortcuts.mjs  # 浏览器：全局快捷键 8 项（Ctrl+S/N、Ctrl+/、搜索、侧栏、浮层抑制）
-npm run test:logic            # 前端纯逻辑 11 条断言（改 lib/ 纯函数后必跑）
+npm run test:logic            # 前端纯逻辑 15 条断言（改 lib/ 纯函数后必跑）
 bash build.sh               # 发布打包 → ./release/
 ```
 
@@ -109,13 +109,13 @@ bash build.sh               # 发布打包 → ./release/
 - 启动门禁：git ≥2.20 检测（不足中文提示不阻塞）；`db_check_version` 不兼容时全屏 `VersionBlockedPage`。
 - 浏览器预览走 `sessionStorage` + demoState（`src/lib/storage.ts` 的 `isTauri()` 双轨）。
 - SQLite 列序是硬契约（schema.rs 头部注释）：改 schema 必须 schema.rs + row.rs + db/mod.rs 三处同步。
-- 附件协议：note 存 `attachment://<todoId>/<file>` 短引用，展示时换自定义协议（`src/lib/attachments.ts`）；决策文件 `docs/decisions/ADR-013-attachment-protocol.md` 已回填。**规划中**：归属键泛化为 `(owner_kind, owner_id)` 以支持资料备注贴图，届时引用里的 `<todoId>` 变为 `<ownerId>`（ADR-0002，未实施）。
+- 附件协议：note 存 `attachment://<ownerId>/<file>` 短引用（v16 起 ownerId 可为待办或资料 id），展示时换自定义协议（`src/lib/attachments.ts`）；决策文件 `docs/decisions/ADR-013-attachment-protocol.md` 已回填。**已实施（ADR-0002 / 数据版本 16）**：归属键泛化为 `(owner_kind, owner_id)`，关系表 `todo_attachments` → `note_attachments`。
 
 ## Agent skills
 
 ### Issue tracker
 
-GitHub Issues（仓库 `MrTian257/todo-kanban`，读写一律走 `gh` CLI）。See `docs/agents/issue-tracker.md`.
+**本地 Markdown**（用户 2026-10-22 决定，替代 GitHub Issues）：地图与票放 `.scratch/<effort>/`，`Status:` / `Blocked by:` / `Assignees:` 行承载状态；长期结论进 `docs/`。See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 

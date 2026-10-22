@@ -178,8 +178,11 @@ git_repo_cache（v3）: repo_path PK, repo_exists, is_repo, current_branch,
 | v10 → v11 | todos 补 `custom_fields`（幂等保护）；存量行为空数组；字段定义与自动脚本存于 workflow_state 配置 |
 | v11 → v12 | resources 补 `sort_order`（幂等保护，缺表时跳过）；存量按插入顺序**倒序**回填（新在前），迁移后资料库排序与迁移前一致；资料库卡片可拖拽排序 |
 | v12 → v13 | projects 补 `sort_order`（幂等保护，缺表时跳过）；存量按插入顺序回填（与迁移前列表顺序一致）；项目卡片可拖拽排序，新建项目排在最前 |
+| v13 → v14 | 番茄专注：建 `pomodoro_sessions` 表（SQL 收在 `svc/pomodoro.rs`，不动 `row.rs`）；无存量数据迁移（ADR-017） |
+| v14 → v15 | MCP 审计留痕：建 `mcp_audit` 表（谁在何时用什么 Token 调了哪个工具，**刻意不存请求正文**）；`change_history.actor` 升级为 `mcp:<AI 名>`（ADR-023） |
+| v15 → v16 | **附件归属泛化（ADR-0002）**：`todo_attachments` → `note_attachments`，归属键由单一 `todoId` 扩为 `(owner_kind, owner_id)`，`owner_kind` 有 CHECK 白名单 `todo`/`resource`；迁移只 `INSERT OR IGNORE … SELECT 'todo', todo_id, …` 搬关系行 + `DROP` 旧表 + 重建索引，**不碰任何备注正文、不碰任何附件文件**（正文零迁移）。缺任一表整步跳过（幂等）。`MIN_SUPPORTED_DATA_VERSION` 保持 1 |
 
-**版本判定与升级（ADR-011）**：数据版本 = `PRAGMA user_version`；软件内置 `CURRENT_DATA_VERSION`（当前 15）与 `MIN_SUPPORTED_VERSION`（=1），编译打包进 `todo-kanban-upgrade` 分包。启动时任一入口（app `db::open_and_init` / MCP `mcp::authorize` / `db_check_version`）判定：数据版本高于软件支持 → **拒绝**（提示升级软件）；低于最低支持 → **拒绝**（提示装中间版本）；在范围内且低于当前 → **兼容升级**：`wal_checkpoint(TRUNCATE)` 合并 WAL 后**硬备份 db 到程序运行目录 `backup/`**（`<stem>-v<from>-<时间戳>.db`，保留最近 10 份），再**事务化逐级迁移**（任一失败回滚、user_version 不变）。
+**版本判定与升级（ADR-011）**：数据版本 = `PRAGMA user_version`；软件内置 `CURRENT_DATA_VERSION`（当前 16）与 `MIN_SUPPORTED_VERSION`（=1），编译打包进 `todo-kanban-upgrade` 分包。启动时任一入口（app `db::open_and_init` / MCP `mcp::authorize` / `db_check_version`）判定：数据版本高于软件支持 → **拒绝**（提示升级软件）；低于最低支持 → **拒绝**（提示装中间版本）；在范围内且低于当前 → **兼容升级**：`wal_checkpoint(TRUNCATE)` 合并 WAL 后**硬备份 db 到程序运行目录 `backup/`**（`<stem>-v<from>-<时间戳>.db`，保留最近 10 份），再**事务化逐级迁移**（任一失败回滚、user_version 不变）。
 
 ### 4.3 存取语义（`db/mod.rs` + `svc/db_cmds.rs`）
 

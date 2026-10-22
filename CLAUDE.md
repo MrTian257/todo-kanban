@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `docs/软件设计文档.md` — 整合视图（产品/架构/数据/接口/UI/流程）
 - `docs/02-development/directory-map.md` — 「去哪里改」文件地图（部分文件名仍为 todo-git 旧称，如 TodoCard.tsx、todo-git-core 已更名/移除）
 - `docs/decisions/` — ADR-001 ~ ADR-023 架构决策（文件名自描述：hash-router / system-cli-git-curl / sqlite-storage / db-config-data-source / workspace-split / global-seq-and-commit-dedupe / mcp-handwritten-protocol / single-store-write-chain / swimlane-board / swimlane-order-persistence / data-version-upgrade / fixed-db-path / **attachment-protocol（2026-10-22 回填，此前只有引用没有文件）** / custom-fields-and-automations / git-report / github-and-gitlab-forge / pomodoro-and-pet / keyboard-shortcuts / lan-sharing / board-lane-width-and-density / history-order-skip-and-report-scope / mcp-readonly-from-settings / mcp-http-tokens-and-audit）。**注意 ADR-007 的 env 只读决策已被 ADR-022 取代**。
-- **新 ADR 写 `docs/adr/`**（四位编号、从 0001 起，约定见 `docs/agents/domain.md`）：现有 `docs/adr/0001-note-markdown-authority-blocks-as-view.md`——备注（`note`）仍是唯一存储的 Markdown 字符串、块只是编辑期视图（备注侧零 schema 变更 / 迁移期零回写 / 块 id 易失 / 未碰块逐字保留 / 换行不做形式统一）；`docs/adr/0002-attachment-owner-generalization.md`——附件归属键泛化为 `(owner_kind, owner_id)`，**这是计划中唯一的数据版本动作（15 → 16，只搬附件关系表）**；`docs/adr/0003-block-editor-engine-lexical-with-self-owned-remark-layer.md`——块编辑器底座取 Lexical，但 **Markdown 源文层自研在 remark/micromark 上、不采用 `@lexical/mdast` 作地基**（逐字保留靠 mdast `position.offset`），编辑期与只读侧共用同一套 remark 插件配置，Vditor 整体移出产品。`docs/adr/0004-no-block-level-three-way-merge.md`——块编辑器**不做块级三方合并**（远端改动仍按整串处理，两个出口不变），并给资料编辑页补齐与待办同等的外部改动检测。四条均**已定稿未实施**；规划过程与未决票在 `.scratch/block-editor/`；术语表在仓库根 `GLOSSARY.md`
+- **新 ADR 写 `docs/adr/`**（四位编号、从 0001 起，约定见 `docs/agents/domain.md`）：现有 `docs/adr/0001-note-markdown-authority-blocks-as-view.md`——备注（`note`）仍是唯一存储的 Markdown 字符串、块只是编辑期视图（备注侧零 schema 变更 / 迁移期零回写 / 块 id 易失 / 未碰块逐字保留 / 换行不做形式统一）；`docs/adr/0002-attachment-owner-generalization.md`——附件归属键泛化为 `(owner_kind, owner_id)`，**数据版本 15 → 16，只搬附件关系表、正文与文件零迁移**（✅ **已实施**，13 个文件；`MIN_SUPPORTED` 保持 1）；`docs/adr/0003-block-editor-engine-lexical-with-self-owned-remark-layer.md`——块编辑器底座取 Lexical，但 **Markdown 源文层自研在 remark/micromark 上、不采用 `@lexical/mdast` 作地基**（逐字保留靠 mdast `position.offset`），编辑期与只读侧共用同一套 remark 插件配置，Vditor 整体移出产品。`docs/adr/0004-no-block-level-three-way-merge.md`——块编辑器**不做块级三方合并**（远端改动仍按整串处理，两个出口不变），并给资料编辑页补齐与待办同等的外部改动检测。实施状态逐条不同：**0002 已实施**（v16），0001 / 0003 / 0004 已定稿未实施（源文层与块文档桥已落，见下）；规划过程与已解的 12 张票在 `.scratch/block-editor/`（**tracker 已改为本地 markdown**，约定见 `docs/agents/issue-tracker.md`）；术语表在仓库根 `GLOSSARY.md`
 - `docs/02-development/mcp-access.md` — **MCP 接入指南**（给使用者/AI 看的 how-to：stdio 与 HTTP 配置、多 AI Token、只读取严、审计日志、常见问题）。改 MCP 对外行为（工具、鉴权、只读、审计、传输）时**必须同步它**。
 - `docs/README.md` 的文档地图已漂移（列出多份不存在的文件），只作背景参考
 
@@ -49,7 +49,7 @@ cargo test -p todo-kanban-core   # 核心库单测（db / git 解析 / 缓存 / 
 cargo test -p mcp-server         # MCP 单测（握手 / 工具清单 / 映射 / 只读门禁）
 ```
 
-前端纯逻辑无测试框架，用 esbuild 打包后跑 node 断言，**十一条已全部并入 `npm run test:logic`**（改任一纯逻辑文件后跑这一条）：`test-board-order.mjs`（泳道排序）、`test-day-clock.mjs`（跨天刷新）、`test-state-optimizations.mjs`（保存期编辑保护/远端合并/预热）、`test-list-performance.mjs`（列表统计与搜索）、`test-custom-fields.mjs`（自定义字段词表）、`test-manual-order.mjs`（手工排序）、`test-git-report-period.mjs`（报告周期口径）、`test-pomodoro.mjs`（番茄阶段流转与统计）、`test-pet-state.mjs`（宠物心情优先级）、`test-grokbot.mjs`（宠物模块包数据自洽与形变纯函数）、`test-shortcut-keys.mjs`（快捷键匹配与浮层抑制）。
+前端纯逻辑无测试框架，用 esbuild 打包后跑 node 断言，**十五条已全部并入 `npm run test:logic`**（改任一纯逻辑文件后跑这一条）。块编辑器新增四条：`test-block-order.mjs`（顶层块重排纯函数，含「原地放开不改序」）、`test-markdown-blocks.mjs`（**未碰块逐字节恒等** 40+ 例，含 CRLF/Setext/四反引号/中文手写序号/伪列表/段内夹图/裸 attachment 引用/base64/怪源文零丢弃）、`test-markdown-plugins.mjs`（编辑期与只读侧共用同一份 remark 配置、gfm 实例同一性）、`test-block-document.mjs`（**碰过块逐语义恒等**：mdast ↔ Lexical 双向 17 例 + 脚注与行内 HTML 的明写降级 + 围栏按内部加长 + 表格列数）。原有十一条：`test-board-order.mjs`（泳道排序）、`test-day-clock.mjs`（跨天刷新）、`test-state-optimizations.mjs`（保存期编辑保护/远端合并/预热）、`test-list-performance.mjs`（列表统计与搜索）、`test-custom-fields.mjs`（自定义字段词表）、`test-manual-order.mjs`（手工排序）、`test-git-report-period.mjs`（报告周期口径）、`test-pomodoro.mjs`（番茄阶段流转与统计）、`test-pet-state.mjs`（宠物心情优先级）、`test-grokbot.mjs`（宠物模块包数据自洽与形变纯函数）、`test-shortcut-keys.mjs`（快捷键匹配与浮层抑制）。
 
 需要真实浏览器的验证脚本（CDP，先起 `npm run dev` 并用 `--remote-debugging-port` 打开页面，端口用 `CDP_PORT` 覆盖，默认 9222）：`node scripts/verify-shortcuts.mjs`（全局快捷键 8 项，含 Ctrl+S 保存——**改 shortcuts.ts 的 preventDefault 顺序后必跑**，纯逻辑测试抓不到这类失效）、
 `node scripts/verify-dnd.mjs`（跨泳道/空白区落点/泳道内重排/按钮不误触/resize 后落点/原地放开不改顺序/紧凑行视图）、`verify-project-steps.mjs`（分支规则步骤编辑与回显）、`verify-daterange.mjs`（日期范围两击选择）、`probe-daterange.mjs`。
@@ -73,7 +73,7 @@ mcp-server（独立 stdio 进程）──┐
 
 ### 数据版本升级框架（ADR-011）
 
-- 版本常量集中在 `src-tauri/config/src/lib.rs`：`CURRENT_DATA_VERSION = 15`、`MIN_SUPPORTED_DATA_VERSION`、`MIGRATION_STEPS`（v1→v15 逐级）、`CHANGELOG`。
+- 版本常量集中在 `src-tauri/config/src/lib.rs`：`CURRENT_DATA_VERSION = 16`、`MIN_SUPPORTED_DATA_VERSION`（=1）、`MIGRATION_STEPS`（v1→v16 逐级）、`CHANGELOG`。
 - `todo-kanban-upgrade::upgrade::ensure()` 编排：版本判定 →（兼容升级时）硬备份到运行目录 `backup/` → 逐级迁移 → 报告。语义：v=0（新库）不备份直接迁到最新；TooNew / TooOld 拒绝；调用方负责开连接 + 幂等建表。
 - 前端启动门禁：`db_check_version` 命令 → `src/lib/version.ts` → 不兼容时全屏 `VersionBlockedPage`（`src/components/version/`），升级成功 toast 提示。
 - **新增数据版本时**：提升 config 常量 → upgrade 写迁移 → 更新 MIGRATION_STEPS / CHANGELOG → 前端 `PREVIEW_REPORT` 同步。schema 变更需同步 `schema.rs`（DDL）、`row.rs`（行映射）、`db/mod.rs`（SELECT/INSERT）三处——**SQLite 列序是硬契约**（见 schema.rs 头部注释）。
@@ -111,9 +111,9 @@ SQLite WAL，数据源固定为**程序运行目录** `todo-kanban.db`（ADR-012
 
 Git 报告（日报/周报/月报，ADR-015/ADR-016）走 GitLab / GitHub 官方 API，不读本地 git：平台由 `svc/forge.rs` 按域名识别（未知域名 404 兜底探测），`svc/git_report.rs` 用 `forge::report_window` 拉窗口内提交（GitLab：`all=true&since&until&with_stats=true` 全分支且自带行数；GitHub：默认分支、列表无行数，20 页 / 30s 预算，超限返回部分结果 + truncated），按 `Workflow.gitReportDevs` 的别名（大小写不敏感，含 `@` 匹配邮箱否则姓名，支持 `*` 通配）归类，合并提交按 `parent_ids.len() > 1` 判定并默认排除；「按模块分布」是可选开关；详情补全（GitLab 的文件路径 / GitHub 的行数+文件路径）统一走 `fetch_details`：300 条 / 4 路并发 / 20s 预算，超限标 `statsPartial`（界面「≈」）。类型规则同样按项目自定义（`Workflow.gitReportKinds`，空 = 内置 `default_kind_rules()`）：conventional 前缀优先，其次按规则顺序扫关键词（ASCII 按词边界、中文按子串），未命中落 `other`；三处比较都**忽略大小写与首尾空白**（`same_ignore_case`，前端 `sameKindKey` 同语义）。成员维度另带 `byDay`/`byHour` 分桶（日报按小时、周报/月报按天出每人一张图），月报额外渲染日历热力图（`monthGrid` + `heatLevel`）。命令 `git_report_fetch` 是纯查询：不写库、不进 `db_save_state` 写链。
 
-### 附件（图片）协议（v8，ADR-013）
+### 附件（图片）协议（v8 建立，v16 泛化归属；ADR-013 + ADR-0002）
 
-note 持久化只存 `attachment://<todoId>/<file>` 短引用；展示/编辑时前缀换为自定义协议 URL（Windows `http://attachment.localhost/`，其余 `attachment://localhost/`），由 app 壳注册的 attachment 协议按相对路径直接供图（serve 不查库）。文件落 `<db 目录>/attachments/<todoId>/`，单张上限 5MB；save_state 对 note 引用补链（INSERT OR IGNORE），仅待办被差集删除时删关系、文件移 `attachments/trash/`。历史内嵌 data URL 图片继续兼容，不强制迁移。
+note 持久化只存 `attachment://<ownerId>/<file>` 短引用（`ownerId` 自 v16 起可以是待办 id **或资料 id**，引用形态未变）；展示/编辑时前缀换为自定义协议 URL（Windows `http://attachment.localhost/`，其余 `attachment://localhost/`），由 app 壳注册的 attachment 协议按相对路径直接供图（serve 不查库）。文件落 `<db 目录>/attachments/<ownerId>/`，单张上限 5MB；`save_state_inner` 对 note 引用补链（`link_note_refs` 按 `owner_kind` 各调一次，todos 与 resources 共用同一份实现 ⇒ UI 与 MCP 两种传输零分叉，ADR-023），关系表 `note_attachments(owner_kind, owner_id, attachment_id, …)` 的 `owner_kind` 有 CHECK 白名单 `todo`/`resource`；删除待办或资料时各按自己的 kind 收关系、文件移 `attachments/trash/`（资料的 8 秒撤销宽限期内不动关系也不动文件）。GC 判据是两个 kind 各自对 `todos`/`resources` 收敛，**不许把资料关系按待办表判成悬空**。历史内嵌 data URL 图片继续兼容、不强制迁移，治理入口仍是待办专属。`valid_owner_id` 的白名单是路径安全边界，不因换宿主放宽。
 
 ### MCP：一份调度层，两种传输（`core/src/mcp/` + `src-tauri/mcp-server/` + `src-tauri/src/mcp_http.rs`）
 
