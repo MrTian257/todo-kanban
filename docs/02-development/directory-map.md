@@ -27,11 +27,44 @@ todo-git/
 | `pages/` | **6 个路由页面**：FocusPage / TodoListPage / ProjectListPage / BoardPage / **TodoDetailPage**（新建+编辑一体）/ SettingsPage |
 | `components/layout/SidebarLayout.tsx` | 全局侧边导航壳（shadcn sidebar） |
 | `components/board/SwimlaneBoard.tsx` | 泳道看板核心（**列=泳道、行=待办**；dnd-kit 跨泳道拖拽 = swimlaneId+status 联动落库；含「管理泳道」对话框） |
-| `components/board/TodoCard.tsx` | 看板卡片（开始/完成/重开/归档/切分支/打开目录/同步提交/补录/手动加提交/标记复制） |
+| `components/board/TodoRow.tsx` | 看板行/卡片（开始/完成/重开/归档/切分支/打开目录/同步提交/按时间窗补录/手动加提交/移动到泳道；展开区渲染只读备注）——旧名 `TodoCard.tsx` 已不存在 |
 | `components/board/BranchSelect.tsx` | 分支选择（Popover + 搜索 + 生产置顶 + 当前标注） |
 | `components/board/DateRangePicker.tsx` | 计划日期范围（Calendar mode=range + 今天/明天/下周/清空，zhCN） |
-| `components/todo/MarkdownEditor.tsx` | WYSIWYG Markdown 备注编辑器（contenteditable；markdown-it + turndown；图片粘贴→canvas 压缩→base64） |
-| `components/todo/MarkdownView.tsx` | 备注只读渲染（react-markdown + remark-gfm） |
+| `components/todo/MarkdownEditor.tsx` | 备注编辑器（**Vditor 4.0.0 IR 即时渲染单栏**，非 markdown-it+turndown；图片→canvas 压缩→**附件落盘**→`attachment://` 引用，不再内嵌 base64） |
+| `components/todo/MarkdownView.tsx` | 备注只读渲染入口（按内容有无 `# 目录结构与文件地图
+
+> 来源：todo-git directory-map（已核实：6 页面、normalize/completeTodo、proc.rs、TodoFormDialog 已移除）。
+
+## 1. 顶层
+
+```
+todo-git/
+├── src/                  # React 前端（pages/components/lib）
+├── src-tauri/            # Rust 后端（workspace 根：薄壳 crate + core 纯逻辑库 + mcp-server）
+├── docs/                 # 本文档目录（设计 + 开发 + 重构）
+├── public/               # 静态资源
+├── dist/                 # vite build 产物（gitignored）
+├── package.json / tsconfig*.json / vite.config.ts / components.json
+├── index.html / app-icon.png
+├── README.md             # 特性总览（面向使用者）
+└── AGENTS.md             # 项目知识库（agent 约定）
+```
+
+## 2. 前端文件地图（src/）
+
+| 文件/目录 | 职责 |
+| --- | --- |
+| `main.tsx` | 挂载入口（ReactDOM.createRoot） |
+| `App.tsx` | 路由根：HashRouter + ThemeProvider + TooltipProvider + Toaster + SidebarLayout；useEffect 集中 initAppStore / startExternalSync / startGitCacheWarm / focus 同步；`/` 重定向（无项目→/projects） |
+| `index.css` | Tailwind v4 + radix-nova 主题变量 + `[data-theme]` 皮肤变量覆盖 + 滚动条全局样式 |
+| `pages/` | **6 个路由页面**：FocusPage / TodoListPage / ProjectListPage / BoardPage / **TodoDetailPage**（新建+编辑一体）/ SettingsPage |
+| `components/layout/SidebarLayout.tsx` | 全局侧边导航壳（shadcn sidebar） |
+| `components/board/SwimlaneBoard.tsx` | 泳道看板核心（**列=泳道、行=待办**；dnd-kit 跨泳道拖拽 = swimlaneId+status 联动落库；含「管理泳道」对话框） |
+| `components/board/TodoRow.tsx` | 看板行/卡片（开始/完成/重开/归档/切分支/打开目录/同步提交/按时间窗补录/手动加提交/移动到泳道；展开区渲染只读备注）——旧名 `TodoCard.tsx` 已不存在 |
+| `components/board/BranchSelect.tsx` | 分支选择（Popover + 搜索 + 生产置顶 + 当前标注） |
+| `components/board/DateRangePicker.tsx` | 计划日期范围（Calendar mode=range + 今天/明天/下周/清空，zhCN） |
+| `components/todo/MarkdownEditor.tsx` | 备注编辑器（**Vditor 4.0.0 IR 即时渲染单栏**，非 markdown-it+turndown；图片→canvas 压缩→**附件落盘**→`attachment://` 引用，不再内嵌 base64） |
+/代码围栏选 4 个懒加载渲染器之一）；插件在 `MarkdownMath.ts` / `MarkdownCode.ts`，实现在 `MarkdownRenderer.tsx`（react-markdown + remark-gfm + rehype-raw/sanitize） |
 | `components/todo/TodoActions.tsx` | 列表行操作区（与卡片共享的动作） |
 | `components/todo/QuadrantGroupList.tsx` / `TodoRow.tsx` | 列表视图（按象限分组） |
 | `components/project/ProjectFormDialog.tsx` | 项目表单（含 Token、生产分支、分支规则可视化编辑器） |

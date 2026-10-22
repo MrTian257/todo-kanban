@@ -56,12 +56,11 @@
 
 ## 5. Markdown 备注组件（`todo/MarkdownEditor` / `todo/MarkdownView`）
 
-- **编辑器**：contentEditable 所见即所得（底层始终是 Markdown 文本，随 note 存 SQLite）
-  - 渲染：markdown-it（`html:false` 安全边界、`breaks:true`、`linkify`）；导出：turndown（HTML→Markdown，atx 标题 / fenced 代码块；`<br>` → 尾随两空格硬换行，与 breaks 往返保真）
-  - 工具栏：加粗/斜体/标题(H2/H3)/列表/引用/行内代码/链接/图片
-  - **图片粘贴（Ctrl+V）或图片按钮**：canvas 降采样压缩（最长边 1280px；PNG <300KB 原样保留透明；JPEG 质量 0.82）→ base64 data URL 内嵌进 Markdown
-- **查看器**：MarkdownView（卡片/行内备注渲染，react-markdown + remark-gfm）
-- 注意：图片内嵌会放大 note 体积（SQLite 行膨胀），重构时可考虑改引用外部文件
+- **编辑器（现状）**：`MarkdownEditor.tsx` = **Vditor 4.0.0 的 IR 即时渲染单栏模式**——同一正文区域内 Markdown 标记随光标呈现，无源文/分栏/预览切换；资产由 `scripts/sync-vditor-assets.mjs` 离线 vendored 到 `public/vendor/vditor/`（运行期零网络）。工具栏：undo/redo、标题、加粗、斜体、删除线、三类列表、缩进、引用、行内代码、代码、链接、图片、表格、分隔线。
+  - 历史：更早一版确实是 contentEditable + markdown-it（渲染）+ turndown（导出），**该描述已过时**；`markdown-it` / `turndown` 现在是零 import 的死依赖。
+  - **图片**：粘贴 / 选择 / 拖入 → canvas 压缩（PNG/JPEG 最长边 1280px；GIF/WebP 原样保留动画与透明）→ **落盘为附件** → 插入自定义协议展示 URL → 保存时回写 `attachment://<todoId>/<file>`。**不再内嵌 base64**（旧版行膨胀问题已由 v8 附件协议解决，见 ADR-013）。
+- **查看器**：`MarkdownView.tsx`（看板卡片 / 资料详情弹窗只读渲染，react-markdown + remark-gfm + 按需 KaTeX 与高亮；`html` 经 `rehype-sanitize` 清洗）
+- **规划中**：三个宿主（待办 / 资料 / 任务模板）统一为 Notion 式**块编辑器**——见 `docs/adr/0001`（备注仍是唯一 Markdown 存储、块是视图）、`docs/adr/0003`（Lexical 底座 + 自研 remark 源文层）与 `docs/01-design/block-editor-*.md`。
 
 ## 6. 表单
 
