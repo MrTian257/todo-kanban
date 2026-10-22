@@ -18,7 +18,7 @@ Accepted（2026-10-22 定稿，**仅决策、未实施**；本条锁的是数据
 
 | 消费方 | 位置 |
 | --- | --- |
-| SQLite 列 | `src-tauri/core/src/models.rs` 三处 `pub note: String`（待办 / 资料 / 模板） |
+| SQLite 列 | 只有 2 个 note 列：`todos.note`（`schema.rs:34`）、`resources.note`（`schema.rs:109`）。另有两个 note 藏在 JSON 里、**不是** SQLite 列：任务模板 note（`svc/workflow.rs:38`，整份 JSON 落 `workflow_state.data`）、分支步骤 note（`models.rs:102`，落 `projects.branch_rule`）；后者不是 Markdown、永不进块编辑器 |
 | MCP 对外契约 | `core/src/mcp/bridge.rs` + `protocol.rs` 的 `db_load_state` / `db_save_state`（改形必须同步 `docs/02-development/mcp-access.md`） |
 | 局域网访客 | `src-tauri/src/lan_guest.html`（独立单文件）+ `core/src/svc/lan.rs` 过滤 / 脱敏 / 合并 |
 | 看板只读预览 | `src/components/todo/MarkdownView.tsx` → `TodoRow.tsx`、`ResourceDetailDialog.tsx` |
@@ -53,15 +53,16 @@ Accepted（2026-10-22 定稿，**仅决策、未实施**；本条锁的是数据
 ### 5. 块类型是封闭集（12 类）
 
 段落 · 标题（1–6） · 列表（无序 / 有序含 start / 任务，整棵列表树为一个块） · 引用 · 表格 · 围栏代码 · 缩进代码（未碰原样，碰过归一为围栏——唯一允许的形态转换） · 块级公式 · 分隔线 · 图片块 · 链接定义与脚注定义（固定文档尾部、不可拖拽重排） · 透明块（未知方言，原样进出）。
-清单外一律落透明块；跨对象关系继续走「关联资料 / 依赖 / 子任务」，不在正文里造第二套引用。
+实测本库**缩进代码 0 条存量**（`release/todo-kanban.db` 只读采样，行首 ≥4 空白命中 0），所以这条形态转换在票 06 的断言清单里按低优先级记。清单外一律落透明块；跨对象关系继续走「关联资料 / 依赖 / 子任务」，不在正文里造第二套引用。
 
 ### 6. 拖拽只在顶层块序列上发生
 
-块之间永远是兄弟、永不做父子：唯一合法落点是顶层间隙，不存在"拖进列表项 / 表格单元格 / 代码块 / 引用内部"。原地放开不改顺序、不置 dirty。块内换行统一序列化为行尾两个空格的硬换行；未碰块保留原写法且不转换。
+块之间永远是兄弟、永不做父子：唯一合法落点是顶层间隙，不存在"拖进列表项 / 表格单元格 / 代码块 / 引用内部"。原地放开不改顺序、不置 dirty。
+**换行不做形式统一**：未碰的块逐字保留，碰过的块也**保留原有换行字符**——软换行（段内单个换行）不升级为硬换行，「行尾两个空格」与反斜杠硬换行也不降级、两者互不转换；只有用户主动 `Shift+Enter` 才新写一个硬换行标记（行尾两个空格），序列化不产反斜杠硬换行。
 
 ### 7. 脏判定以字符串比较为准
 
-`dirty = 序列化结果 !== 打开时原文`，不靠操作日志记账。空 `note` 呈现为一个空段落块，序列化回 `""`（不产生 `"\n"`、不插占位）。沿用现有 `lastSent` / `lastRendered` 双 ref 的「未编辑不改写」保护。
+`dirty = 序列化结果 !== 打开时原文`，不靠操作日志记账。空 `note` 呈现为一个空段落块，序列化回 `""`（不产生 `"\n"`、不插占位）。沿用现有 `lastSent` / `lastRendered` 双 ref 的「未编辑不改写」保护。touched 块集合只回答「哪些块允许被重序列化」（§4 的执行凭据），**不作脏判据**——两件事不要混。
 
 ### 8. 两个编辑框共用一个组件，非块写入者保持原样
 
@@ -91,9 +92,17 @@ Accepted（2026-10-22 定稿，**仅决策、未实施**；本条锁的是数据
 - 顶层重排纯函数：`scripts/test-block-order.mjs`（语义对齐 `scripts/verify-dnd.mjs` 场景 6 的"原地放开不改顺序"）。
 - 人工 / CDP：中文 IME 组合期不重建块节点、拖拽落点指示、图片插入与外部改动竞争（现有 P0-10 / IMG-05 / FIX-02 一条不许掉）。
 
+## 变更记录
+
+- 2026-10-22（**同日修订，用户批准**）：§6 换行口径由「碰过的块统一序列化为行尾两个空格」改为「不做形式统一」；§5 补缩进代码 0 存量；§7 补 touched 集合与脏判定的分工；背景表的 note 载体按「2 列 + 2 个 JSON 内字段」更正。起因、验码与实测证据见 `.scratch/block-editor/issues/02-data-authority-and-block-model.md` 的「裁定」段与「待拍板边界项」小节（MD-03 在 `docs/Markdown描述测试计划.md:90`、P0-02 在 `:74`；真实语料 46/83 条待办正文含紧邻换行）。
+
+- 同日新增关联：`docs/adr/0002-attachment-owner-generalization.md`（附件归属键泛化，本 ADR「留给后续票的」那条开放项已定，数据版本 15 → 16 的唯一动因）与回填的 `docs/decisions/ADR-013-attachment-protocol.md`。
+
+- §9 术语补充：**备注（note）** 是存储与领域权威名；**正文（BlockDoc）** 是它在块编辑器里的解析视图名。两者并存、不互替（`GLOSSARY.md` 已同步，「正文」不再被列为禁用同义词）。
+
 ## 相关
 
-- 决策全程：`.scratch/block-editor/issues/02-data-authority-and-block-model.md`（第一轮 7 条 + 第二轮 R2-1~R2-6）
+- 决策全程：`.scratch/block-editor/issues/02-data-authority-and-block-model.md`（第一轮 7 条 + 第二轮 R2-1~R2-6 + 第三轮裁定 + 第四轮收尾）
 - 地图与其它票：`.scratch/block-editor/map.md`、`issues/01、03、04、05、06、07、08、09`
 - 术语：`GLOSSARY.md`（仓库根，本条为首批词条来源）
 - 上游 ADR：ADR-008 单 store 写链 / ADR-011 数据版本升级 / ADR-012 固定数据源 / ADR-013 附件协议 / ADR-021 历史膨胀教训 / ADR-023 MCP 一份调度层

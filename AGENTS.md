@@ -4,7 +4,7 @@
 **Commit:** 4dfa1b7
 **Branch:** main
 
-> 本文件是导航与速查层；架构细节、数据流、规范见 **`CLAUDE.md`**（权威），设计文档见 `docs/软件设计文档.md`，决策见 `docs/decisions/ADR-*.md`（存量 001~023）与 `docs/adr/0001-*.md`（新序列，四位编号）
+> 本文件是导航与速查层；架构细节、数据流、规范见 **`CLAUDE.md`**（权威），设计文档见 `docs/软件设计文档.md`，决策见 `docs/decisions/ADR-*.md`（存量 001~023）与 `docs/adr/000X-*.md`（新序列，四位编号，现有 0001 备注数据权威 / 0002 附件归属泛化）
 
 ## 协作共识规则（默认授权）
 
@@ -109,7 +109,7 @@ bash build.sh               # 发布打包 → ./release/
 - 启动门禁：git ≥2.20 检测（不足中文提示不阻塞）；`db_check_version` 不兼容时全屏 `VersionBlockedPage`。
 - 浏览器预览走 `sessionStorage` + demoState（`src/lib/storage.ts` 的 `isTauri()` 双轨）。
 - SQLite 列序是硬契约（schema.rs 头部注释）：改 schema 必须 schema.rs + row.rs + db/mod.rs 三处同步。
-- 附件协议：note 存 `attachment://<todoId>/<file>` 短引用，展示时换自定义协议（`src/lib/attachments.ts`）。
+- 附件协议：note 存 `attachment://<todoId>/<file>` 短引用，展示时换自定义协议（`src/lib/attachments.ts`）；决策文件 `docs/decisions/ADR-013-attachment-protocol.md` 已回填。**规划中**：归属键泛化为 `(owner_kind, owner_id)` 以支持资料备注贴图，届时引用里的 `<todoId>` 变为 `<ownerId>`（ADR-0002，未实施）。
 
 ## Agent skills
 
