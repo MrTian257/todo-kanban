@@ -27,12 +27,14 @@ export interface VersionReport {
   gitVersion?: string;
 }
 
-/** 浏览器预览模式默认报告（无真实数据源；依赖版本留空，界面显示「—」而不是假版本号） */
+/** 浏览器预览模式默认报告（无真实数据源；依赖版本留空，界面显示「—」而不是假版本号）。
+ * dataVersion / appMax 必须跟 config::CURRENT_DATA_VERSION 一致（ADR-011「新增数据版本时」清单的最后一处）：
+ * v16（ADR-0002 附件归属泛化）提升时同步改成 16；appMin 保持 1（v1 库仍能逐级升到 16）。 */
 const PREVIEW_REPORT: VersionReport = {
   status: "ok",
-  dataVersion: 14,
+  dataVersion: 16,
   appMin: 1,
-  appMax: 14,
+  appMax: 16,
   softwareVersion: "2.0.0",
   from: null,
   to: null,

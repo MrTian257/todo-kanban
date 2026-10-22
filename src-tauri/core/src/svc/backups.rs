@@ -515,8 +515,10 @@ fn reconcile_attachments(backup_root: &Path, current_root: &Path) {
 
 /// 附件行（attachments 表全列，按 DDL 顺序）
 type AttachmentRow = (String, String, String, String, String, i64, i64, i64);
-/// 任务—附件关系行（todo_id, attachment_id, seq, created_at）
-type AttachmentLinkRow = (String, String, i64, i64);
+/// 宿主—附件关系行（owner_kind, owner_id, attachment_id, seq, created_at）
+/// v16（ADR-0002）：归属键泛化后关系行多一列 kind，备份快照必须整体带着它搬，
+/// 否则恢复出来的关系会被补链按「todo」重算，资料图片的引用计数就丢了。
+type AttachmentLinkRow = (String, String, String, i64, i64);
 
 /// 附件文件与索引一起恢复；索引写入与任务快照共用事务。
 #[derive(Debug)]
@@ -526,7 +528,8 @@ pub struct AttachmentSnapshot {
 }
 
 impl AttachmentSnapshot {
-    /// 读取并自检：路径合法、文件存在且大小一致、索引无失效引用、附件 todo_id 与快照任务目录一致
+    /// 读取并自检：路径合法、文件存在且大小一致、索引无失效引用、附件宿主 id 与快照里的宿主目录一致。
+    /// 「宿主」两类都算（待办 / 项目资料）：备份是整库快照，资料侧贴图后它的附件目录同样在快照里。
     fn read(conn: &rusqlite::Connection, root: &Path, state: &DbState) -> AppResult<Self> {
         let mut stmt = conn.prepare(
             "SELECT id,file_name,original_name,relative_path,mime_type,byte_size,created_at,updated_at FROM attachments",
@@ -545,8 +548,20 @@ impl AttachmentSnapshot {
                 ))
             })?
             .collect::<Result<Vec<AttachmentRow>, _>>()?;
+        // 快照中仍存在的宿主 id（按 kind 分开）：路径首段与关系行的 owner_id 都要能落进对应集合
         let todos: std::collections::HashSet<&str> =
             state.todos.iter().map(|todo| todo.id.as_str()).collect();
+        let resources: std::collections::HashSet<&str> = state
+            .resources
+            .iter()
+            .map(|resource| resource.id.as_str())
+            .collect();
+        let known_owner = |kind: &str, id: &str| match kind {
+            "todo" => todos.contains(id),
+            "resource" => resources.contains(id),
+            // 未知 kind 直接算不认识：宁可拒绝恢复，也不要把一栏没人认得的关系写进新库
+            _ => false,
+        };
         for file in &files {
             if !super::attachments::valid_relative(&file.3) || file.5 < 0 {
                 return Err(AppError::invalid("备份附件路径或大小无效"));
@@ -565,26 +580,31 @@ impl AttachmentSnapshot {
             if !path.is_file() || path.metadata()?.len() != file.5 as u64 {
                 return Err(AppError::invalid("备份附件缺失或大小不符"));
             }
-            // 附件相对路径的首段必须是快照中仍存在的任务，否则索引会指向不存在的任务目录。
+            // 附件相对路径的首段必须是快照中仍存在的宿主（待办或资料任一），
+            // 否则恢复出来的索引会指向不存在的宿主目录，GC 一跑就把文件判成孤儿。
             if !path
                 .strip_prefix(root)
                 .ok()
                 .and_then(|relative| relative.to_str())
                 .and_then(|relative| relative.split_once('/'))
-                .is_some_and(|(todo_id, _)| todos.contains(todo_id))
+                .is_some_and(|(owner_id, _)| {
+                    todos.contains(owner_id) || resources.contains(owner_id)
+                })
             {
-                return Err(AppError::invalid("备份附件目录与任务快照不一致"));
+                return Err(AppError::invalid("备份附件目录与宿主快照不一致"));
             }
         }
-        let mut stmt =
-            conn.prepare("SELECT todo_id,attachment_id,seq,created_at FROM todo_attachments")?;
+        let mut stmt = conn.prepare(
+            "SELECT owner_kind,owner_id,attachment_id,seq,created_at FROM note_attachments",
+        )?;
         let links = stmt
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
-            .collect::<Result<Vec<(String, String, i64, i64)>, _>>()?;
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
+            .collect::<Result<Vec<AttachmentLinkRow>, _>>()?;
         let ids: std::collections::HashSet<_> = files.iter().map(|file| file.0.as_str()).collect();
+        // 关系行两端都必须还在快照里：附件行在、宿主也在（且 kind 对得上），否则恢复出来的是悬空引用
         if links
             .iter()
-            .any(|link| !ids.contains(link.1.as_str()) || !todos.contains(link.0.as_str()))
+            .any(|link| !ids.contains(link.2.as_str()) || !known_owner(&link.0, &link.1))
         {
             return Err(AppError::invalid("备份附件索引包含失效引用"));
         }
@@ -593,7 +613,7 @@ impl AttachmentSnapshot {
 
     /// 用备份索引整体替换当前附件索引（与业务快照同一事务）
     pub(crate) fn install(&self, conn: &rusqlite::Connection) -> AppResult<()> {
-        conn.execute("DELETE FROM todo_attachments", [])?;
+        conn.execute("DELETE FROM note_attachments", [])?;
         conn.execute("DELETE FROM attachments", [])?;
         let mut files = conn.prepare_cached(
             "INSERT INTO attachments(id,file_name,original_name,relative_path,mime_type,byte_size,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
@@ -602,10 +622,10 @@ impl AttachmentSnapshot {
             files.execute(rusqlite::params![f.0, f.1, f.2, f.3, f.4, f.5, f.6, f.7])?;
         }
         let mut links = conn.prepare_cached(
-            "INSERT INTO todo_attachments(todo_id,attachment_id,seq,created_at) VALUES(?1,?2,?3,?4)",
+            "INSERT INTO note_attachments(owner_kind,owner_id,attachment_id,seq,created_at) VALUES(?1,?2,?3,?4,?5)",
         )?;
         for l in &self.links {
-            links.execute(rusqlite::params![l.0, l.1, l.2, l.3])?;
+            links.execute(rusqlite::params![l.0, l.1, l.2, l.3, l.4])?;
         }
         Ok(())
     }
@@ -663,6 +683,7 @@ mod tests {
 
         let info = crate::svc::attachments::import_b64_at(
             &db_path,
+            "todo",
             "t1",
             &base64_encode(&png_bytes()),
             "x.png",
@@ -816,6 +837,7 @@ mod tests {
         let (conn, _) = db::open_and_init(&db_path, &dir.join("backup")).unwrap();
         let info = crate::svc::attachments::import_b64_at(
             &db_path,
+            "todo",
             "t1",
             &base64_encode(&png_bytes()),
             "x.png",
@@ -852,6 +874,7 @@ mod tests {
         let (conn, _) = db::open_and_init(&db_path, &dir.join("backup")).unwrap();
         let info = crate::svc::attachments::import_b64_at(
             &db_path,
+            "todo",
             "t1",
             &base64_encode(&png_bytes()),
             "x.png",

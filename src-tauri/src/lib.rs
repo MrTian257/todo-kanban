@@ -38,7 +38,8 @@ fn percent_decode(input: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// attachment:// 自定义协议：按相对路径 <todoId>/<file> 直接供图（不查库）。
+/// attachment:// 自定义协议：按相对路径 <ownerId>/<file> 直接供图（不查库）。
+/// ownerId 是待办 id 或项目资料 id（ADR-0002 归属泛化）——两者同形，本协议不需要分支处理。
 /// Windows/Android 形如 http://attachment.localhost/<path>；macOS/Linux 形如 attachment://localhost/<path>，
 /// 两种形态 request.uri().path() 一致，统一去前导 '/' 后交 core 校验并读取。
 fn attachment_protocol(request: tauri::http::Request<Vec<u8>>) -> tauri::http::Response<Vec<u8>> {

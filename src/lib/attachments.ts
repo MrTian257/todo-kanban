@@ -1,7 +1,9 @@
-// 附件（图片）引用与导入（ADR-013）：
-// note 持久化只存 attachment://<todoId>/<file> 短引用；展示/编辑时前缀互换为自定义协议 URL，
+// 附件（图片）引用与导入（ADR-013；归属泛化见 ADR-0002 / 数据版本 v16）：
+// note 持久化只存 attachment://<ownerId>/<file> 短引用；展示/编辑时前缀互换为自定义协议 URL，
 // 由 app 壳注册的 attachment 协议直接按相对路径供图（Windows: http://attachment.localhost/…，
 // macOS/Linux: attachment://localhost/…）。历史内嵌 data URL 图片继续兼容显示，不做强制迁移。
+// ownerId 可以是待办 id 或项目资料 id：两类宿主共用同一引用形态与同一套前缀互换函数，
+// 差异只在导入时告诉后端「这张图归谁」（AttachmentOwner）。
 
 import { invoke } from "@tauri-apps/api/core";
 import { isTauri } from "./storage";
@@ -17,9 +19,18 @@ export const ATTACHMENT_DISPLAY_PREFIX = IS_WINDOWS
   ? "http://attachment.localhost/"
   : "attachment://localhost/";
 
+/** 附件宿主类型：与后端 OwnerKind / note_attachments.owner_kind 的 CHECK 白名单一一对应 */
+export type AttachmentOwnerKind = "todo" | "resource";
+
+/** 附件归属：{kind, id}。跨宿主复制图片 = 重新导入到目标宿主（「复制即换主」，不做跨主引用计数） */
+export interface AttachmentOwner {
+  kind: AttachmentOwnerKind;
+  id: string;
+}
+
 export interface Attachment {
   id: string;
-  /** note 引用形态：attachment://<todoId>/<file> */
+  /** note 引用形态：attachment://<ownerId>/<file> */
   ref: string;
   fileName: string;
   relativePath: string;
@@ -56,12 +67,18 @@ export function attachmentDisplayToRef(markdown: string): string {
   return markdown.split(ATTACHMENT_DISPLAY_PREFIX).join(ATTACHMENT_REF_PREFIX);
 }
 
-/** 导入一张图片：按任务归档到 <运行目录>/attachments/<todoId>/<todoId>-<seq>.<ext> */
-export async function importImage(file: File, todoId: string): Promise<Attachment> {
+/** 导入一张图片：按宿主归档到 <运行目录>/attachments/<ownerId>/<ownerId>-<seq>.<ext>，
+ * 后端同时写 attachments 一行 + note_attachments 一条 (owner_kind, owner_id) 关系。 */
+export async function importImage(file: File, owner: AttachmentOwner): Promise<Attachment> {
   if (!isTauri()) throw new Error("请在桌面应用中导入附件");
   if (!file.size || file.size > MAX_IMAGE_BYTES) throw new Error("单张图片不能超过 5 MiB");
   const bytesBase64 = await blobToBase64(file);
-  return invoke<Attachment>("attachment_import", { todoId, filename: file.name, bytesBase64 });
+  return invoke<Attachment>("attachment_import", {
+    ownerKind: owner.kind,
+    ownerId: owner.id,
+    filename: file.name,
+    bytesBase64,
+  });
 }
 
 function blobToBase64(blob: Blob): Promise<string> {
@@ -82,7 +99,7 @@ export async function migrateInlineImages(): Promise<MigrateSummary> {
   return invoke<MigrateSummary>("attachment_migrate_inline");
 }
 
-/** 清理孤儿附件（关系指向已删除任务 / 无任何关系的附件；文件移入 attachments/trash/） */
+/** 清理孤儿附件（关系指向已删除宿主 / 无任何关系的附件；文件移入 attachments/trash/） */
 export async function gcOrphanAttachments(): Promise<GcSummary> {
   if (!isTauri()) throw new Error("请在桌面应用中执行附件维护");
   return invoke<GcSummary>("attachment_gc_orphans");

@@ -94,7 +94,8 @@ fn save_state(state: DbState, expected: &DbState) -> AppResult<DbState> {
         .map(|item| format!("mcp:{}", item.actor))
         .unwrap_or_else(|| "mcp".to_string());
     let (saved, trash) = history::with_actor(&actor, || db::save_state_checked(&conn, &state, expected))?;
-    // 附件联动：被删任务的附件文件移入数据文件旁 attachments/trash/（按实际 db 路径定位根目录）
+    // 附件联动：被删宿主（待办 / 资料）的附件文件移入数据文件旁 attachments/trash/
+    //（按实际 db 路径定位根目录）；补链与按 kind 删关系都在 db::save_state_inner 里，这里不重复实现。
     if !trash.is_empty() {
         crate::svc::attachments::move_to_trash_at(
             &crate::svc::attachments::attachments_root_at(&path),

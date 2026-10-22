@@ -1,8 +1,9 @@
-//! DDL + 迁移。USER_VERSION = 15。
+//! DDL + 迁移。USER_VERSION = 16。
 //! 注意：SQLite 列序是硬契约——schema ↔ row ↔ mod 的 SELECT/INSERT 三处同步。
 //! 版本号必须与 config::CURRENT_DATA_VERSION 一致：open_existing 用它做跨进程版本门禁。
+//! v16（ADR-0002）只新增/替换附件关系表 note_attachments，`todos` 与 `resources` 的列序一格未动。
 
-pub const USER_VERSION: i64 = 15;
+pub const USER_VERSION: i64 = 16;
 
 /// 建表（新库直接完整 v6 形态；旧库缺列由 migrate 补）
 pub fn create_tables(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
@@ -67,26 +68,32 @@ CREATE TABLE IF NOT EXISTS git_repo_cache (
   error TEXT,
   fetched_at INTEGER NOT NULL
 );
--- v8：附件文件化存储（ADR-013）——文件信息 + 任务关联两表分离
+-- v8：附件文件化存储（ADR-013）——文件信息 + 宿主关联两表分离（关联表 v16 起泛化为 note_attachments）
 CREATE TABLE IF NOT EXISTS attachments (
   id TEXT PRIMARY KEY,
-  file_name TEXT NOT NULL,             -- 落盘名 <todoId>-<seq:04>.<ext>
+  file_name TEXT NOT NULL,             -- 落盘名 <ownerId>-<seq:04>.<ext>
   original_name TEXT NOT NULL DEFAULT '',
-  relative_path TEXT NOT NULL,         -- <todoId>/<file_name>（相对 attachments 根）
+  relative_path TEXT NOT NULL,         -- <ownerId>/<file_name>（相对 attachments 根）
   mime_type TEXT NOT NULL,
   byte_size INTEGER NOT NULL,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_attachments_relative_path ON attachments(relative_path);
-CREATE TABLE IF NOT EXISTS todo_attachments (
-  todo_id TEXT NOT NULL,
+-- v16（ADR-0002）：附件归属键由单一 todoId 泛化为 (owner_kind, owner_id)，关系表随之更名重建。
+-- owner_kind 的 CHECK 白名单与 core::svc::attachments::OwnerKind 的字符串形态严格一一对应：
+-- 多一种宿主就得同时改两处，否则关系行写进去而代码读不到（反之是 CHECK 约束报错）。
+-- 关系表不进 DbState / row.rs：它是派生数据（引用集合可由 extract_refs 重算），
+-- 所以这里只有 DDL 与 db/mod.rs 的补链/GC 两处引用点，SQLite 列序硬契约不涉及本表之外的表。
+CREATE TABLE IF NOT EXISTS note_attachments (
+  owner_kind TEXT NOT NULL CHECK (owner_kind IN ('todo','resource')),
+  owner_id TEXT NOT NULL,
   attachment_id TEXT NOT NULL REFERENCES attachments(id) ON DELETE CASCADE,
-  seq INTEGER NOT NULL,                -- 任务内序号（导入命名用；引用补链为 0）
+  seq INTEGER NOT NULL,                -- 宿主内序号（导入命名用；引用补链为 0）
   created_at INTEGER NOT NULL,
-  PRIMARY KEY (todo_id, attachment_id)
+  PRIMARY KEY (owner_kind, owner_id, attachment_id)
 );
-CREATE INDEX IF NOT EXISTS idx_todo_attachments_attachment ON todo_attachments(attachment_id);
+CREATE INDEX IF NOT EXISTS idx_note_attachments_attachment ON note_attachments(attachment_id);
 -- v9/v10：项目资料库。project_id 可为空，项目删除后保留为未归属资料；
 -- workflow_state（任务关系/模板/提醒/备份设置）、change_history、change_proposals 随建表就位。
 CREATE TABLE IF NOT EXISTS workflow_state (
@@ -296,7 +303,12 @@ mod tests {
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
         assert!(tables.contains(&"attachments".to_string()));
-        assert!(tables.contains(&"todo_attachments".to_string()));
+        // v16（ADR-0002）：关系表已是 note_attachments，旧名不该再出现在新库里
+        assert!(tables.contains(&"note_attachments".to_string()));
+        assert!(
+            !tables.contains(&"todo_attachments".to_string()),
+            "新库不得再建出旧的 todo_attachments"
+        );
         // v9：resources 表随建表就位
         assert!(tables.contains(&"resources".to_string()));
     }
@@ -325,6 +337,7 @@ mod tests {
                original_name TEXT NOT NULL DEFAULT '', relative_path TEXT NOT NULL,
                mime_type TEXT NOT NULL, byte_size INTEGER NOT NULL,
                created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+             -- v8 形态的旧关系表（无 owner_kind）：v15→v16 迁移整表搬到 note_attachments 后删除
              CREATE TABLE todo_attachments (todo_id TEXT NOT NULL, attachment_id TEXT NOT NULL,
                seq INTEGER NOT NULL, created_at INTEGER NOT NULL,
                PRIMARY KEY (todo_id, attachment_id));
@@ -665,4 +678,88 @@ mod tests {
             .unwrap();
         assert_eq!(readonly, "1", "迁移不得改写既有设置");
     }
+
+    /// v15 → v16（ADR-0002）：附件关系表泛化——todo_attachments 的关系行整表搬到 note_attachments
+    /// （打上 owner_kind='todo'）、旧表删除、索引重建；**备注正文与附件文件一律不动**（正文零迁移）。
+    /// 走的是真实链路：core 幂等建表（建出 note_attachments）→ upgrade 迁移（搬关系 + 删旧表）。
+    #[test]
+    fn migrate_v15_db_generalizes_attachment_owner() {
+        let conn = open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE todos (id TEXT PRIMARY KEY, project_id TEXT, title TEXT,
+               note TEXT NOT NULL DEFAULT '正文不许被动 ![x](attachment://t1/t1-0001.png)',
+               status TEXT, created_at INTEGER, updated_at INTEGER);
+             CREATE TABLE attachments (id TEXT PRIMARY KEY, file_name TEXT NOT NULL,
+               original_name TEXT NOT NULL DEFAULT '', relative_path TEXT NOT NULL,
+               mime_type TEXT NOT NULL, byte_size INTEGER NOT NULL,
+               created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+             CREATE TABLE todo_attachments (todo_id TEXT NOT NULL, attachment_id TEXT NOT NULL,
+               seq INTEGER NOT NULL, created_at INTEGER NOT NULL,
+               PRIMARY KEY (todo_id, attachment_id));
+             INSERT INTO attachments VALUES ('a1','t1-0001.png','截图.png','t1/t1-0001.png','image/png',12,1,1);
+             INSERT INTO todo_attachments VALUES ('t1','a1',1,1);
+             PRAGMA user_version = 15;",
+        )
+        .unwrap();
+        crate::db::init(&conn).unwrap();
+        assert!(table_exists(&conn, "note_attachments").unwrap());
+        // ADR-0002 后果 2：不保留 todo_attachments 影子表
+        assert!(
+            !table_exists(&conn, "todo_attachments").unwrap(),
+            "旧关系表必须被删除，不能留成第二权威"
+        );
+        // 关系行搬到新表：owner_kind 补成 'todo'，owner_id / seq / created_at 原值保留
+        let row: (String, String, i64, i64) = conn
+            .query_row(
+                "SELECT owner_kind, owner_id, seq, created_at FROM note_attachments WHERE attachment_id='a1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(row, ("todo".to_string(), "t1".to_string(), 1, 1));
+        // 索引随旧表消失后必须重建（否则「按附件反查宿主」这条 GC 路径退化成全表扫）
+        let index: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_note_attachments_attachment'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(index, 1, "idx_note_attachments_attachment 应存在");
+        // 正文零迁移：note 一个字节都不许改（ADR-0001 的数据形态前提）
+        let note: String = conn
+            .query_row("SELECT note FROM todos WHERE id='t1'", [], |r| r.get(0))
+            .unwrap();
+        assert!(
+            note.contains("attachment://t1/t1-0001.png"),
+            "备注正文不得被迁移改写：{note}"
+        );
+        // 附件索引表原样：relative_path 仍是 <ownerId>/<file>（引用形态不换，ADR-0002 决策 1）
+        let relative: String = conn
+            .query_row("SELECT relative_path FROM attachments WHERE id='a1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(relative, "t1/t1-0001.png");
+        let v: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, USER_VERSION);
+    }
+
+    /// 新库（user_version=0）走同一条链路：没有 todo_attachments 可搬，v15→v16 步骤必须整步跳过，
+    /// 而不是因为缺旧表报错——这是「迁移幂等 / 新库直接完整形态」的回归点。
+    #[test]
+    fn migrate_new_db_skips_attachment_owner_step() {
+        let conn = open_in_memory().unwrap();
+        crate::db::init(&conn).unwrap();
+        crate::db::init(&conn).unwrap();
+        assert!(table_exists(&conn, "note_attachments").unwrap());
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM note_attachments", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
 }
+

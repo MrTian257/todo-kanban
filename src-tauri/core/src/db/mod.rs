@@ -121,7 +121,9 @@ pub fn is_pristine(conn: &Connection) -> AppResult<bool> {
         "todos",
         "resources",
         "attachments",
-        "todo_attachments",
+        // v16（ADR-0002）：关系表泛化为 note_attachments（旧名 todo_attachments 已删）；
+        // 只要还有一条附件关系就说明用户有数据，绝不能让启动自举灌演示数据把它冲掉
+        "note_attachments",
         "change_history",
         "change_proposals",
         "workflow_state",
@@ -407,8 +409,31 @@ fn save_state_inner(
         }
     }
 
-    // note 引用补链：为备注中出现的附件引用补建任务关系（不删除既有关系）
-    attachments::link_note_refs(&tx, &state.todos)?;
+    // note 引用补链：按宿主各调一次同一入口（ADR-0002 决策 5）。
+    // 两次调用共用 link_note_refs 的一份实现 —— UI 与 MCP（stdio / HTTP 两种传输）都汇聚到本函数，
+    // 所以「资料备注贴图不补链」这类分叉在架构上不可能出现（ADR-023「一份实现」）。
+    attachments::link_note_refs(
+        &tx,
+        attachments::OwnerKind::Todo,
+        state
+            .todos
+            .iter()
+            .map(|todo| attachments::NoteOwner {
+                id: todo.id.as_str(),
+                note: todo.note.as_str(),
+            }),
+    )?;
+    attachments::link_note_refs(
+        &tx,
+        attachments::OwnerKind::Resource,
+        state
+            .resources
+            .iter()
+            .map(|resource| attachments::NoteOwner {
+                id: resource.id.as_str(),
+                note: resource.note.as_str(),
+            }),
+    )?;
 
     // 差集删除：库中存在但传入快照缺失的行（多窗口以 2s 轮询 + updated_at 较新者胜收敛）
     let exist_ids: HashSet<&str> = existing.projects.iter().map(|p| p.id.as_str()).collect();
@@ -440,16 +465,24 @@ fn save_state_inner(
         .iter()
         .map(|resource| resource.id.as_str())
         .collect();
-    for id in exist_ids.difference(&in_ids) {
+    let deleted_resource_ids: Vec<String> = exist_ids
+        .difference(&in_ids)
+        .map(|id| id.to_string())
+        .collect();
+    for id in &deleted_resource_ids {
         tx.execute("DELETE FROM resources WHERE id = ?1", [id])?;
     }
 
-    // 附件联动（事务内）：删除被删任务的关系 + 无关系残留的附件行；文件由调用方提交后移入 trash
-    let trash_paths = if deleted_todo_ids.is_empty() {
-        Vec::new()
-    } else {
-        attachments::on_todos_deleted(&tx, &deleted_todo_ids)?
-    };
+    // 附件联动（事务内）：删被删宿主的关系（两个 kind 各走各的）+ 清无关系残留的附件行；
+    // 文件由调用方在事务提交后移入 trash。宽限期内的删除到不了这里——
+    // deleteWithUndo 那 8 秒根本不提交快照，关系与文件都保持原样（ADR-0002 决策 6）。
+    let mut trash_paths = Vec::new();
+    if !deleted_todo_ids.is_empty() {
+        trash_paths.extend(attachments::on_todos_deleted(&tx, &deleted_todo_ids)?);
+    }
+    if !deleted_resource_ids.is_empty() {
+        trash_paths.extend(attachments::on_resources_deleted(&tx, &deleted_resource_ids)?);
+    }
 
     let saved = row::load_state_from_conn(&tx)?;
     if let Some(workflow) = options.workflow {

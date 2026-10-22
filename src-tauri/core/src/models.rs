@@ -327,11 +327,11 @@ pub struct DbState {
 #[serde(rename_all = "camelCase")]
 pub struct AttachmentInfo {
     pub id: String,
-    /// note 中的引用形态：attachment://<todoId>/<fileName>
+    /// note 中的引用形态：attachment://<ownerId>/<fileName>（ownerId = 待办 id 或资料 id）
     #[serde(rename = "ref")]
     pub r#ref: String,
     pub file_name: String,
-    /// 相对附件根目录的路径：<todoId>/<fileName>
+    /// 相对附件根目录的路径：<ownerId>/<fileName>
     pub relative_path: String,
     pub mime_type: String,
     pub byte_size: usize,

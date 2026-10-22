@@ -14,7 +14,8 @@ import { compressImage, IMAGE_BATCH_MAX_BYTES, IMAGE_BATCH_MAX_COUNT, IMAGE_MAX_
 
 interface Props {
   value: string;
-  /** 附件归属任务（粘贴即落盘到 attachments/<todoId>/；新建页用预生成 id） */
+  /** 附件归属待办 id（导入时组成 owner { kind: "todo", id }，粘贴即落盘到 attachments/<todoId>/；
+   * 新建页用预生成 id。资料宿主换成同一组件时改传 owner，而不是这个裸 id） */
   todoId: string;
   onChange: (markdown: string) => void;
   className?: string;
@@ -139,12 +140,14 @@ export function MarkdownEditor(props: Props) {
         const images: string[] = [];
         for (const file of files) {
           if (disposed) return null;
-          // 压缩 → 附件落盘（按任务归档）→ 插入自定义协议展示 URL；保存时自动换回 attachment:// 引用
+          // 压缩 → 附件落盘（按宿主归档）→ 插入自定义协议展示 URL；保存时自动换回 attachment:// 引用
           const blob = await compressImage(file);
           if (blob.size > MAX_IMAGE_BYTES) throw new Error("「" + file.name + "」压缩后仍超过 5 MB，请缩小后重试");
           const attachment = await importImage(
             new File([blob], file.name, { type: blob.type || file.type }),
-            latest.current.todoId,
+            // 附件归属泛化（ADR-0002）：导入入口要的是 owner 而不是裸 id。
+            // 本编辑器目前只服务待办备注，kind 恒为 "todo"；资料侧换成块编辑器时改传 {kind:"resource"}。
+            { kind: "todo", id: latest.current.todoId },
           );
           images.push(`![${file.name.replace(/[\[\]\\\r\n]/g, "_")}](${attachmentDisplayUrl(attachment.ref)})`);
         }

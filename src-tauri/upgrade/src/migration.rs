@@ -40,6 +40,35 @@ fn table_exists(conn: &Connection, table: &str) -> rusqlite::Result<bool> {
     Ok(count > 0)
 }
 
+/// v15 → v16（ADR-0002）：附件归属键泛化 —— `todo_attachments` 的关系行整表搬进 `note_attachments`，
+/// 打上 `owner_kind='todo'`，随后删除旧表并重建「按附件反查宿主」的索引。
+///
+/// 只搬关系数据：
+/// - 不碰 `attachments` 表（`relative_path` 仍是 `<ownerId>/<file>`，引用形态不换 = 决策 1）；
+/// - 不碰任何 `note` 正文（ADR-0001：备注仍是唯一 Markdown 存储，正文零迁移）；
+/// - 不碰磁盘上的附件文件（真正的不可逆点只有「文件被移入 trash」，本步骤不涉及 = 后果 3）。
+///
+/// 幂等与边界：
+/// - 旧表不存在 → 整步跳过。新库由 core 的 `create_tables` 直接建出 `note_attachments`，
+///   迁移链中间任何一格缺旧表的库（含单测里的合成库）都不该因为「无东西可搬」而失败。
+/// - 新表不存在 → 同样跳过而不报错：按 ADR-011，建表是调用方（core）的前置职责；
+///   而且 `note_attachments` 是可派生数据（引用集合能由正文 `extract_refs` 重算，补链是幂等
+///   `INSERT OR IGNORE`），所以这一步最坏的后果只是「下次保存重新补链」，不会丢用户正文。
+/// - `INSERT OR IGNORE`：主键 `(owner_kind, owner_id, attachment_id)` 天然去重，事务失败回滚后重跑
+///   或历史脏数据里同行重复都不会炸在这一步上。
+fn generalize_attachment_owner_links(tx: &Connection) -> UpgradeResult<()> {
+    if !table_exists(tx, "todo_attachments")? || !table_exists(tx, "note_attachments")? {
+        return Ok(());
+    }
+    tx.execute_batch(
+        "INSERT OR IGNORE INTO note_attachments(owner_kind, owner_id, attachment_id, seq, created_at)
+           SELECT 'todo', todo_id, attachment_id, seq, created_at FROM todo_attachments;
+         DROP TABLE todo_attachments;
+         CREATE INDEX IF NOT EXISTS idx_note_attachments_attachment ON note_attachments(attachment_id);",
+    )?;
+    Ok(())
+}
+
 /// 逐级迁移到 CURRENT_VERSION（需在建表之后调用；版本判定由 upgrade::ensure 负责）
 pub fn migrate(conn: &Connection) -> UpgradeResult<MigrateOutcome> {
     let from = read_version(conn)?;
@@ -116,7 +145,8 @@ pub fn migrate(conn: &Connection) -> UpgradeResult<MigrateOutcome> {
         }
     }
     if from < 8 {
-        // v7 → v8：附件表 attachments + todo_attachments 已由 core 建表（CREATE TABLE IF NOT EXISTS，
+        // v7 → v8：附件表 attachments + 关系表（当时名 todo_attachments，v16 起为 note_attachments）
+        // 已由 core 建表（CREATE TABLE IF NOT EXISTS，
         // 新库直接完整形态）；此处仅推进版本（同 v2→v3 模式），无存量数据需要回填。
     }
     if from < 9 {
@@ -160,6 +190,12 @@ pub fn migrate(conn: &Connection) -> UpgradeResult<MigrateOutcome> {
     if from < 14 {
         // v13 → v14：pomodoro_sessions 表由 core 幂等建表（CREATE TABLE IF NOT EXISTS，
         // 新库直接完整形态）；此处仅推进版本，无存量数据需要回填。
+    }
+
+    if from < 16 {
+        // v15 → v16（ADR-0002）：附件归属键泛化，关系表 todo_attachments → note_attachments。
+        // 本仓库第一条「搬数据」的换表步骤，见 generalize_attachment_owner_links 的边界说明。
+        generalize_attachment_owner_links(&tx)?;
     }
 
     tx.execute_batch(&format!("PRAGMA user_version = {CURRENT_VERSION};"))?;
@@ -348,4 +384,91 @@ mod tests {
         let v = read_version(&conn).unwrap();
         assert_eq!(v, 4, "迁移失败应回滚，user_version 不变");
     }
+
+    /// v15 → v16（ADR-0002）：附件关系行搬到 note_attachments 并打上 owner_kind='todo'，
+    /// 旧表删除、索引重建；**正文与 attachments 一格未动**。
+    #[test]
+    fn migrate_v15_db_generalizes_attachment_owner_links() {
+        let conn = open_mem();
+        conn.execute_batch(
+            "CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE todos (id TEXT PRIMARY KEY, note TEXT NOT NULL DEFAULT '');
+             CREATE TABLE attachments (id TEXT PRIMARY KEY, relative_path TEXT NOT NULL);
+             CREATE TABLE todo_attachments (todo_id TEXT NOT NULL, attachment_id TEXT NOT NULL,
+               seq INTEGER NOT NULL, created_at INTEGER NOT NULL,
+               PRIMARY KEY (todo_id, attachment_id));
+             -- note_attachments 由 core 的 create_tables 先建好；本 crate 不依赖 core，这里复刻其形态
+             CREATE TABLE note_attachments (
+               owner_kind TEXT NOT NULL CHECK (owner_kind IN ('todo','resource')),
+               owner_id TEXT NOT NULL, attachment_id TEXT NOT NULL,
+               seq INTEGER NOT NULL, created_at INTEGER NOT NULL,
+               PRIMARY KEY (owner_kind, owner_id, attachment_id));
+             INSERT INTO todos VALUES ('t1','![x](attachment://t1/t1-0001.png)');
+             INSERT INTO attachments VALUES ('a1','t1/t1-0001.png');
+             INSERT INTO todo_attachments VALUES ('t1','a1',1,7);
+             PRAGMA user_version = 15;",
+        )
+        .unwrap();
+        let out = migrate(&conn).unwrap();
+        assert_eq!(out.to, CURRENT_VERSION);
+        assert!(
+            !table_exists(&conn, "todo_attachments").unwrap(),
+            "旧关系表必须删除——留成影子表就是第二权威（ADR-0002 后果 2）"
+        );
+        let moved: (String, String, i64, i64) = conn
+            .query_row(
+                "SELECT owner_kind, owner_id, seq, created_at FROM note_attachments",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(moved, ("todo".to_string(), "t1".to_string(), 1, 7));
+        // 序号与时间戳原值保留：seq 决定落盘文件名的既有对应关系，不能被迁移改写
+        let note: String = conn
+            .query_row("SELECT note FROM todos WHERE id='t1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(note, "![x](attachment://t1/t1-0001.png)", "备注正文零迁移");
+        let relative: String = conn
+            .query_row("SELECT relative_path FROM attachments", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(relative, "t1/t1-0001.png", "附件索引表不动（引用形态不换）");
+        let indexes: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_note_attachments_attachment'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(indexes, 1, "旧索引随表删除后必须重建");
+    }
+
+    /// 缺旧表时必须整步跳过：新库由 create_tables 直接建出 note_attachments，
+    /// 迁移链不该因为「无东西可搬」失败；已有的 resource 关系行也不许被动。
+    #[test]
+    fn migrate_v15_attachment_owner_step_skips_without_old_table() {
+        let conn = open_mem();
+        conn.execute_batch(
+            "CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE attachments (id TEXT PRIMARY KEY, relative_path TEXT NOT NULL);
+             CREATE TABLE note_attachments (
+               owner_kind TEXT NOT NULL CHECK (owner_kind IN ('todo','resource')),
+               owner_id TEXT NOT NULL, attachment_id TEXT NOT NULL,
+               seq INTEGER NOT NULL, created_at INTEGER NOT NULL,
+               PRIMARY KEY (owner_kind, owner_id, attachment_id));
+             INSERT INTO note_attachments VALUES ('resource','r1','a1',1,3);
+             PRAGMA user_version = 15;",
+        )
+        .unwrap();
+        let out = migrate(&conn).unwrap();
+        assert_eq!(out.to, CURRENT_VERSION);
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM note_attachments", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 1, "跳过旧表搬运不得清空新表");
+        let kind: String = conn
+            .query_row("SELECT owner_kind FROM note_attachments", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(kind, "resource");
+    }
 }
+

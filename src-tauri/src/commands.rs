@@ -175,16 +175,21 @@ pub async fn db_check_version() -> Result<VersionReport, String> {
     .await
 }
 
-/// 15. 导入附件图片：按任务归档到 <运行目录>/attachments/<todoId>/<todoId>-<seq>.<ext>，
-/// 写 attachments + todo_attachments 两表，返回 note 用的 attachment:// 引用
+/// 15. 导入附件图片：按宿主归档到 <运行目录>/attachments/<ownerId>/<ownerId>-<seq>.<ext>，
+/// 写 attachments + note_attachments 两表，返回 note 用的 attachment:// 引用。
+/// 归属泛化（ADR-0002）：原来的 todo_id 参数换成 (owner_kind, owner_id)，
+/// owner_kind 取 "todo" | "resource"；无效取值由 core 转成中文错误，薄壳不做判断。
 #[tauri::command]
 pub async fn attachment_import(
-    todo_id: String,
+    owner_kind: String,
+    owner_id: String,
     filename: String,
     bytes_base64: String,
 ) -> Result<AttachmentInfo, String> {
-    blocking(move || attachments::import_b64(&todo_id, &bytes_base64, &filename).map_err(err_str))
-        .await
+    blocking(move || {
+        attachments::import_b64(&owner_kind, &owner_id, &bytes_base64, &filename).map_err(err_str)
+    })
+    .await
 }
 
 /// 16. 迁移历史内嵌 base64 图片为附件（逐条 todo 全成或全不动；结果含失败原因清单）
@@ -193,7 +198,7 @@ pub async fn attachment_migrate_inline() -> Result<MigrateSummary, String> {
     blocking(move || attachments::migrate_inline().map_err(err_str)).await
 }
 
-/// 17. 清理孤儿附件（关系指向已删除任务 / 无任何关系的附件；文件移入 attachments/trash/）
+/// 17. 清理孤儿附件（关系指向已删除宿主 / 无任何关系的附件；文件移入 attachments/trash/）
 #[tauri::command]
 pub async fn attachment_gc_orphans() -> Result<GcSummary, String> {
     blocking(move || attachments::gc_orphans().map_err(err_str)).await
