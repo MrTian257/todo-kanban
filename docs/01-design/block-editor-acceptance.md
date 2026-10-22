@@ -117,7 +117,7 @@
 | `scripts/test-markdown-blocks.mjs` | 逐字往返恒等、透明块逐字节、空串进出、Setext/缩进代码规则、非 1 起始序号、转义竖线、内部三反引号、耗时上界 |
 | `scripts/test-block-order.mjs` | 顶层块重排纯函数（复用 `boardOrder.ts` 语义）、原地放开不改序、转换合法性表 |
 | `scripts/test-markdown-plugins.mjs` | 断言编辑期与只读侧 import **同一份** remark/rehype 配置（防双栈漂移） |
-| ——（**实施首日记的更正**：原计划新增 `test-markdown-images.mjs`，但 `markdownImages.ts` 走 canvas，**node 环境跑不了** ⇒ 图片压缩与批次上限的断言并入 CDP 脚本 `verify-block-editor.mjs`；纯逻辑侧只保留「引用形态 ↔ 展示 URL 互换」，落在 `test-markdown-blocks.mjs`。合计 14 条而非 15 条） |
+| ——（**实施首日记的更正**：原计划新增 `test-markdown-images.mjs`，但 `markdownImages.ts` 走 canvas、`attachments.ts` 顶层 import `@tauri-apps/api/core`，**两者在 node 环境都不适合直接 bundle 断言** ⇒ 图片压缩、批次上限、引用形态 ↔ 展示 URL 互换这三组断言**全部并入 CDP 脚本** `verify-block-editor.mjs`。合计 14 条而非 15 条） |
 
 CDP 侧新增 **1 个**脚本：`scripts/verify-block-editor.mjs`（把手与落点、slash 与 IME、粘贴/拖入图片、Esc 与快捷键抑制、主题、超时降级、输入延迟计时）。
 
