@@ -21,7 +21,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 2. **完成即提交**：一次开发任务完成后主动 `git add` 本次相关文件并 `git commit`（中文提交信息，沿用仓库 `feat:` / `fix:` / `docs:` / `refactor:` 前缀风格），不等用户开口。
 3. **只提交不推送**：Agent 在本仓库**永不执行 `git push`**——包括 `--force`、`--tags`、创建远程分支、触发远程 CI 等任何写远程的动作，推送由用户自己完成。
    - 边界：这条只约束 Agent 的 git 操作；应用功能里「新建分支后自动 `push -u` 建立远端同名上游」是产品行为（见 `docs/软件设计文档.md` 与 ADR 相关章节），不在禁止范围。
-4. **提交前核对范围**：只提交本次任务真正改动的文件；`.scratch/`、`undefined/` 这类临时/误生成目录以及 `release/`、`artifacts/`、`public/vendor/vditor/` 等产物不进提交（后三者已在 `.gitignore`，前两者未忽略，`git add` 时须避开）。
+4. **提交前核对范围**：只提交本次任务真正改动的文件。一次性产物（拆解稿、扫描结果、临时验证页、会话交接说明、临时脚本）一律写到 `.scratch/` 下或仓库根的临时命名里——`.gitignore` 已按分节排除 Agent 运行态（`.scratch/`、`.omo/`、`.dsh-vision-router/`、`.local/`、`.agent-teams/`、误生成的 `undefined/`）与构建/本机产物（`release/`、`artifacts/`、`public/vendor/vditor/`、`db-config.txt`、`todo-kanban.db*`、`backup/`、`attachments/`）；要长期保留的结论整理进 `docs/`（设计文档 / ADR / `02-development/`），不要留在仓库根。`git add` 前后各跑一次 `git status --short --ignored` 复核，并留意 `git ls-files -i -c --exclude-standard`（应为空 = 没有「已忽略却仍被追踪」的漏网文件）。
 5. **仍须停下来确认的例外**：① 需求里明确要求先确认的；② 不可逆动作（`git reset` / `git clean` / `git rebase`、删库或改已有 SQLite 数据、`backup_restore`、`bash build.sh` 发布打包）；③ 需要花钱或动用外部账号的操作（ComfyUI partner API、远程 CI 触发、第三方服务写入）。
 6. **验证口径不变**（与上面第 2 条并存）：按用户 2026-09-14 的约定，Agent **不自行启动测试/构建/冒烟**（`npm run build`、`npm run test:logic`、`cargo test` / `clippy`、`npm run tauri dev` 等），代码改完交用户自测，提交时也不例外；只有用户点名要求时才执行。本规则若要改变，由用户另行宣布。
 
