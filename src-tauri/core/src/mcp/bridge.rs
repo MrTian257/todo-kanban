@@ -17,7 +17,7 @@ use crate::models::DbState;
 use crate::models::{DbProject, DbTodo};
 use crate::svc::{git_cmds, history};
 
-pub const RESOURCES: [(&str, &str); 6] = [
+pub const RESOURCES: [(&str, &str); 7] = [
     ("todo-kanban://state", "全部状态（项目 + 待办 + 资料）JSON"),
     ("todo-kanban://projects", "项目列表 JSON"),
     ("todo-kanban://todos", "待办列表 JSON"),
@@ -30,16 +30,24 @@ pub const RESOURCES: [(&str, &str); 6] = [
         "todo-kanban://pomodoro",
         "番茄专注统计 JSON（近 7 天分日汇总 + 连续天数 + 最近会话，只读）",
     ),
+    (
+        "todo-kanban://proposals",
+        "MCP 变更提案状态 JSON（pending 列表 + 最近已处理记录；只回 id/状态/时间/体积，不回快照正文）",
+    ),
 ];
 
-/// 真正会改动仓库/数据的工具。git_sync_commits / git_commits_between / git_commit_info
-/// 只跑 git log/show/branch --contains，属只读查询，不能算写工具。
-pub const WRITE_TOOLS: [&str; 5] = [
+/// 真正会改动仓库/业务数据的工具，只读模式下隐藏并拒绝。
+/// `git_sync_commits` / `git_commits_between` / `git_commit_info` 只跑 git 查询，不算写工具。
+///
+/// `db_preview_state` **刻意不在这里**（ADR-023）：它只往 `change_proposals` 写一条**待批准提案**，
+/// 不改任何任务，且必须人工在工作流页面点「批准」才生效——这正是给不可信写入者准备的通道。
+/// 把它也禁掉会让只读模式的 AI 完全无法参与「建议改动」，收益为零、损失明显。
+/// 边界：提案有 200 条待批准上限与 8 MB 单条上限，Token 不允许经提案修改。
+pub const WRITE_TOOLS: [&str; 4] = [
     "git_create_branch",
     "git_create_branch_from",
     "git_checkout_branch",
     "db_save_state",
-    "db_preview_state",
 ];
 
 /// 本次请求是否只读：取自上下文；无上下文按只读处理（fail-closed）。
@@ -267,6 +275,12 @@ fn read_resource(uri: &str) -> AppResult<Value> {
             let stats = crate::svc::pomodoro::stats_from_conn(&tx, 7)?;
             let recent = crate::svc::pomodoro::recent_from_conn(&tx, 20)?;
             serde_json::to_value(json!({ "stats": stats, "recent": recent }))?
+        }
+        // 提案状态：只给元数据。expected/payload 两份全量快照单条可达 8 MB，
+        // 一次资源读取解析 100 条会把库和内存都打爆（ADR-021 的教训）。
+        "todo-kanban://proposals" => {
+            let value = crate::svc::proposals::status_summary(&tx)?;
+            serde_json::to_value(value)?
         }
         "todo-kanban://projects" => serde_json::to_value(db::row::load_projects_from_conn(&tx)?)?,
         "todo-kanban://todos" => serde_json::to_value(db::row::load_todos_from_conn(&tx)?)?,
@@ -564,7 +578,7 @@ fn all_tool_schemas() -> Value {
         { "name": "git_commits_between", "description": "API 优先时间窗抓取提交（ISO 8601 起止；branch 可选，省略查询全部分支；本地回退可按 branch 标注来源）", "inputSchema": { "type": "object", "properties": { "repo": { "type": "string" }, "branch": { "type": "string" }, "since": { "type": "string" }, "until": { "type": "string" } }, "required": ["repo", "since", "until"] } , "title": "按时间窗查询提交", "annotations": {"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": true}},
         { "name": "git_commit_info", "description": "按短 hash 查询单条提交", "inputSchema": { "type": "object", "properties": { "repo": { "type": "string" }, "hash": { "type": "string" } }, "required": ["repo", "hash"] } , "title": "查询单条提交", "annotations": {"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false}},
         { "name": "db_load_state", "description": "全量读取状态 { projects, todos, resources }", "inputSchema": { "type": "object", "properties": { } } , "title": "读取全部状态", "annotations": {"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false}},
-        { "name": "db_preview_state", "description": "生成待确认的批量修改提案，不修改任务。用户在应用中查看差异后批准或拒绝；不能修改 Token。", "inputSchema": { "type": "object", "properties": { "payload": { "type": "object" }, "expected": { "type": "object" } }, "required": ["payload", "expected"] } , "title": "生成修改提案", "annotations": {"readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false}},
+        { "name": "db_preview_state", "description": "生成待确认的批量修改提案：不改任何任务，需用户在应用里批准后才生效；只读模式下也可用；不能修改 Token。", "inputSchema": { "type": "object", "properties": { "payload": { "type": "object" }, "expected": { "type": "object" } }, "required": ["payload", "expected"] } , "title": "生成修改提案", "annotations": {"readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false}},
         { "name": "db_save_state", "description": "保存状态；expected 使用 db_load_state 或上次保存结果的 state。返回 {ok,state} 权威快照；冲突需重新读取，禁止直接覆盖", "inputSchema": { "type": "object", "properties": { "payload": { "type": "object" }, "expected": { "type": "object" } }, "required": ["payload", "expected"] } , "title": "保存状态", "annotations": {"readOnlyHint": false, "destructiveHint": true, "idempotentHint": true, "openWorldHint": true}},
     ])
 }
@@ -602,7 +616,10 @@ mod tests {
             assert_eq!(err.unwrap_err().0, -32602);
             let names = listed_names();
             assert!(!names.contains(&"db_save_state".to_string()), "只读时仍供出了写工具：{names:?}");
+            assert!(!names.contains(&"git_checkout_branch".to_string()), "只读时仍供出了写工具：{names:?}");
             assert!(names.contains(&"db_load_state".to_string()), "只读时读工具应保留");
+            // 提案不改任何任务、必须人工批准，因此只读模式下**仍然可用**（ADR-023）
+            assert!(names.contains(&"db_preview_state".to_string()), "只读时不该藏起提案通道");
         });
         super::super::with_context(context(false), || {
             assert_eq!(
@@ -718,6 +735,15 @@ mod tests {
         assert_eq!(state.todos[0].created_by, "human");
         assert_eq!(state.todos[1].created_by, "ai");
         assert!(state.todos[1].ai_coordinated);
+    }
+
+    #[test]
+    fn resources_list_has_seven_including_proposals() {
+        assert_eq!(RESOURCES.len(), 7);
+        assert!(RESOURCES.iter().any(|(uri, _)| *uri == "todo-kanban://proposals"));
+        // 提案资源必须写明「不回快照正文」，否则 AI 会以为能拿到 diff 内容
+        let (_, description) = RESOURCES.iter().find(|(uri, _)| *uri == "todo-kanban://proposals").unwrap();
+        assert!(description.contains("不回快照正文"), "{description}");
     }
 
     #[test]

@@ -26,3 +26,11 @@ export function fmtDate(iso: string | null | undefined): string {
   if (!iso) return "-";
   return iso.slice(0, 10);
 }
+
+/** 字节数 → 人类可读（1 位小数；<1 MB 用 KB） */
+export function fmtBytes(bytes: number | null | undefined): string {
+  if (!bytes || bytes < 0) return "0 KB";
+  const mb = bytes / 1048576;
+  if (mb >= 1) return `${mb.toFixed(1)} MB`;
+  return `${(bytes / 1024).toFixed(0)} KB`;
+}

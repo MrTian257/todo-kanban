@@ -90,6 +90,54 @@ pub fn list() -> AppResult<Vec<Proposal>> {
     }
     Ok(result)
 }
+/// 提案状态摘要（MCP 只读资源 `todo-kanban://proposals`）。
+///
+/// **只回元数据，不回 expected/payload**：两份全量快照单条上限 8 MB，
+/// 一次资源读取把上百条解析出来会同时打爆内存与响应帧（ADR-021 的膨胀教训）。
+/// AI 侧的用法是：`db_preview_state` 返回的 `id` 记下来，之后到这里查它变成 applied 还是 rejected。
+pub fn status_summary(conn: &rusqlite::Connection) -> AppResult<serde_json::Value> {
+    let mut pending = Vec::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT id, created_at, status, LENGTH(payload_json) FROM change_proposals
+             WHERE status='pending' ORDER BY created_at DESC LIMIT 200",
+        )?;
+        let rows = stmt.query_map([], row_to_summary)?;
+        for row in rows {
+            pending.push(row?);
+        }
+    }
+    let mut recent = Vec::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT id, created_at, status, LENGTH(payload_json) FROM change_proposals
+             WHERE status <> 'pending' ORDER BY created_at DESC LIMIT 50",
+        )?;
+        let rows = stmt.query_map([], row_to_summary)?;
+        for row in rows {
+            recent.push(row?);
+        }
+    }
+    let pending_count: i64 =
+        conn.query_row("SELECT COUNT(*) FROM change_proposals WHERE status='pending'", [], |r| r.get(0))?;
+    Ok(serde_json::json!({
+        "pending": pending,
+        "recentHandled": recent,
+        "pendingCount": pending_count,
+        "pendingLimit": PENDING_LIMIT,
+        "note": "提案需用户在应用「工作流」页面批准后才生效；用 db_preview_state 返回的 id 在此查询状态",
+    }))
+}
+
+fn row_to_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<serde_json::Value> {
+    Ok(serde_json::json!({
+        "id": row.get::<_, String>(0)?,
+        "createdAt": row.get::<_, i64>(1)?,
+        "status": row.get::<_, String>(2)?,
+        "payloadBytes": row.get::<_, Option<i64>>(3)?.unwrap_or(0),
+    }))
+}
+
 pub fn reject(id: &str) -> AppResult<()> {
     let conn = db::open_existing(&super::db_cmds::db_path()?, true)?;
     // 影响行数必须校验：否则对不存在/已处理的提案也会回「已拒绝」，而它仍可被批准

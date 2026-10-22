@@ -1,4 +1,4 @@
-// 应用入口：注册 57 个 handler（commands 35 + native_workflow 6 + desktop 3 + lan 4 + mcp_http 9）
+// 应用入口：注册 59 个 handler（commands 37 + native_workflow 6 + desktop 3 + lan 4 + mcp_http 9）
 // + attachment:// 自定义协议（附件供图）+ opener/log/clipboard-manager/dialog/window-state 插件 + 启动自举。
 // 日志：数据目录 kanban.log（追加写，超限轮转只保留一份）。
 // 可选能力（菜单栏/全局快捷键）安装失败只降级为可见错误，不影响启动。
@@ -175,6 +175,8 @@ pub fn run() {
             commands::workflow_save,
             commands::automation_backfill,
             commands::history_list,
+            commands::history_stats,
+            commands::history_shrink,
             commands::history_restore,
             commands::backup_list,
             commands::backup_create,

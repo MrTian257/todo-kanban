@@ -99,3 +99,17 @@ bash build.sh               # 发布打包 → ./release/
 - 浏览器预览走 `sessionStorage` + demoState（`src/lib/storage.ts` 的 `isTauri()` 双轨）。
 - SQLite 列序是硬契约（schema.rs 头部注释）：改 schema 必须 schema.rs + row.rs + db/mod.rs 三处同步。
 - 附件协议：note 存 `attachment://<todoId>/<file>` 短引用，展示时换自定义协议（`src/lib/attachments.ts`）。
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues（仓库 `MrTian257/todo-kanban`，读写一律走 `gh` CLI）。See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+保留默认五角色，标签字符串与角色同名（`needs-triage` / `needs-info` / `ready-for-agent` / `ready-for-human` / `wontfix`）。See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+single-context（仓库根一份 `GLOSSARY.md`，架构决定放 `docs/adr/`）。See `docs/agents/domain.md`.

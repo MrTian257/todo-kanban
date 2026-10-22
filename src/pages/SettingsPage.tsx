@@ -17,14 +17,16 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { ArrowRight, Bot, Braces, Eye, EyeOff, Paperclip, SquareKanban, Timer, Wifi } from "lucide-react";
+import { ArrowRight, Bot, Braces, Database, Eye, EyeOff, Paperclip, SquareKanban, Timer, Wifi } from "lucide-react";
 import { toast } from "sonner";
 import { gcOrphanAttachments, migrateInlineImages } from "@/lib/attachments";
 import { DEFAULT_MCP_TOKEN, mcpGetConfig, mcpSetConfig } from "@/lib/mcp";
+import { historyShrink, historyStats, SHRINK_KEEP_OPTIONS, type ShrinkReport, type StorageStats } from "@/lib/maintenance";
 import { McpAccessPanel } from "@/components/settings/McpAccessPanel";
 import { useSkin, SKINS, useDisplaySize, DISPLAY_SIZES } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import { toolPaths, type ToolPath } from "@/lib/git";
+import { fmtBytes, fmtDateTime } from "@/lib/format";
 import { PET_SCALES } from "@/lib/petState";
 import { applyPetThemePreset, resetPetPosition, resolvePetTheme, setPetThemeColor, setPetPrefs, usePetPrefs } from "@/lib/petStore";
 // GrokBot 模块包：设置页直接枚举包内置的表情/状态/动作来做"试玩"预览
@@ -64,6 +66,39 @@ export function SettingsPage() {
   const [mcpToken, setMcpToken] = React.useState(DEFAULT_MCP_TOKEN);
   const [mcpShowToken, setMcpShowToken] = React.useState(false);
   const [mcpSaving, setMcpSaving] = React.useState(false);
+  // ── 存储与历史：体积统计 + 一键收缩（破坏性，带确认对话框）──────
+  const [stats, setStats] = React.useState<StorageStats | null>(null);
+  const [keepRows, setKeepRows] = React.useState<number>(500);
+  const [shrinkOpen, setShrinkOpen] = React.useState(false);
+  const [shrinking, setShrinking] = React.useState(false);
+
+  const loadStats = React.useCallback(async () => {
+    try {
+      setStats(await historyStats());
+    } catch (error) {
+      toast.error(`读取存储统计失败：${String(error)}`);
+    }
+  }, []);
+  React.useEffect(() => {
+    void loadStats();
+  }, [loadStats]);
+
+  const runShrink = async () => {
+    setShrinking(true);
+    try {
+      const report: ShrinkReport = await historyShrink(keepRows);
+      setStats(report.after);
+      setShrinkOpen(false);
+      toast.success(
+        `已删除 ${report.deletedRows} 条历史；文件 ${fmtBytes(report.before.dbBytes)} → ${fmtBytes(report.after.dbBytes)}`,
+        { duration: 6000 },
+      );
+    } catch (error) {
+      toast.error(String(error));
+    } finally {
+      setShrinking(false);
+    }
+  };
   // ── 局域网共享：设置（app_meta 持久化）+ 服务运行状态 ──────────
   const projects = useAppStore((s) => s.projects);
   const [lanEnabled, setLanEnabled] = React.useState(false);
@@ -675,6 +710,69 @@ export function SettingsPage() {
 
         <Card>
           <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Database className="h-4 w-4 text-primary" />
+              存储与历史
+            </CardTitle>
+            <CardDescription>
+              变更历史为每次改动保存「改前 + 改后」两份整实体 JSON，是数据库膨胀的主要来源
+              （备注内嵌图片时单条可达数 MB）。历史只保留最近若干条，更早的变更无法再恢复。
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-2 sm:grid-cols-2">
+              <div className="rounded-lg border p-3">
+                <p className="text-xs text-muted-foreground">数据库文件</p>
+                <p className="font-mono text-lg">{stats ? fmtBytes(stats.dbBytes) : "—"}</p>
+                {stats && stats.freeBytes > 1048576 && (
+                  <p className="text-xs text-amber-700 dark:text-amber-300">其中 {fmtBytes(stats.freeBytes)} 为已删除未回收的空闲页</p>
+                )}
+              </div>
+              <div className="rounded-lg border p-3">
+                <p className="text-xs text-muted-foreground">变更历史</p>
+                <p className="font-mono text-lg">
+                  {stats ? `${fmtBytes(stats.historyBytes)} / ${stats.historyRows} 条` : "—"}
+                </p>
+                {stats && stats.historyRows > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    最大单条 {fmtBytes(stats.historyLargestRowBytes)}；跨度 {fmtDateTime(stats.historyOldestAt)} ~ {fmtDateTime(stats.historyNewestAt)}
+                  </p>
+                )}
+              </div>
+              <div className="rounded-lg border p-3">
+                <p className="text-xs text-muted-foreground">MCP 审计日志</p>
+                <p className="font-mono text-lg">{stats ? `${stats.auditRows} 条` : "—"}</p>
+                <p className="text-xs text-muted-foreground">只存元数据不存请求正文；超 2 万条自动裁最旧</p>
+              </div>
+              <div className="rounded-lg border p-3">
+                <p className="text-xs text-muted-foreground">待批准提案</p>
+                <p className="font-mono text-lg">{stats ? `${stats.proposalRows} 条 / ${fmtBytes(stats.proposalBytes)}` : "—"}</p>
+                <p className="text-xs text-muted-foreground">每条含两份全量快照，请在「工作流」页面及时处理</p>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button variant="outline" size="sm" onClick={() => void loadStats()}>重新统计</Button>
+              <Select value={String(keepRows)} onValueChange={(value) => setKeepRows(Number(value))}>
+                <SelectTrigger className="h-8 w-40" aria-label="保留条数"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {SHRINK_KEEP_OPTIONS.map((n) => (
+                    <SelectItem key={n} value={String(n)}>保留最近 {n} 条</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button variant="outline" size="sm" className="text-destructive" onClick={() => setShrinkOpen(true)} disabled={shrinking || !stats?.historyRows}>
+                收缩历史并回收空间
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              收缩只删除 <code className="font-mono">change_history</code> 的旧记录并执行 VACUUM；业务数据、备份、附件与 MCP 审计不受影响。
+              收缩前建议先在「工作流」里做一次备份。
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
             <CardTitle>数据说明</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2 text-sm text-muted-foreground">
@@ -714,6 +812,24 @@ export function SettingsPage() {
           </CardContent>
         </Card>
       </div>
+
+      <Dialog open={shrinkOpen} onOpenChange={(open) => { if (!shrinking) setShrinkOpen(open); }}>
+        <DialogContent className="max-w-md">
+          <DialogTitle>收缩变更历史</DialogTitle>
+          <CardDescription>
+            将删除 {stats ? Math.max(0, stats.historyRows - keepRows) : 0} 条较旧的变更历史（保留最近 {keepRows} 条），
+            随后执行 VACUUM 回收文件空间。当前历史占用 {stats ? fmtBytes(stats.historyBytes) : "—"}，
+            数据库文件 {stats ? fmtBytes(stats.dbBytes) : "—"}。
+          </CardDescription>
+          <p className="mt-2 text-sm text-destructive">被删除的历史条目将无法再用于「恢复到此版本」；任务、项目、资料本身不受影响。</p>
+          <div className="mt-4 flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setShrinkOpen(false)} disabled={shrinking}>取消</Button>
+            <Button variant="destructive" onClick={() => void runShrink()} disabled={shrinking}>
+              {shrinking ? "收缩中…" : "确认收缩"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={migrateOpen} onOpenChange={(open) => { if (!maintaining) setMigrateOpen(open); }}>
         <DialogContent>

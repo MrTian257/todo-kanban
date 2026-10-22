@@ -1192,6 +1192,11 @@ mod http_tests {
         let rows = audit_rows(&srv);
         assert!(rows.iter().any(|(_, _, _, s)| s == "READONLY_DENIED"), "只读拒绝要留痕：{rows:?}");
         assert!(rows.iter().any(|(actor, _, _, _)| actor == "只读机器人"), "审计要能归属到具体 AI：{rows:?}");
+        // 只读 Token **可以**提案：不改任何任务，等人工在工作流页面批准（ADR-023）
+        let (status, body) = call(srv.port, "sk-ro-0000", preview_call(99));
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body["result"]["isError"], json!(false), "只读模式下提案应可用：{body}");
+        assert!(body["result"]["structuredContent"]["id"].is_string(), "提案要回 id 供后续查询");
         let (status, body) = call(srv.port, "sk-rw-0000", save_call(2));
         assert_eq!(status, 200);
         assert_eq!(body["result"]["isError"], json!(false), "可写 Token 应能保存：{body}");
@@ -1232,6 +1237,42 @@ mod http_tests {
         assert!(
             rows.iter().any(|(_, method, _, _)| method == "resources/read"),
             "被拒的调用也要留痕：{rows:?}"
+        );
+    }
+
+    fn preview_call(id: i64) -> Value {
+        let state = json!({"projects": [], "todos": [], "resources": []});
+        json!({"jsonrpc":"2.0","id":id,"method":"tools/call",
+               "params":{"name":"db_preview_state","arguments":{"payload":state,"expected":state}}})
+    }
+
+    /// 提案状态资源：只读 AI 也能查自己那条提案在不在待批准列表里，且**不回快照正文**
+    #[test]
+    fn proposals_resource_exposes_status_without_payload() {
+        let srv = server(&base_meta());
+        let (_, body) = call(srv.port, "sk-ro-0000", preview_call(1));
+        let proposal_id = body["result"]["structuredContent"]["id"].as_str().unwrap().to_string();
+        let (status, body) = call(srv.port, "sk-ro-0000", json!({"jsonrpc":"2.0","id":2,"method":"resources/read",
+            "params":{"uri":"todo-kanban://proposals"}}));
+        assert_eq!(status, 200, "{body}");
+        let text = body["result"]["content"][0]["text"].as_str().unwrap();
+        let parsed: Value = serde_json::from_str(text).unwrap();
+        assert!(
+            parsed["pending"].as_array().unwrap().iter().any(|item| item["id"].as_str() == Some(proposal_id.as_str())),
+            "刚提的提案必须在列表里：{parsed}"
+        );
+        assert!(parsed["pending"][0]["payloadBytes"].is_number(), "应给出体积而非正文");
+        // 摘要只该有 id / 时间 / 状态 / 体积：出现快照字段名就说明把正文漏出去了
+        let keys: Vec<&str> = parsed["pending"][0]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            keys,
+            vec!["id", "createdAt", "status", "payloadBytes"],
+            "提案摘要字段超出预期，可能泄漏快照：{keys:?}"
         );
     }
 

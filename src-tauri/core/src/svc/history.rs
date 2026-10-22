@@ -8,6 +8,7 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::cell::RefCell;
+use std::path::Path;
 use std::collections::HashMap;
 thread_local! { static ACTOR: RefCell<String> = const { RefCell::new(String::new()) }; }
 
@@ -257,4 +258,102 @@ mod tests {
         let list = json!([1, 2]);
         assert!(!only_order_noise(Some(&list), Some(&list)));
     }
+}
+
+// ── 变更历史体积治理（ADR-021 的后续：存量收缩）─────────────────
+
+/// 库与历史的体积统计（设置页展示，全部走 SQL 聚合，不把 JSON 读进内存）。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageStats {
+    /// 数据库文件实际占用（page_count × page_size）
+    pub db_bytes: i64,
+    /// 其中可回收的空闲页
+    pub free_bytes: i64,
+    pub history_rows: i64,
+    /// before_json + after_json 的总字节
+    pub history_bytes: i64,
+    pub history_largest_row_bytes: i64,
+    pub history_oldest_at: Option<i64>,
+    pub history_newest_at: Option<i64>,
+    pub audit_rows: i64,
+    pub audit_bytes: i64,
+    pub proposal_rows: i64,
+    pub proposal_bytes: i64,
+}
+
+/// 用 SUM(LENGTH(col)) 统计整实体 JSON 的体积：这是库膨胀的主因（ADR-021）。
+pub fn stats(path: &Path) -> AppResult<StorageStats> {
+    let conn = db::open_existing(path, false)?;
+    let page_size: i64 = conn.query_row("PRAGMA page_size", [], |r| r.get(0))?;
+    let page_count: i64 = conn.query_row("PRAGMA page_count", [], |r| r.get(0))?;
+    let free_count: i64 = conn.query_row("PRAGMA freelist_count", [], |r| r.get(0))?;
+    let scalar = |sql: &str| -> AppResult<i64> {
+        let value: Option<i64> = conn.query_row(sql, [], |r| r.get(0)).unwrap_or(None);
+        Ok(value.unwrap_or(0))
+    };
+    Ok(StorageStats {
+        db_bytes: page_size * page_count,
+        free_bytes: page_size * free_count,
+        history_rows: scalar("SELECT COUNT(*) FROM change_history")?,
+        history_bytes: scalar(
+            "SELECT COALESCE(SUM(COALESCE(LENGTH(before_json),0)+COALESCE(LENGTH(after_json),0)),0) FROM change_history",
+        )?,
+        history_largest_row_bytes: scalar(
+            "SELECT COALESCE(MAX(COALESCE(LENGTH(before_json),0)+COALESCE(LENGTH(after_json),0)),0) FROM change_history",
+        )?,
+        history_oldest_at: conn
+            .query_row("SELECT MIN(happened_at) FROM change_history", [], |r| r.get(0))
+            .unwrap_or(None),
+        history_newest_at: conn
+            .query_row("SELECT MAX(happened_at) FROM change_history", [], |r| r.get(0))
+            .unwrap_or(None),
+        audit_rows: scalar("SELECT COUNT(*) FROM mcp_audit")?,
+        audit_bytes: scalar("SELECT COALESCE(SUM(LENGTH(error)),0) FROM mcp_audit")?,
+        proposal_rows: scalar("SELECT COUNT(*) FROM change_proposals WHERE status='pending'")?,
+        proposal_bytes: scalar(
+            "SELECT COALESCE(SUM(LENGTH(expected_json)+LENGTH(payload_json)),0) FROM change_proposals",
+        )?,
+    })
+}
+
+/// 只保留最近 `keep_rows` 条变更历史，返回删除行数。
+/// 语义与 `workflow::trim` 一致（按时间裁最旧），差别是这里由用户显式触发、条数自选。
+pub fn shrink_rows(conn: &Connection, keep_rows: i64) -> AppResult<usize> {
+    Ok(conn.execute(
+        "DELETE FROM change_history WHERE id NOT IN (
+           SELECT id FROM change_history ORDER BY happened_at DESC, id DESC LIMIT ?1
+         )",
+        [keep_rows],
+    )?)
+}
+
+/// 收缩结果：删了多少行、文件从多大变到多大。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShrinkReport {
+    pub deleted_rows: usize,
+    pub before: StorageStats,
+    pub after: StorageStats,
+}
+
+/// 用户显式触发的历史收缩：删旧行 → VACUUM 回收页。
+///
+/// 只删 `change_history`（变更历史），不动业务数据、备份、附件与 MCP 审计。
+/// 必须 VACUUM：SQLite 删除大 JSON 行后页只进 freelist，文件不会自己变小。
+pub fn shrink(path: &Path, keep_rows: i64) -> AppResult<ShrinkReport> {
+    let before = stats(path)?;
+    let deleted_rows = {
+        let conn = db::open_existing(path, true)?;
+        let deleted = shrink_rows(&conn, keep_rows)?;
+        // 顺带按既有策略裁审计与已处理提案（同一个连接里做完，避免二次开库）
+        crate::svc::workflow::trim(&conn)?;
+        deleted
+    };
+    // VACUUM 不能在事务里跑：删掉的大 JSON 行只会进 freelist，
+    // 不 VACUUM 文件体积不会变小，用户看到的"没生效"就是这个。
+    let conn = db::open_existing(path, true)?;
+    conn.execute_batch("VACUUM;")?;
+    drop(conn);
+    Ok(ShrinkReport { deleted_rows, before, after: stats(path)? })
 }

@@ -246,6 +246,30 @@ pub async fn history_list(
     })
     .await
 }
+/// 库与变更历史的体积统计（设置页「存储与历史」）
+#[tauri::command]
+pub async fn history_stats() -> Result<todo_kanban_core::svc::history::StorageStats, String> {
+    blocking(move || {
+        let path = db_cmds::db_path().map_err(err_str)?;
+        todo_kanban_core::svc::history::stats(&path).map_err(err_str)
+    })
+    .await
+}
+
+/// 收缩变更历史：只保留最近 keepRows 条，并 VACUUM 回收文件空间。
+/// 破坏性操作，前端必须二次确认；业务数据、备份与附件不受影响。
+#[tauri::command]
+pub async fn history_shrink(keep_rows: i64) -> Result<todo_kanban_core::svc::history::ShrinkReport, String> {
+    blocking(move || {
+        if !(50..=20_000).contains(&keep_rows) {
+            return Err("保留条数需在 50 ~ 20000 之间".to_string());
+        }
+        let path = db_cmds::db_path().map_err(err_str)?;
+        todo_kanban_core::svc::history::shrink(&path, keep_rows).map_err(err_str)
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn history_restore(
     id: String,
