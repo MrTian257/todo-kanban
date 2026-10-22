@@ -1,14 +1,16 @@
 // Shared CommonMark / GFM renderer. Sanitize raw HTML before trusted rendering plugins.
 import { memo, useId } from "react";
 import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
-import remarkGfm from "remark-gfm";
+// 语法子集的单一来源：与编辑期块解析（src/lib/markdownBlocks.ts）共用同一份 remark 扩展，
+// 否则会出现「编辑器能造出来、看板显示不出来」。改扩展只改 src/lib/markdownPlugins.ts。
+import { baseRemarkPlugins } from "@/lib/markdownPlugins";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import type { PluggableList } from "unified";
 import { attachmentDisplayUrl } from "@/lib/attachments";
 import { cn } from "@/lib/utils";
 
-const remarkPlugins: PluggableList = [remarkGfm];
+const remarkPlugins: PluggableList = baseRemarkPlugins;
 const rehypePlugins: PluggableList = [
   rehypeRaw,
   [rehypeSanitize, {

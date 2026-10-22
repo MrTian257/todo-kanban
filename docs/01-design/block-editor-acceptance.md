@@ -41,7 +41,7 @@
 | 能力 | 断言 | 手段 | 落点 |
 | --- | --- | --- | --- |
 | 三条入口 | 工具栏选择 / `Ctrl+V` 粘贴 / 拖入，均插入到**光标处**而非文末 | CDP | 新建 `verify-block-editor.mjs` |
-| 压缩与格式 | PNG/JPEG 最长边 1280px；GIF/WebP **原样保留**字节（动画与透明不破坏） | 逻辑 | 已有 `markdownImages.ts`，补断言 |
+| 压缩与格式 | PNG/JPEG 最长边 1280px；GIF/WebP **原样保留**字节（动画与透明不破坏） | 逻辑 | 已有 `markdownImages.ts`，**canvas 依赖 ⇒ 断言只能走 CDP**（见 §4 更正） |
 | 上限拒绝 | 单批 > 5 张 / PNG-JPEG 单张 > 10 MB / GIF-WebP 单张 > 5 MB / 合计 > 20 MB / 压缩后仍 > 5 MB → **读取前**拒绝且原备注不动 | 逻辑 | 同上 |
 | 处理期禁保存 | `onProcessingChange(true)` → 保存按钮禁用，`onSubmit` 内二次检查 | CDP | 新建 |
 | 竞态双检 | 处理中切换宿主或 `note` 被外部更新 → **拒绝插入**并提示「备注已更新，请重新插入图片」，不得把图插进另一条待办 | 逻辑 | 票 08 / ADR-0004 口径 |
@@ -110,14 +110,14 @@
 
 ## 4. `npm run test:logic` 的变化
 
-现状 11 条。本次新增 **4 条**并入（合计 15 条）：
+现状 11 条。本次先并入 **3 条**（合计 14 条）：
 
 | 新脚本 | 覆盖 |
 | --- | --- |
 | `scripts/test-markdown-blocks.mjs` | 逐字往返恒等、透明块逐字节、空串进出、Setext/缩进代码规则、非 1 起始序号、转义竖线、内部三反引号、耗时上界 |
 | `scripts/test-block-order.mjs` | 顶层块重排纯函数（复用 `boardOrder.ts` 语义）、原地放开不改序、转换合法性表 |
 | `scripts/test-markdown-plugins.mjs` | 断言编辑期与只读侧 import **同一份** remark/rehype 配置（防双栈漂移） |
-| `scripts/test-markdown-images.mjs` | 压缩与批次上限的拒绝路径、GIF/WebP 原样保留、引用形态互换可逆 |
+| ——（**实施首日记的更正**：原计划新增 `test-markdown-images.mjs`，但 `markdownImages.ts` 走 canvas，**node 环境跑不了** ⇒ 图片压缩与批次上限的断言并入 CDP 脚本 `verify-block-editor.mjs`；纯逻辑侧只保留「引用形态 ↔ 展示 URL 互换」，落在 `test-markdown-blocks.mjs`。合计 14 条而非 15 条） |
 
 CDP 侧新增 **1 个**脚本：`scripts/verify-block-editor.mjs`（把手与落点、slash 与 IME、粘贴/拖入图片、Esc 与快捷键抑制、主题、超时降级、输入延迟计时）。
 
