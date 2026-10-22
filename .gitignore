@@ -1,7 +1,7 @@
 # todo-kanban —— 忽略规则
 # 分节：依赖与构建产物 / 日志 / 本地覆盖与凭据 / 编辑器 / Agent 与工具运行态 / 临时输出文档与脚本
-# 约定：一次性验证页、扫描结果、会话交接说明等临时产物写进 .scratch 或仓库根的临时命名（下面已排除）；
-#       需要长期保留的结论请整理进 docs（设计文档、ADR、mcp-access.md），不要留在仓库根。
+# 约定：一次性验证页、扫描结果、会话交接说明等临时产物写进 .scratch/ 或仓库根的临时命名（下面已排除）；
+#       需要长期保留的结论请整理进 docs/（设计文档、ADR、02-development/mcp-access.md），不要留在仓库根。
 
 # ===== 依赖与构建产物 =====
 node_modules/
@@ -29,7 +29,7 @@ pnpm-debug.log*
 lerna-debug.log*
 
 # ===== 本地覆盖与凭据（永不入库）=====
-# *.local：本地覆盖值；同时也命中 .local 这类本地状态目录
+# *.local 既匹配本地覆盖值文件，也匹配 .local/ 这类本地状态目录（gh device-id 等）
 *.local
 *.local.json
 *.local.md
@@ -38,7 +38,7 @@ AGENTS.local.md
 .env.*
 !.env.example
 
-# 数据源指针与本机数据（ADR-012：库固定在运行目录 todo-kanban.db + attachments + backup）
+# 数据源指针与本机数据（ADR-012：库固定在运行目录 todo-kanban.db，附件与备份同目录）
 /db-config.txt
 /todo-kanban.db
 /todo-kanban.db-shm
@@ -68,30 +68,30 @@ Thumbs.db
 /.tmp/
 /tmp/
 
-# 脚本取不到路径变量时误生成的目录（曾出现 undefined\temp\ 带 114 MB node_modules）
+# 脚本取不到路径变量时误生成的目录（曾出现 undefined/temp 下 114 MB 的 node_modules）
 /undefined/
 
-# Agent 会话续接 / notepad / 任务租约（.omoun-continuation 原先单独忽略，这里整目录收口）
+# Agent 会话续接、notepad、任务租约（原先只忽略 .omo/run-continuation，这里整目录收口）
 .omo/
 .opencode/
 .agent-teams/
 .codex/
 
-# DSH 视觉路由截图与探针产物（artifacts 子目录原本被误命中，现整目录忽略，不再依赖偶然）
+# DSH 视觉路由截图与探针产物（其 artifacts 子目录原先被偶然命中，现整目录显式忽略）
 .dsh-vision-router/
 
 # 浏览器 / 自动化 / MCP 工具的本地缓存
 .playwright-mcp/
 .cache/
 
-# 客户端私有设置；技能本体（.agentsskills、.claudeskills）是项目内容，仍然追踪
+# 客户端私有设置；技能本体（.agents/skills、.claude/skills 与 skills-lock.json）是项目内容，仍然追踪
 .claude/settings.local.json
 
 # ===== 临时输出的文档与脚本 =====
 # 脚本生成的改动清单
 /CHANGED_FILES.txt
 
-# 会话交接说明（内容随会话失效；长期结论请整理进 docs 或 ADR）
+# 会话交接说明（内容随会话失效；长期结论请整理进 docs/ 或 ADR）
 /开发续接*.md
 /*交接*.md
 
