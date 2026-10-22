@@ -10,6 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `docs/软件设计文档.md` — 整合视图（产品/架构/数据/接口/UI/流程）
 - `docs/02-development/directory-map.md` — 「去哪里改」文件地图（部分文件名仍为 todo-git 旧称，如 TodoCard.tsx、todo-git-core 已更名/移除）
 - `docs/decisions/` — ADR-001 ~ ADR-023 架构决策（文件名自描述：hash-router / system-cli-git-curl / sqlite-storage / db-config-data-source / workspace-split / global-seq-and-commit-dedupe / mcp-handwritten-protocol / single-store-write-chain / swimlane-board / swimlane-order-persistence / data-version-upgrade / fixed-db-path / custom-fields-and-automations / git-report / github-and-gitlab-forge / pomodoro-and-pet / keyboard-shortcuts / lan-sharing / board-lane-width-and-density / history-order-skip-and-report-scope / mcp-readonly-from-settings / mcp-http-tokens-and-audit）。**注意 ADR-007 的 env 只读决策已被 ADR-022 取代**。
+- **新 ADR 写 `docs/adr/`**（四位编号、从 0001 起，约定见 `docs/agents/domain.md`）：现有 `docs/adr/0001-note-markdown-authority-blocks-as-view.md`——备注（`note`）仍是唯一存储的 Markdown 字符串、块只是编辑期视图（零 schema 变更 / 数据版本停 15 / 迁移期零回写 / 块 id 易失 / 未碰块逐字保留）；术语表在仓库根 `GLOSSARY.md`
 - `docs/02-development/mcp-access.md` — **MCP 接入指南**（给使用者/AI 看的 how-to：stdio 与 HTTP 配置、多 AI Token、只读取严、审计日志、常见问题）。改 MCP 对外行为（工具、鉴权、只读、审计、传输）时**必须同步它**。
 - `docs/README.md` 的文档地图已漂移（列出多份不存在的文件），只作背景参考
 
