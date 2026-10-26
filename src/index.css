@@ -820,3 +820,5 @@ input, textarea, select, button { font-family: inherit; }
 }
 /* 块菜单跟随把手的 fixed 定位由组件内联给出 */
 .tk-block-menu { max-height: 60vh; overflow-y: auto; }
+/* slash 菜单：由 Lexical 的 typeahead 定位并 portal，这里只管外观与最大高度 */
+.tk-slash-menu { max-height: 50vh; overflow-y: auto; }

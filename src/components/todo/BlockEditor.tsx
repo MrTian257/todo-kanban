@@ -45,6 +45,7 @@ import { splitBlocks, joinBlocks, type Block, type BlockDoc } from "@/lib/markdo
 import { blockNodeToMarkdown, markdownToEditorJson } from "@/lib/blockDocument";
 import { ImageNode, SourceBlockNode, $createImageNode } from "./BlockNodes";
 import { BlockToolbar, BlockHandle, type StructureActions } from "./BlockChrome";
+import { BlockSlashMenu } from "./BlockSlashMenu";
 import { convertBlock, removeBlock, duplicateBlock, insertBlockAfter } from "@/lib/blockOperations";
 import { compressImage, IMAGE_BATCH_MAX_BYTES, IMAGE_BATCH_MAX_COUNT, IMAGE_MAX_BYTES, IMAGE_TYPES } from "./markdownImages";
 
@@ -398,6 +399,9 @@ export function BlockEditor(props: Props) {
           <HorizontalRulePlugin />
           <TabIndentationPlugin />
           {anchor && <BlockHandle actions={actions} disabled={!!props.disabled} anchorElem={anchor} />}
+          {/* slash 菜单与块菜单走同一条路径（actions.convertAt → 纯函数 → 重新导入）：
+              词表由 conversionTargetsFor 生成，所以两个菜单永远给出一致的合法项。 */}
+          <BlockSlashMenu disabled={!!props.disabled} onSelect={(index, target) => actions.convertAt(index, target)} />
           <SyncPlugin
             value={props.value}
             onChange={props.onChange}
