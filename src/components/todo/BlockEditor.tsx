@@ -41,9 +41,11 @@ import {
   attachmentDisplayToRef, attachmentDisplayUrl, attachmentRefToDisplay, importImage, MAX_IMAGE_BYTES,
   type AttachmentOwner,
 } from "@/lib/attachments";
-import { splitBlocks, type Block, type BlockDoc } from "@/lib/markdownBlocks";
+import { splitBlocks, joinBlocks, type Block, type BlockDoc } from "@/lib/markdownBlocks";
 import { blockNodeToMarkdown, markdownToEditorJson } from "@/lib/blockDocument";
 import { ImageNode, SourceBlockNode, $createImageNode } from "./BlockNodes";
+import { BlockToolbar, BlockHandle, type StructureActions } from "./BlockChrome";
+import { convertBlock, removeBlock, duplicateBlock, insertBlockAfter } from "@/lib/blockOperations";
 import { compressImage, IMAGE_BATCH_MAX_BYTES, IMAGE_BATCH_MAX_COUNT, IMAGE_MAX_BYTES, IMAGE_TYPES } from "./markdownImages";
 
 interface Props {
@@ -79,6 +81,8 @@ interface SyncProps {
   onProcessingChange?: (busy: boolean) => void;
   registerFlush: (fn: (() => void) | null) => void;
   registerImageInsert: (fn: ((files: File[]) => Promise<void>) | null) => void;
+  /** 结构操作入口：把手/块菜单调用纯函数后整篇重新导入（注入自 BlockEditor）。 */
+  registerStructure: (fn: ((op: (doc: BlockDoc) => BlockDoc) => void) | null) => void;
   onImageError: (message: string) => void;
 }
 
@@ -98,9 +102,9 @@ function SyncPlugin(props: SyncProps): null {
   const busy = React.useRef(false);
   const applyingExternal = React.useRef(false);
 
-  const publish = React.useCallback(() => {
-    if (composing.current || busy.current || applyingExternal.current) return;
-    editor.getEditorState().read(() => {
+  /** 把当前 Lexical 状态算成 Markdown（不比较、不回写）。publish 与结构操作共用它。 */
+  const buildMarkdown = React.useCallback((): string => {
+    return editor.getEditorState().read(() => {
       const children = $getRoot().getChildren();
       const doc = docRef.current;
       const dirty = touchedKeys.current;
@@ -108,9 +112,7 @@ function SyncPlugin(props: SyncProps): null {
       // 这是「打开→保存不产生 diff」最强的一条保证（ADR-0001 §7 / 票 02 R2-5），
       // 也让「纯打开、聚焦、移动光标」自动不脏。
       if (dirty.size === 0 && children.length === doc.blocks.length) {
-        const markdown = attachmentDisplayToRef(doc.source);
-        if (markdown !== lastEmitted.current) { lastEmitted.current = markdown; latest.current.onChange(markdown); }
-        return;
+        return attachmentDisplayToRef(doc.source);
       }
       const parts: string[] = [];
       for (const child of children) {
@@ -124,10 +126,15 @@ function SyncPlugin(props: SyncProps): null {
       }
       const body = parts.filter(part => part.length > 0).join("\n\n");
       const display = body.length === 0 ? "" : body + doc.tail;
-      const markdown = attachmentDisplayToRef(display);
-      if (markdown !== lastEmitted.current) { lastEmitted.current = markdown; latest.current.onChange(markdown); }
+      return attachmentDisplayToRef(display);
     });
   }, [editor]);
+
+  const publish = React.useCallback(() => {
+    if (composing.current || busy.current || applyingExternal.current) return;
+    const markdown = buildMarkdown();
+    if (markdown !== lastEmitted.current) { lastEmitted.current = markdown; latest.current.onChange(markdown); }
+  }, [buildMarkdown]);
 
   const importMarkdown = React.useCallback((markdown: string) => {
     const display = attachmentRefToDisplay(markdown);
@@ -240,6 +247,28 @@ function SyncPlugin(props: SyncProps): null {
     return () => latest.current.registerImageInsert(null);
   }, [insertImages]);
 
+  /**
+   * 结构操作：先把当前状态落成 Markdown，再在**块文档纯函数**上执行一次操作，最后整篇重新导入。
+   *
+   * 为什么这样做（而不是直接改 Lexical 节点）：规格 D1 要求结构逻辑只有一份实现、
+   * 且必须能在没有 DOM 的情况下被断言。代价是**会失去光标位置**（重新导入后光标落到文末），
+   * 这是本期明写的取舍；光标恢复留给后续（需要建立 Lexical 节点 ↔ 块 id 的双向映射）。
+   */
+  const runStructure = React.useCallback((op: (doc: BlockDoc) => BlockDoc) => {
+    const markdown = buildMarkdown();
+    const doc = splitBlocks(attachmentRefToDisplay(markdown));
+    // 刚 split 出来的 doc 里 id 就是下标，所以把手给的 DOM 下标可以直接当块 id 用
+    const next = op(doc);
+    const out = attachmentDisplayToRef(joinBlocks(next));
+    importMarkdown(out);
+    requestAnimationFrame(() => editor.focus());
+  }, [buildMarkdown, importMarkdown, editor]);
+
+  React.useEffect(() => {
+    latest.current.registerStructure(runStructure);
+    return () => latest.current.registerStructure(null);
+  }, [runStructure]);
+
   React.useEffect(() => {
     const root = editor.getRootElement();
     if (!root) return;
@@ -293,9 +322,23 @@ export function BlockEditor(props: Props) {
   const [uploading, setUploading] = React.useState(false);
   const filePicker = React.useRef<HTMLInputElement>(null);
   const rootBox = React.useRef<HTMLDivElement>(null);
+  const contentBox = React.useRef<HTMLDivElement>(null);
 
   const registerFlush = React.useCallback((fn: (() => void) | null) => { flushRef.current = fn; }, []);
   const registerImageInsert = React.useCallback((fn: ((files: File[]) => Promise<void>) | null) => { imageInsertRef.current = fn; }, []);
+  const structureRef = React.useRef<((op: (doc: BlockDoc) => BlockDoc) => void) | null>(null);
+  const registerStructure = React.useCallback((fn: ((op: (doc: BlockDoc) => BlockDoc) => void) | null) => { structureRef.current = fn; }, []);
+  /** 把手/块菜单的动作表：每个动作只做一件事 —— 调一次纯函数。 */
+  const actions: StructureActions = React.useMemo(() => ({
+    // 块 id 在下标空间里就等于下标（刚 split 出来的 doc），所以这里直接把下标当 id 用
+    convertAt: (index, target) => structureRef.current?.(doc => convertBlock(doc, index, target)),
+    removeAt: index => structureRef.current?.(doc => removeBlock(doc, index)),
+    duplicateAt: index => structureRef.current?.(doc => duplicateBlock(doc, index)),
+    insertAfter: index => structureRef.current?.(doc => insertBlockAfter(doc, index, "paragraph")),
+  }), []);
+  /** 把手要 portal 进的锚点元素；挂载后才拿得到，所以用 state。 */
+  const [anchor, setAnchor] = React.useState<HTMLElement | null>(null);
+  React.useEffect(() => { setAnchor(contentBox.current); }, []);
   const onProcessing = React.useCallback((busy: boolean) => { setUploading(busy); props.onProcessingChange?.(busy); }, [props]);
   const onImageError = React.useCallback((message: string) => setError(message), []);
 
@@ -334,7 +377,8 @@ export function BlockEditor(props: Props) {
       {error && <p role="alert" className="shrink-0 px-4 py-2 text-sm text-destructive">{error}</p>}
       <input ref={filePicker} type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden onChange={onPicked} />
       <LexicalComposer initialConfig={initialConfig}>
-        <div className="relative min-h-0 flex-1 overflow-auto">
+        <BlockToolbar disabled={props.disabled} busy={uploading} onInsertImage={props.owner ? () => filePicker.current?.click() : undefined} />
+        <div ref={contentBox} className="relative min-h-0 flex-1 overflow-auto">
           <RichTextPlugin
             contentEditable={<ContentEditable
               aria-label={props.label}
@@ -353,6 +397,7 @@ export function BlockEditor(props: Props) {
           <LinkPlugin />
           <HorizontalRulePlugin />
           <TabIndentationPlugin />
+          {anchor && <BlockHandle actions={actions} disabled={!!props.disabled} anchorElem={anchor} />}
           <SyncPlugin
             value={props.value}
             onChange={props.onChange}
@@ -361,6 +406,7 @@ export function BlockEditor(props: Props) {
             onProcessingChange={onProcessing}
             registerFlush={registerFlush}
             registerImageInsert={registerImageInsert}
+            registerStructure={registerStructure}
             onImageError={onImageError}
           />
         </div>
