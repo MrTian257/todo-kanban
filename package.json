@@ -8,7 +8,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "test:logic": "node scripts/test-board-order.mjs && node scripts/test-block-order.mjs && node scripts/test-markdown-blocks.mjs && node scripts/test-markdown-plugins.mjs && node scripts/test-block-document.mjs && node scripts/test-day-clock.mjs && node scripts/test-state-optimizations.mjs && node scripts/test-list-performance.mjs && node scripts/test-custom-fields.mjs && node scripts/test-manual-order.mjs && node scripts/test-git-report-period.mjs && node scripts/test-pomodoro.mjs && node scripts/test-pet-state.mjs && node scripts/test-grokbot.mjs && node scripts/test-shortcut-keys.mjs",
+    "test:logic": "node scripts/test-board-order.mjs && node scripts/test-block-order.mjs && node scripts/test-block-operations.mjs && node scripts/test-markdown-blocks.mjs && node scripts/test-markdown-plugins.mjs && node scripts/test-block-document.mjs && node scripts/test-day-clock.mjs && node scripts/test-state-optimizations.mjs && node scripts/test-list-performance.mjs && node scripts/test-custom-fields.mjs && node scripts/test-manual-order.mjs && node scripts/test-git-report-period.mjs && node scripts/test-pomodoro.mjs && node scripts/test-pet-state.mjs && node scripts/test-grokbot.mjs && node scripts/test-shortcut-keys.mjs",
     "tauri": "tauri"
   },
   "dependencies": {
