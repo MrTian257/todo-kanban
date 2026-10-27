@@ -765,7 +765,7 @@ input, textarea, select, button { font-family: inherit; }
   .tk-pomodoro-indicator-text { display: none; }
 }
 
-   颜色一律吃 [data-theme] 的 CSS 变量，所以明暗 + 5 套皮肤零额外适配；
+/* 块编辑器颜色一律吃 [data-theme] 的 CSS 变量，所以明暗 + 5 套皮肤零额外适配；
    不再调用任何 Vditor 主题 API（那是旧 MarkdownEditor 的 setTheme 路径）。 */
 .tk-block-editor { background: var(--card); }
 .tk-block-format-toolbar { max-width: min(95vw, 760px); }
