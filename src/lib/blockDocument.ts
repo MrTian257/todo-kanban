@@ -379,12 +379,9 @@ export function markdownToEditorJson(markdown: string): LexicalNode {
  * 只有 Lexical 报告为 dirty 的块才走这条序列化，其余块沿用 BlockDoc 里的原始字节 ——
  * 这是 ADR-0001 §4 在编辑器里的兑现点（整篇 editorJsonToMarkdown 做不到，它会把未碰的块也规范化）。
  */
-export function blockNodeToMarkdown(node: LexicalNode | SerializedLike): string {
+export function blockNodeToMarkdown(node: unknown): string {
   return nodeToMarkdown(node as LexicalNode);
 }
-
-/** Lexical 的 exportJSON() 返回它的序列化形态；桥只读字段，所以这里接受两种形状。 */
-type SerializedLike = { type: string; version?: number; children?: unknown[]; [key: string]: unknown };
 
 /** 从 Lexical root 产回整块源文（只用于**被碰过**的块）。 */
 export function editorJsonToMarkdown(root: LexicalNode): string {

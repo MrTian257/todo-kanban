@@ -122,6 +122,10 @@ function SyncPlugin(props: SyncProps): null {
 
   /** 把当前 Lexical 状态算成 Markdown（不比较、不回写）。publish 与结构操作共用它。 */
   const buildMarkdown = React.useCallback((): string => {
+    // **必须用整篇 state 的 toJSON() 取顶层节点**：Lexical 0.52 的 node.exportJSON() 不再携带子节点
+    // （children 由 state 序列化器装配）。逐节点 exportJSON() 拿到的是 children=[]，
+    // 于是"被碰过的块"会被序列化成空串 —— 用户一打字保存就把那块内容写没了（比回显为空更危险）。
+    const stateJson = editor.getEditorState().toJSON();
     return editor.getEditorState().read(() => {
       const children = $getRoot().getChildren();
       const doc = docRef.current;
@@ -132,16 +136,19 @@ function SyncPlugin(props: SyncProps): null {
       if (dirty.size === 0 && children.length === doc.blocks.length) {
         return attachmentDisplayToRef(doc.source);
       }
+      // 顺序与 $getRoot().getChildren() 一一对应：状态序列化不会重排顶层节点
+      const serializedChildren = stateJson.root.children;
       const parts: string[] = [];
-      for (const child of children) {
+      children.forEach((child, index) => {
         const mapped = keyToBlock.current.get(child.getKey());
         const subtree = new Set<NodeKey>();
         collectKeys(child, subtree);
         const isDirty = [...subtree].some(key => dirty.has(key));
         // 未碰 → 沿用原始字节（标记符、缩进、转义、尾随空格一律不动）；
-        // 碰过 → 重新序列化，允许规范化（§4 明写）。
-        parts.push(mapped && !isDirty ? mapped.source : blockNodeToMarkdown(child.exportJSON()));
-      }
+        // 碰过 → 用序列化形态重新出 Markdown，允许规范化（§4 明写）。
+        if (mapped && !isDirty) { parts.push(mapped.source); return; }
+        parts.push(blockNodeToMarkdown(serializedChildren[index]));
+      });
       const body = parts.filter(part => part.length > 0).join("\n\n");
       const display = body.length === 0 ? "" : body + doc.tail;
       return attachmentDisplayToRef(display);
