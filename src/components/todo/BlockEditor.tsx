@@ -74,6 +74,15 @@ interface Props {
 // CHECK_LIST 放在其它列表转换前，避免通用无序列表先消费 `- [ ]`。
 const NOTION_MARKDOWN_TRANSFORMERS = [CHECK_LIST, ...DEFAULT_TRANSFORMERS];
 
+/**
+ * 导入用的 update tag。为什么要它：
+ * editor.setEditorState() 会把**所有节点**标成 dirty，如果不加区分，
+ * 打开一条已有备注立刻就会被当成"用户把每一块都改过了"——于是整篇走慢路重新序列化，
+ * 未碰的块被规范化（违反 ADR-0001 §4），宿主还会平白收到一次 onChange（打开即变脏）。
+ * 用 tag 把"导入"这次更新摘出来，是 Lexical 官方给的正路。
+ */
+const IMPORT_TAG = "tk-import";
+
 /** 收集一个子树的全部节点 key，用于「后代脏 ⇒ 所属顶层块脏」。 */
 function collectKeys(node: LexicalNode, into: Set<NodeKey>): void {
   into.add(node.getKey());
@@ -91,6 +100,8 @@ interface SyncProps {
   /** 结构操作入口：把手/块菜单调用纯函数后整篇重新导入（注入自 BlockEditor）。 */
   registerStructure: (fn: ((op: (doc: BlockDoc) => BlockDoc) => void) | null) => void;
   onImageError: (message: string) => void;
+  /** 导入解析失败时把原因交给宿主显示（不要静默留空白） */
+  onImportError: (message: string) => void;
 }
 
 function SyncPlugin(props: SyncProps): null {
@@ -149,7 +160,15 @@ function SyncPlugin(props: SyncProps): null {
     touchedKeys.current = new Set();
     applyingExternal.current = true;
     try {
-      editor.setEditorState(editor.parseEditorState(JSON.stringify(markdownToEditorJson(display))));
+      // **必须包一层 { root }**：Lexical 的 parseEditorState 要的是 EditorState 形态
+      // （{root: SerializedRootNode}），直接传裸 root 节点会在内部读 parsed.root.type 时抛
+      // "Cannot read properties of undefined (reading 'type')"，表现就是编辑器一片空白、正文不显示。
+      const nextState = editor.parseEditorState(JSON.stringify({ root: markdownToEditorJson(display) }));
+      editor.setEditorState(nextState, { tag: IMPORT_TAG });
+    } catch (failure) {
+      // 解析失败绝不能静默：空白编辑器是最难排查的故障形态（本次即栽在这里）。
+      latest.current.onImportError(failure instanceof Error ? failure.message : String(failure));
+      return;
     } finally {
       applyingExternal.current = false;
     }
@@ -166,7 +185,10 @@ function SyncPlugin(props: SyncProps): null {
 
   /** 把 Lexical 自己造的节点（回车拆块、粘贴新段落）并入脏集合，否则它们会被当成「未碰」而丢内容。 */
   React.useEffect(() => {
-    const remove = editor.registerUpdateListener(({ editorState, dirtyElements, dirtyLeaves }) => {
+    const remove = editor.registerUpdateListener(({ editorState, dirtyElements, dirtyLeaves, tags }) => {
+      // 导入产生的那次全量 dirty 不算用户编辑：清空累计脏键并直接返回，
+      // 否则"打开即改写"（整篇被重新序列化 + 宿主收到一次假的 onChange）。
+      if (tags.has(IMPORT_TAG)) { touchedKeys.current = new Set(); return; }
       dirtyElements.forEach((_value, key) => touchedKeys.current.add(key));
       dirtyLeaves.forEach(key => touchedKeys.current.add(key));
       editorState.read(() => {
@@ -419,6 +441,7 @@ export function BlockEditor(props: Props) {
             registerImageInsert={registerImageInsert}
             registerStructure={registerStructure}
             onImageError={onImageError}
+            onImportError={onImageError}
           />
         </div>
       </LexicalComposer>
