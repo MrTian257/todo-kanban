@@ -1,51 +1,13 @@
-# todo-kanban-core（纯业务逻辑）
+# Rust 核心区域说明
 
-**框架**：无 tauri 依赖的库 crate（`core/src/lib.rs` barrel：db / error / models / svc / tool）。被壳 crate 与 mcp-server 共同复用，可独立单测。
+本目录是 Rust 业务核心 crate，入口为 `src/lib.rs`。它不依赖 Tauri UI，可由桌面命令、MCP server 和测试调用。
 
-## STRUCTURE
+- `db/`：SQLite schema、行映射、数据库操作。
+- `models.rs`：前后端共享业务模型的 Rust 定义。
+- `svc/`：项目、待办、资料、Git、MCP 辅助、工作流、番茄钟、附件和共享服务。
+- `mcp/`：MCP 工具/资源、协议、授权和审计。
+- `tool/`：Git CLI 等系统工具封装。
 
-```
-core/src/
-├── error.rs      # AppError（Display 中文）+ AppResult<T>
-├── models.rs     # DbState/DbProject/DbTodo/DbSwimlane/CommitInfo；GitInfo 唯一 snake_case 例外
-├── db/           # SQLite：mod(open/init/open_and_init/load_state/save_state/is_pristine/next_seq/repair)
-│                 #   schema.rs(列序硬契约) + row.rs(行映射) + legacy.rs(旧 JSON 参考) + repo_cache.rs
-├── svc/          # 服务编排：db_cmds / git_cmds / gitlab / branch_rule / repo_cache / attachments
-│                 #   + workflow(任务关系/提醒) / fields / automation / pomodoro(v14 番茄会话)
-└── tool/         # git_cli.rs（git 命令执行器）+ proc.rs（进程封装）
-```
+增改序列化字段时同步检查 `src/lib/types.ts`、Rust model、归一化与数据库读写。SQLite 迁移同时检查 `db/schema.rs`、`row.rs`、`db/mod.rs` 和 `config` 的数据版本常量。
 
-## WHERE TO LOOK
-
-| 想改什么 | 位置 |
-| --- | --- |
-| 新增业务命令 | `svc/db_cmds.rs`（DB_RW_LOCK + 写前校验）或 `svc/git_cmds.rs`（git 行为） |
-| 读写数据库 | 一律走 `db/mod.rs` 的 `load_state` / `save_state`（差异写 + seq 收敛 + 提交去重 + 泳道校验） |
-| git 操作 | `svc/git_cmds.rs` 编排 → `tool/git_cli.rs` 执行（不直接 std::process） |
-| 泳道/分支规则 | `svc/branch_rule.rs`（8 单测：泳道校验 + 分支规则） |
-| 附件存储 | `svc/attachments.rs`（10 单测，最多）+ `tool/`（临时文件 + rename 原子落盘） |
-| GitLab 集成 | `svc/gitlab.rs`（3 单测） |
-| Git 远程缓存 | `svc/repo_cache.rs` + `db/repo_cache.rs` |
-| 番茄专注会话 | `svc/pomodoro.rs`（v14 表 `pomodoro_sessions`：本地日历分桶 + 连续天数 + prune，7 单测） |
-
-## CONVENTIONS
-
-- **错误**：返回 `AppResult<T>`（`error.rs`），中文可读；不用 `unwrap`/`expect`（测试代码除外）。
-- **锁**：SQLite 写操作经 `svc/db_cmds.rs` 的 `DB_RW_LOCK` 串行化。
-- **模型对齐**：`models.rs` 字段与前端 `src/lib/types.ts` 经 serde rename 强对齐；`GitInfo` 是 snake_case 例外（头部注释说明）。
-- **单测内联**：`#[cfg(test)] mod tests` 在文件底部；临时 DB 用 `db::open_in_memory()`；测试引用 `tempfile`。
-
-## ANTI-PATTERNS
-
-- ❌ 在 svc/tool 里 import tauri 相关 crate（core 必须保持纯净）。
-- ❌ 绕过 `save_state` 直接写裸 SQL（破坏差异写/提交去重逻辑）。
-- ❌ 改 `models.rs` 不同步前端 `types.ts`。
-- ❌ 改 `schema.rs` 列序只改一处（三处同步：schema.rs + row.rs + db/mod.rs）。
-- ❌ 新代码引用 `db/legacy.rs`（死代码，仅参考）。
-
-## COMMANDS
-
-```bash
-cargo test -p todo-kanban-core   # 在 src-tauri/ 下运行；~60 单测
-cargo clippy -p todo-kanban-core -- -D warnings
-```
+以代码为准。不要在此文件维护易过期的函数、handler 或测试数量。

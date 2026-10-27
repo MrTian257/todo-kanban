@@ -1,57 +1,13 @@
-# Rust Workspace（src-tauri）
+# src-tauri 区域说明
 
-**框架**：Tauri 2（crate `todo-kanban`）+ 4 成员 Cargo workspace。依赖方向严格单向：`config ← upgrade ← core ← 壳/mcp-server`（core 之外的 crate 不得反向依赖）。
+Rust workspace 根目录。成员和依赖以 `Cargo.toml` 为准。
 
-## CRATES
+- `core/`：业务逻辑、SQLite、Git 和 MCP 核心。
+- `upgrade/`：数据版本升级与兼容性报告。
+- `config/`：版本和运行常量。
+- `mcp-server/`：独立 stdio MCP 进程。
+- `src/`：Tauri 桌面应用、命令薄壳、应用内 HTTP MCP、局域网访客服务。
 
-| Crate | 角色 | 关键路径 |
-| --- | --- | --- |
-| `todo-kanban`（壳） | 生命周期 + invoke 注册（44 命令） | `src/main.rs`、`src/lib.rs`、`src/commands.rs` |
-| `todo-kanban-core` | 纯业务逻辑，无 tauri 依赖，可独立单测 | `core/src/`（详见 core/src/AGENTS.md） |
-| `todo-kanban-upgrade` | 数据版本迁移引擎（备份/逐级迁移/报告） | `upgrade/src/` |
-| `todo-kanban-config` | 版本常量（SOFTWARE_VERSION、CURRENT_DATA_VERSION=16、迁移表、changelog；v16 = 附件归属泛化 `(owner_kind, owner_id)`，见 ADR-0002（已实施）） | `config/src/lib.rs` |
-| `mcp-server` | 独立 stdio JSON-RPC 进程（11 tools + 6 resources） | `mcp-server/src/` |
+新增 Tauri 命令时将业务放进 `core`，壳层只做参数接收、调用和错误映射，并在应用入口注册命令。数据库路径需区分 macOS Application Support 与其他桌面平台的 exe 目录；权威实现为 `core/src/svc/db_cmds.rs`。
 
-## WHERE TO LOOK
-
-| 想改什么 | 位置 |
-| --- | --- |
-| 新增/修改命令 | 逻辑写 `core/src/svc/` → 薄壳 `src/commands.rs`（一行转调 + map_err 中文）→ 注册 `src/lib.rs` invoke_handler |
-| 数据模型字段 | `core/src/models.rs` ↔ 前端 `src/lib/types.ts` **两端同步**（serde rename 对齐） |
-| 数据版本升级 | ADR-011：`config/src/lib.rs` 常量 + `upgrade/src/` 迁移 + `core/src/db/` schema.rs/row.rs/db 三处 |
-| MCP 工具/资源 | `mcp-server/src/bridge.rs`（工具映射 + `RESOURCES`）+ `protocol.rs`，业务复用 core/svc |
-| 番茄专注（v14） | 业务 `core/src/svc/pomodoro.rs`（表 `pomodoro_sessions`，SQL 收在本模块，不动 row.rs）+ `src/commands.rs` 的 `pomodoro_*`；版本五处同步见 ADR-011 / ADR-017 |
-| 权限 | `capabilities/default.json`（Tauri 2 capability） |
-
-## CONVENTIONS
-
-- **命令薄壳**：`commands.rs` 每个命令 ≤ 3 行（调 core::svc + map_err 转中文 String）；不 panic；新逻辑一律放 core。
-- **浏览器验证脚本**：`scripts/verify-*.mjs` 走 CDP（先起 dev server，端口 `CDP_PORT`，默认 9222），见根 `CLAUDE.md`。
-- **单测内联**：`#[cfg(test)] mod tests` 写在源文件底部；无 tests/ 集成目录。
-- **错误类型**：统一 `core/src/error.rs` 的 `AppError`（Display 中文），`From` 自动转换，`AppResult<T>` 简写。
-- **门禁**：`cargo clippy -- -D warnings` 0 警告 + `cargo fmt`；`.editorconfig` 规定 Rust 4 空格缩进。
-- **SQLite**：WAL 模式；列序是硬契约（`core/src/db/schema.rs` 头部注释），改 schema 必须三处同步。
-- **git 执行**：全部经 `core/src/tool/git_cli.rs` + `proc.rs`，不在业务代码里直接 std::process。
-
-## ANTI-PATTERNS
-
-- ❌ 壳 crate 里写业务逻辑（只能一行转调）。
-- ❌ 命令里 `unwrap`/`panic`/忽略错误（必须 map_err 中文 String）。
-- ❌ 破坏依赖方向：core/config/upgrade 依赖壳或相互反向依赖。
-- ❌ 改数据版本只改一处（必须 config + upgrade + db 三处，见 ADR-011）。
-- ❌ `src-tauri/capabilities/p.txt` 是遗留杂文件，不要参考；`docs/02-development` 里旧 crate 名 `todo-git-core` 已过时（现为 `todo-kanban-core`）。
-
-## COMMANDS（在 src-tauri/ 下）
-
-```bash
-cargo test -p todo-kanban-core   # 核心库单测
-cargo test -p mcp-server         # MCP 单测
-cargo clippy -- -D warnings      # 门禁：0 警告
-cargo fmt                        # 格式化（4 空格，遵循 .editorconfig）
-```
-
-## NOTES
-
-- 共享 target：`build.sh` 用 `/c/Users/23136/.cargo/shared-target/release`，勿删。
-- `src/lib.rs` 启动时确保 `todo-kanban.db` 存在并播种 demo 数据（exe 同目录）。
-- `core/src/db/legacy.rs` 的 `read_legacy_state` 是死代码（仅参考），勿接入调用链。
+运行命令和版本信息见仓库根 `AGENTS.md` 及 `docs/02-development/quick-start.md`。避免在此记录 handler 数量和短期测试结果。

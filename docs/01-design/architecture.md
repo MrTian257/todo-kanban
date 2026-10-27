@@ -1,174 +1,52 @@
-# 系统架构文档
+# 架构
 
-> 来源：todo-git 架构设计（本文件部分数字早于当前实现，已核实的是：独立 MCP 进程、防闪黑框修复；当前为 38 个 Tauri 命令、schema v10、8 个页面组件，以源码为准）。
+## 系统组成
 
-## 1. 总体架构
+Todo Kanban 是一款 Tauri 2 桌面应用。React 19 + TypeScript SPA 提供界面；Rust workspace 提供桌面集成、业务逻辑、SQLite 存储、版本升级及 MCP 服务。桌面 UI 通过 Tauri 命令调用 Rust；MCP stdio server 与应用内 HTTP 入口复用 `todo-kanban-core` 中的调度和业务服务。
 
-```
-┌────────────────────────────── 前端 (src/) ──────────────────────────────┐
-│ pages (Focus/TodoList/ProjectList/Board/TodoDetail/Settings，6 页)       │
-│   → components (board/todo/project/layout/ui)                           │
-│   → lib (store/storage/git/normalize/completeTodo/types/todo/theme...)  │
-│ 依赖方向：pages → components → lib（单向，禁反向）                        │
-└──────────────┬──────────────────────────────────────────────────────────┘
-               │ Tauri invoke（38 命令）+ plugin-opener（打开目录）
-┌──────────────▼─────────────────── src-tauri/ ───────────────────────────┐
-│ 壳 crate `todo-git`（workspace 根）                                      │
-│   src/main.rs（bin 入口）→ src/lib.rs（run + invoke_handler）            │
-│   src/commands.rs（11 个 #[tauri::command] 薄壳，一行转调 core）          │
-│ 依赖：tauri / tauri-plugin-opener / tauri-plugin-log / todo-git-core     │
-│                                                                          │
-│ workspace 成员：core crate `todo-git-core`（纯逻辑，无 tauri 依赖）       │
-│   lib.rs → models(数据模型) / error(AppError) / tool(git CLI + 子进程)   │
-│            / db(SQLite 存储) / svc(业务层：git_cmds/db_cmds/             │
-│              repo_cache/gitlab/branch_rule)                              │
-│ 依赖方向：svc → {tool, db, models}；tool/db → models（单向）              │
-└──────────────────────────────────────────────────────────────────────────┘
-               ▲ 独立进程（不经 Tauri invoke）
-┌──────────────┴─────────────────── src-tauri/mcp-server/ ────────────────┐
-│ MCP server（stdio 传输）：main → protocol(逐行 JSON-RPC 2.0)             │
-│   → bridge(11 tools + 4 resources ↔ core::svc) → config(数据源解析)      │
-│ 零 tauri / 零 MCP-SDK 依赖；stdout 仅协议帧，日志走 stderr                │
-└──────────────────────────────────────────────────────────────────────────┘
+```text
+React 页面与组件
+  └─ Zustand 单一应用状态 / invoke 封装
+       └─ Tauri 命令（薄壳）
+            └─ core service → SQLite / Git CLI / GitHub 或 GitLab API
+
+MCP stdio ─┐
+           ├─ core::mcp → core service / SQLite
+MCP HTTP ──┘
 ```
 
-## 2. 前端分层
+## Rust workspace
 
-| 层 | 目录 | 职责 | 约束 |
-| --- | --- | --- | --- |
-| 页面层 | `src/pages/` | 路由页面（6 个）；声明式取数，副作用集中在 App.tsx | 只 import components/lib |
-| 组件层 | `src/components/board|todo|project|layout/` | 业务组件（看板/卡片/详情页表单/侧栏/Markdown） | 只 import ui/lib |
-| 基元层 | `src/components/ui/` | shadcn 生成组件 | **勿手改**（`shadcn add` 会覆盖） |
-| 数据层 | `src/lib/` | store/storage/git/normalize/completeTodo/types/todo/theme/format/utils | 不 import 页面/组件 |
+`src-tauri/Cargo.toml` 定义 workspace。主要成员为：
 
-- 视图与数据解耦：页面不直接读 storage / 调 Tauri API，一切经 `useAppStore` action
-- 拖拽落库必须经 store action（`commitOrder` / `patchTodo`），禁止只改本地状态
+- `config`：软件与数据版本等常量。
+- `upgrade`：SQLite 版本报告和迁移协调。
+- `core`：模型、数据库、业务 service、Git 工具和 MCP 协议调度。
+- 根桌面 crate `todo-kanban`：Tauri 命令、应用生命周期、HTTP 服务与局域网访客页。
+- `mcp-server`：独立 stdio 传输进程。
 
-## 3. Rust 后端分层（Cargo workspace）
+Tauri 命令保持薄层；可复用业务逻辑放在 `core/src/svc/`。MCP 的 stdio 和 HTTP 调用同一套核心工具定义。
 
-### 3.1 壳 crate `todo-git`（workspace 根）
+## 前端数据流
 
-- `src/main.rs`：`todo_git_lib::run()`；`#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]`（release 为 GUI 子系统，注释勿删）
-- `src/lib.rs`：模块声明 + 插件注册 + `invoke_handler`（注册全部 **38 命令**）+ `generate_context!`
-- `src/commands.rs`：**薄壳**——每个 `#[tauri::command]` 一行转调 `todo_git_core::svc::*`，错误 `map_err(err_str)` 转中文 `String`
-- 配置：`tauri.conf.json`（productName、`frontendDist ../dist`、beforeDev/BuildCommand 目前是 **bun**——见风险提示）、`capabilities/default.json`（core:default + opener:default）
+`src/App.tsx` 配置 HashRouter 和全局生命周期。`src/lib/store.ts` 是业务状态的唯一 Zustand store；桌面端持久化通过 Tauri 数据库命令，写入合并并处理外部变更。MCP 或其他窗口改变数据库时，桌面端检测并刷新状态。
 
-### 3.2 core crate `todo-git-core`（workspace 成员，无 tauri 依赖）
+业务快照包含项目、待办与资料。活动项目、主题、显示密度等界面偏好保存在本机浏览器存储中，不进入共享数据库快照。
 
-| 模块 | 职责 |
-| --- | --- |
-| `models.rs` | GitInfo / CommitInfo / DbCommitInfo / DbTodo / DbBranchRuleStep / DbBranchRule / DbProject / DbState（camelCase 对齐前端） |
-| `error.rs` | `AppError`（Io / Serde / Sqlite / Git / Invalid），Display 中文文案，`From` 自动转换 |
-| `tool/git_cli.rs` | `run_git` 执行器、`parse_commit_lines`（`%H%x1f%s%x1f%cI`，≤200 行）、`parse_branch_list`、`commit_branches`、`validate_branch_name` |
-| `tool/proc.rs` | `quiet_command`：构造子进程 Command；**Windows 附加 `CREATE_NO_WINDOW`（0x0800_0000）**——release GUI 壳下 spawn git/curl 不闪控制台黑框（std 默认不加该标志）；**统一超时：git 30s / curl 10s**（超时 kill 并返回中文错误，见非功能约定） |
-| `db/mod.rs` | `open`（WAL）、`init`（幂等建表，主路径）、`init_and_migrate`（旧 JSON 迁移，仅测试/参考）、`load_state` / `save_state`（**差异写** + seq/tag 收敛 + 提交全局去重 + `app_meta.next_seq` 全局取号）、`storage_fingerprint`（版本信号） |
-| `db/schema.rs` | DDL + 迁移（`user_version=10`：v2 `app_meta`；v3 `git_repo_cache`；v4 GitLab Token 两列；v5 泳道列；v6 `sort_order`；v7 创建者标识；v8 附件表；v9 `resources`；v10 任务关系/模板/提醒 + 变更历史 + MCP 提案） |
-| `db/row.rs` | 行 ↔ Db* 映射（commits/branch_rule 为 JSON 文本列；NULL 默认化） |
-| `db/legacy.rs` | 旧 `todo-git.state.json` 读取（仅首次迁移参考） |
-| `db/repo_cache.rs` | `git_repo_cache` 表行访问（upsert/get，含单测） |
-| `svc/git_cmds.rs` | 7 个 git 命令业务 |
-| `svc/db_cmds.rs` | `exe_dir` / `data_dir` / `db_path` / `db_file_ready` / `ensure_db_at`（启动自举 + 播种，macOS 会先接管程序目录旧库）/ `load_state`（读锁，无进程内缓存）/ `save_state`（写锁 + 分支规则校验 + **泳道归属校验**）；`DB_RW_LOCK` 进程级读写锁；外部改动由 `svc/state_poll.rs` 轮询 |
-| `svc/repo_cache.rs` | `git_info` 缓存优先编排（命中即回 + 后台节流刷新 30s）、`git_info_refresh` 强刷、`git_info_remote` 远端增强、`invalidate` |
-| `svc/gitlab.rs` | GitLab API 桥：仓库地址解析（http(s)）、系统 curl 调用（`PRIVATE-TOKEN`）、分页分支拉取（5×100）、本地 ∪ 远端合并 |
-| `svc/branch_rule.rs` | 分支规则校验（未知角色/动作、自环步骤拒绝；保存前兜底，与前端 zod 一致） |
+## 数据存储
 
-### 3.3 命令注册（11 个，契约见 backend-contract.md）
+SQLite 使用 WAL。当前产品版本为 2.0.0，当前数据 schema 为 16。迁移入口在 `core/src/db/schema.rs`，常量在 `config/src/lib.rs`。`schema.rs`、`row.rs` 与 `db/mod.rs` 的列顺序和读写映射必须保持一致。
 
-git_info / git_info_refresh / git_info_remote / git_create_branch / git_create_branch_from / git_checkout_branch / git_sync_commits / git_commits_between / git_commit_info / db_load_state / db_save_state
+主要数据域：项目、待办、资料、附件关系、工作流配置、变更历史、提案、Git 仓库缓存、番茄钟会话与 MCP 审计。详见[数据模型](data-model.md)。
 
-### 3.4 MCP server（workspace 成员 `mcp-server`，独立进程，零 tauri 依赖）
+## Git 集成
 
-- 定位：stdio 传输的 MCP 服务端，把核心能力以 **11 tools + 4 resources** 暴露给外部 MCP 客户端；**与 Tauri 前端完全解耦**（不经 invoke_handler/capabilities）
-- 分层（ADR-023 起调度层在 core，stdio 与 HTTP 共用）：
-  `mcp-server/main.rs`（stdio 帧读写）与 `src-tauri/src/mcp_http.rs`（进程内 axum `POST /mcp`）
-  → `core/src/mcp/protocol.rs`（MCP 规范逐行 JSON-RPC 2.0：initialize / tools / resources / ping）
-  → `core/src/mcp/bridge.rs`（tools/resources ↔ `core::svc`，AppError→JSON-RPC 错误码：Invalid→-32602、其余→-32603；只读模式来自应用设置 `app_meta.mcp_readonly`，由 `mcp::authorize` 每个请求重读（ADR-022），只读时隐藏并拒绝 5 个写工具）→ `config.rs`（数据源目录：`MCP_TODO_DB_CONFIG`/`--db-config` 覆盖 → exe_dir 回退 `todo-kanban.db`）
-- MCP 的 `git_info` 保持**直读**语义（不经 app 侧缓存）；`git_info_refresh` / `git_info_remote` 为 app 专属命令不暴露
-- 详细设计见 mcp-design.md
+Git 本地操作由 core 中的 CLI 工具完成；远端提交查询根据仓库地址识别 GitHub 或 GitLab。报告查询和待办提交同步有各自服务入口。具体行为见[Git 集成说明](../提交查询优化说明.md)与 ADR-015/016。
 
-## 4. 数据流
+## MCP
 
-### 4.1 启动加载
+工具、资源、JSON-RPC 协议版本、鉴权与审计由 `core/src/mcp/` 管理。stdio 由独立可执行文件承载，HTTP 由 Tauri 进程内 Axum 服务承载；两者共享授权、只读、工具及审计逻辑。具体接入参数见[MCP 指南](../02-development/mcp-access.md)。
 
-```
-App.tsx useEffect → initAppStore()
-  → loadState()（lib/storage；仅 Tauri 环境有数据）
-    → invoke("db_load_state") → svc/db_cmds::load_state(exe_dir)
-      → db_path（todo-kanban.db 首行）→ 无数据源 → Ok(None) → 前端空态（提示生成数据文件）
-      → db::open(WAL) → db::init(user_version=10 迁移) → 全量 SELECT → DbState
-      → normalize（lib/normalize.ts：字段补默认 + 提交全局去重兜底）
-  → startExternalSync（2s 轮询 + focus 立即同步）
-  → startGitCacheWarm（60s 预热 git 仓库信息缓存，仅桌面端）
-```
+## 相关决策
 
-### 4.2 状态变更持久化
-
-```
-store action 改 state → useAppStore.subscribe → writeChain（串行队列）
-  → saveState() → 桌面：invoke("db_save_state", {projects, todos})
-      → svc/db_cmds::save_state（写锁 + 先校验分支规则）
-      → db::save_state（差异写：UPSERT 变更行 + 差集删除，未变行跳过；
-        app_meta.next_seq 全局取号收敛 seq/tag；事务原子）
-    （浏览器：无存储，saveState 直接返回）
-```
-
-### 4.3 外部变更感知（多窗口 / MCP 改库 / 手动改库）
-
-```
-startExternalSync：每 2000ms 轮询 + window focus 时立即 syncExternalNow
-  → loadState() 全量重读（后端 `PRAGMA data_version` 未变化时不重读）→ 与内存 JSON 对比 → 不同则磁盘优先整体覆盖
-```
-
-### 4.4 git 仓库信息读取（三层缓存）
-
-```
-UI 请求分支 → lib/git.ts gitInfoCached（60s TTL + 单飞去重 + 同步 peek）
-  → invoke git_info / git_info_remote
-    → svc/repo_cache：git_repo_cache 持久缓存命中即回 + 后台节流刷新（同路径 30s 至多一次）
-    → 未命中/强刷 → git CLI（run_git）或 GitLab curl → 写缓存 → 返回
-分支写操作（新建/切换/切出）成功 → 后端 invalidate + 前端 invalidateGitInfo
-App 启动后 startGitCacheWarm（60s）：收集项目/待办的所有仓库路径逐个预热
-```
-
-### 4.5 git 提交流程
-
-```
-「开始」→ startedAt = now
-提交到绑定分支（可带 [todo-N] 标记）
-「完成」→ doneAt = now；autoRecaptureOnDone（lib/completeTodo.ts）
-  → git_commits_between(repo, branch, todo.createdAt, doneAt) → annotate_commit_origins 三分类（native 原生/merge 合并进来/cherry 剪切进来/other 不在分支上）
-  → mergeCommits + dedupeCommitsForTodo 全局去重（一个 hash 只属一个待办）→ patchTodo 落库
-「按时间窗补录」→ 同上，until 恒为最新时刻（完成后新增的提交也能收录）
-「同步提交」→ git_sync_commits(repo, tag=todo-N, branch=todo.branch 参考分支) → log --all -F --grep → annotate_commit_origins 三分类 → 去重落库
-```
-
-## 5. 关键架构决策（ADR 摘要）
-
-| 决策 | 理由 |
-| --- | --- |
-| HashRouter 而非 BrowserRouter | Tauri 本地协议下路由可用（勿改回） |
-| zustand 唯一 store + writeChain 串行写 | 防并发写乱序；外部变更可安全整体覆盖 |
-| 系统 git CLI（`git -C`）而非 git crate | 依赖 PATH 中的 git；输出格式统一 `%H%x1f%s%x1f%cI` |
-| 系统 curl 而非 HTTP crate | GitLab API 零新增依赖；`-k` 兼容内网自签 |
-| 命令薄壳 + core 纯逻辑库（workspace） | core 无 tauri 依赖可独立单测、可被 MCP server 复用；壳层只转调 |
-| spawn 子进程统一 `quiet_command`（CREATE_NO_WINDOW） | release GUI 壳下 git/curl 会弹可见控制台（std 不自动加），且 git_info 后台刷新会周期性触发 |
-| JSON → SQLite（rusqlite bundled） | 事务原子写替代 tmp+rename；索引/查询扩展性；旧数据一次性迁移（仅保留参考） |
-| 数据源 = 运行目录 `todo-kanban.db` 指示文件 | 数据库位置可自由指定/多数据文件；无指示 → 空态（前端提示生成） |
-| `app_meta.next_seq` 全局序号源 + 写锁内取号 | 多窗口并发保存时 `todo-<n>` 编码全局唯一（前端 max+1 只是预生成，冲突由后端收敛） |
-| 提交唯一性全局去重 | 时间窗/标记/手动三条路径收敛，避免重复归属 |
-| 归档不展示（无恢复 UI） | 外部改库可恢复，2s 轮询感知（有意取舍） |
-| 泳道看板替换四象限（列=泳道绑状态、行=待办、项目自定义增删） | 状态是唯一事实源、泳道仅为状态分组容器；跨泳道拖拽 = swimlaneId+status 联动，避免双真相；quadrant 字段保留仅兼容 |
-| 泳道内排序持久化（todos.sort_order，v6） | 拖拽排序 0..n 分配落库；重载按 sortOrder 还原，同序按 createdAt 兜底 |
-| 补录时间窗从 createdAt 起 | 「从创建任务开始」收录该分支提交，不依赖是否点过开始 |
-| 浏览器模式无存储（空态） | 曾有 localStorage 双通道，已移除——桌面端 SQLite 是唯一存储 |
-| MCP 手写逐行 JSON-RPC（零 SDK） | 少依赖约定；stdout 仅协议帧、日志走 stderr |
-
-## 6. 不变项与风险提示
-
-- 前端类型与 Db* **camelCase 字段强对齐**：改任一侧必须同步另一侧（`GitInfo` 是唯一 snake_case 例外）
-- SQLite **列序是硬契约**：schema ↔ row ↔ mod SELECT/INSERT 一一对应，改列序必须三处同步
-- lib crate 名 `todo_git_lib` 含 `_lib` 后缀（Windows Cargo#8519），勿改名
-- `tauri.conf.json` 的 beforeDev/beforeBuild 配的是 `bun`，仓库是 npm——需 bun 才能直接 `tauri dev`，否则先手动 `npm run dev`（重构时建议直接对齐 npm）
-- Vite 端口 1420 strictPort，占用即启动失败；`src-tauri` 目录被 Vite 排除监听
-- 浏览器模式无 git 能力且无存储（勿在非 Tauri 环境调用 git 命令）
-- 外部改动检测用 `svc/state_poll.rs`：复用同一条只读连接的 `PRAGMA data_version`（每次新建连接读它在 WAL 下不稳定），未变化则不重读全量
+新决策见[ADR 索引](../adr/README.md)。ADR 记录决策背景与后果；它不替代对当前源码的检查。

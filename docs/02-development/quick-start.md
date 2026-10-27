@@ -1,51 +1,56 @@
-# 快速开始（开发环境）
+# 开发快速开始
 
-> 来源：todo-git quick-start（已核实：bun 坑、端口 1420、todo-kanban.db 首启流程）。
+## 环境
 
-## 1. 环境要求
+- Node.js 与 npm：前端依赖和开发服务器。
+- Rust 工具链：桌面壳、核心库和 MCP server。
+- Tauri 2 对应平台的系统依赖。
+- Git CLI：本地仓库信息、分支及提交操作所需。
 
-- Node.js（仓库锁定 npm + package-lock.json）；Vite 7
-- Rust 工具链（cargo；Cargo.lock 已提交）
-- **git** 在 PATH 中（后端所有 git 操作走系统 CLI）
-- 可选：系统 `curl`（GitLab 远端分支增强；Windows 10+ 自带）
-- Tauri 2 系统依赖（Windows：WebView2 一般系统自带）
-- ✅ v2.0.0 起 `tauri.conf.json` 的 `beforeDevCommand/beforeBuildCommand` 已对齐 **npm**（`npm run dev` / `npm run build`），无需 bun
+仓库以 `package-lock.json` 作为 npm 锁文件；另有 `bun.lock`，不要在无明确迁移计划时删除锁文件。
 
-## 2. 常用命令
+## 安装与运行
 
 ```bash
-npm install                  # 安装前端依赖
-npm run dev                  # 仅浏览器预览（:1420，strictPort；git 能力不可用、无本地存储）
-npm run build                # 前端编译门禁：tsc && vite build
-npm run tauri dev            # 桌面窗口开发（需要 bun 或先手动起前端）
-cargo check                  # Rust 编译门禁（workspace 根 = src-tauri：壳 + core + mcp-server）
-cargo test -p todo-git-core  # core 单元测试（db/git 解析/缓存/迁移等）
-cargo test -p mcp-server     # MCP server 单元测试（握手/11 工具清单/映射/只读门禁/旧只读入口拒绝启动）
-cargo build -p mcp-server    # 构建 MCP 可执行文件（target/release/mcp-server.exe）
-cargo clippy -- -D warnings  # 质量门禁（0 警告）
-cargo fmt                    # 代码格式
-npm run tauri build          # 打包桌面应用（release 为 GUI 子系统，子进程已抑制控制台窗口）
+npm install
+npm run tauri dev
 ```
 
-## 3. 首次运行说明
+浏览器预览：
 
-- 桌面端启动：后端直接使用**程序运行目录**下的 `todo-kanban.db`；首次启动时自动创建并写入演示数据。
-  - 数据文件损坏/读取失败 → toast 提示并回退空态（不崩溃）
-- MCP server 运行：`target/release/mcp-server.exe`（与 app 同目录部署时自动命中同一 `todo-kanban.db`；可用 `MCP_TODO_DB_CONFIG` 或 `--db-config <dir>` 覆盖数据源目录）。**只读模式**：只能在应用「设置 → MCP 集成 → MCP 只读模式」里开关（存 `app_meta.mcp_readonly`，每个请求重读、无需重启）；`--readonly` 与 `MCP_TODO_READONLY` 已移除，传了会**直接拒绝启动**并给出迁移指引（ADR-022）。**完整接入说明（含多 AI Token、审计日志、故障排查）见 [mcp-access.md](mcp-access.md)**。**认证**：需携带授权 Token（`--token <key>` 或 `MCP_TODO_TOKEN=<key>`，默认全局固定 `sk-GLOBAl_MCP_BY_ADMIN`）；设置页可启用/禁用 MCP、切换只读与修改 Token——禁用或 Token 不匹配时 mcp-server 启动即退出（stderr 中文提示）；数据文件未初始化也会拒绝启动。**HTTP 传输**：在应用「设置 → MCP 集成 → HTTP 传输」启用后得到
-`http://127.0.0.1:<端口>/mcp`（默认端口 42900，默认只绑回环；勾选「允许局域网访问」才绑 0.0.0.0）。
-客户端用 `Authorization: Bearer <token>` 或 `X-MCP-Token` 传凭据（不支持查询串传 Token），
-先 `initialize` 拿 `Mcp-Session-Id` 再发业务请求。每个 AI 建议在「接入 Token」里单独发一把，
-只读可逐把设置（与全局只读取严），全部访问（含鉴权失败）在「设置 → MCP 审计日志」可查、可导出 CSV（ADR-023）
-- 浏览器模式：**无本地存储**，始终空态（旧 localStorage 双通道已移除）
-- 主题皮肤：localStorage `todo-git.skin.v1`（默认星尘）
+```bash
+npm run dev
+```
 
-## 4. 常见问题
+Vite 预览默认使用 1420 端口。浏览器模式使用会话演示数据，不连接桌面 SQLite，也不具备原生 Git、附件文件和系统集成功能。桌面运行才代表完整应用环境。
 
-| 现象 | 处理 |
-| --- | --- |
-| ~~`tauri dev` 报 bun 不存在~~ | 已修复（v2.0.0 对齐 npm）；如仍报错检查 tauri.conf.json 的 beforeDevCommand |
-| 1420 端口被占用 | `strictPort` 直接失败；释放端口后重启 |
-| cargo 首次编译慢 | rusqlite bundled 首次编译 sqlite3 源码较慢（一次性） |
-| git 命令报「不是 git 仓库」 | 待办绑定的 repoPath 必须是 git 仓库根目录 |
-| 浏览器里 git 功能不可用 / 数据为空 | 预期行为（无 Tauri invoke、无存储），仅布局预览用 |
-| release 包闪黑色控制台窗口 | 当前代码已修（`core/src/tool/proc.rs` 的 `CREATE_NO_WINDOW`）；若重现检查是否绕过了 `quiet_command` |
+## 常用校验命令
+
+```bash
+npm run build
+npm run test:logic
+```
+
+Rust workspace 根目录为 `src-tauri/`：
+
+```bash
+cargo test -p todo-kanban-core
+cargo test -p mcp-server
+```
+
+另有按页面/功能划分的脚本，查看 `package.json` 与 `scripts/`。本文不声称这些命令已在当前提交上执行。
+
+## 代码层次
+
+- `src/pages/`：路由页面。
+- `src/components/`：布局和可复用 UI。
+- `src/lib/`：前端 store、类型、桥接与纯逻辑。
+- `src-tauri/src/`：Tauri 命令及桌面服务。
+- `src-tauri/core/src/`：业务服务、SQLite、Git、MCP。
+- `src-tauri/upgrade/`：数据版本升级。
+
+跨端共享字段应同步前端类型、Rust model、归一化、数据库、MCP 与备份相关逻辑。数据库变更遵循[数据模型说明](../01-design/data-model.md)。
+
+## 发布
+
+仓库提供 `build.sh` 和 GitHub Actions 发布工作流。它们会产生可交付构建产物，属于发布操作；查看脚本和工作流当前参数后再执行，并遵守用户对发布确认的要求。

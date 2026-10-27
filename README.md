@@ -1,52 +1,26 @@
-# todo-kanban
+# Todo Kanban
 
-面向开发者的桌面待办管理应用（Tauri 2 + React 19 + TypeScript + Rust）：以「项目」组织待办，每条待办绑定代码目录与分支并自动记录提交 hash；在**泳道看板**（列 = 泳道、行 = 待办，默认 待办/进行中/已完成，项目级自定义增删）中拖拽管理。由原项目 **todo-git** 重构而来，**v2.0.0 已全量实现**（前端 + Rust workspace + MCP server）。
+面向开发者的桌面待办与项目管理工具。应用使用 Tauri 2、React 19、TypeScript 和 Rust，数据存于 SQLite；通过项目组织待办，以泳道看板跟踪状态，并支持 Git 信息、项目资料、MCP 协作、番茄钟和局域网共享。
 
 ## 快速开始
 
-环境要求：Node.js（npm）、Rust 工具链、git ≥ 2.20 在 PATH（启动时检测，不足中文提示、不阻塞）；可选系统 curl（GitLab 远端分支增强，Windows 10+ 自带）。
-
-需要 `gh`（GitHub CLI）的两处：`bash build.sh` 触发 macOS 远程打包（`github_token()` 取 `gh auth token`），以及 `docs/agents/issue-tracker.md` 里 issue / 地图票的读写。Windows 上一次配好（安装 → 关遥测 → 代理 → 登录 → 自检）请跑 [`scripts/setup-github-cli.sh`](scripts/setup-github-cli.sh)，**必须在 Git Bash 里跑**（`C:\Program Files\Git\bin\bash.exe`），别用 WSL 的 bash——`winget` / `setx` / Windows 凭据管理器都在 Windows 侧。
+需要 Node.js、npm、Rust 工具链、Tauri 所需系统依赖，以及可选的 Git CLI。
 
 ```bash
 npm install
-npm run tauri dev     # 桌面窗口开发（1440×900）
+npm run tauri dev
 ```
 
-首次运行：桌面端使用**平台数据目录**下的 `todo-kanban.db`（macOS：`~/Library/Application Support/com.todo-kanban.app/`；Windows/Linux：程序运行目录），首次启动且库为空时自动创建并写入演示数据。
+`npm run dev` 仅启动浏览器预览。浏览器模式使用演示数据，不具备桌面端的 SQLite 与 Git 能力。
 
-浏览器预览：`npm run dev`（:1420，strictPort）——无 git 能力、无本地存储，仅用于布局预览。
+## 文档入口
 
-## 常用命令
+- [AI 协作指南](AGENTS.md)：通用 AI 工具可读取的项目说明、规则和代码地图。
+- [架构与事实概览](docs/软件设计文档.md)
+- [文档地图](docs/README.md)
+- [开发环境与命令](docs/02-development/quick-start.md)
+- [MCP 接入](docs/02-development/mcp-access.md)
+- [架构决策索引](docs/adr/README.md)
+- [术语表](GLOSSARY.md)
 
-| 命令 | 说明 |
-| --- | --- |
-| `npm run dev` | 浏览器预览（:1420） |
-| `npm run build` | 前端编译门禁：tsc && vite build |
-| `npm run tauri dev` | 桌面窗口开发 |
-| `npm run tauri build` | 打包桌面应用（release 为 GUI 子系统） |
-| `cargo check` / `clippy` / `fmt`（在 src-tauri/ 下） | Rust workspace 门禁（壳 + todo-kanban-core + mcp-server） |
-| `cargo test -p todo-kanban-core` | core 单元测试（db / git 解析 / 缓存 / 迁移 / 泳道校验） |
-| `cargo test -p mcp-server` | stdio 传输单测（CLI 参数 / 旧只读入口拒绝） |
-| `cargo test -p todo-kanban --lib mcp_http` | MCP HTTP 集成测试（真起 axum + 临时库 + 裸 HTTP 客户端） |
-
-## 架构
-
-三进程位面：React 前端（pages → components → lib 单向分层）经 Tauri invoke（48 个命令）调用 Rust 壳 crate，转调纯逻辑库 **todo-kanban-core**（models / error / tool / db / svc；SQLite WAL，schema v14，数据源固定为平台数据目录 `todo-kanban.db`）；独立 **mcp-server** 进程以 stdio MCP（手写 JSON-RPC，11 tools + 6 resources）复用同一 `core::mcp` 调度（工具表只有一份）。此外桌面应用可开**进程内 HTTP 传输**（设置 → MCP 集成 → HTTP 传输，默认关闭且只绑 127.0.0.1）。只读模式与多 AI 接入 Token 都在设置页管理（每个请求重读，无需重启；见 ADR-022 / ADR-023）。
-
-完整设计（数据模型 / 命令契约 / UI / 核心流程 / 实现状态）见 [docs/软件设计文档.md](docs/软件设计文档.md)；关键决策的完整背景与备选方案见 [docs/decisions/](docs/decisions/)。
-
-## 文档
-
-| 文档 | 内容 |
-| --- | --- |
-| [docs/软件设计文档.md](docs/软件设计文档.md) | 整合视图（推荐入口）：产品 / 架构 / 数据 / 接口 / UI / 流程 + 实现状态 |
-| [docs/README.md](docs/README.md) | 设计基线文档地图 |
-| [docs/02-development/mcp-access.md](docs/02-development/mcp-access.md) | **MCP 接入指南**：stdio / HTTP 两种接法、多 AI Token、只读、审计日志、常见问题 |
-| [docs/decisions/](docs/decisions/) | 架构决策记录 ADR-001 ~ ADR-023 |
-| [docs/01-design/prd-swimlane.md](docs/01-design/prd-swimlane.md) | 泳道看板重构 PRD（已实施） |
-| docs/01-design/ · docs/02-development/ | 设计分册与开发指南 |
-
-## 许可
-
-本项目采用 [Apache License 2.0](LICENSE) 授权，版权归 muyu257@foxmail.com 所有。分发时请随附 [LICENSE](LICENSE) 副本与第三方依赖声明。
+架构和接口说明描述当前代码行为；ADR 记录当时的决策背景，若与当前实现不一致，以源码和更新的 ADR 为准。版本、命令、路由和数据结构会随代码变化，改动前请核对对应源文件。

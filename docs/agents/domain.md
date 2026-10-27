@@ -1,46 +1,21 @@
-# Domain Docs
+# 领域与文档约定
 
-工程技能在探查本仓库时，应按本文读取领域文档。
+## 共享知识
 
-## 布局结论：single-context
+跨 AI 工具通用的项目事实写入仓库根 `AGENTS.md` 或 `docs/`。工具专属文件（如 `CLAUDE.md`）只作指引或保存该工具特有设置，不能成为唯一知识来源。
 
-本仓库是 **single-context**（单上下文）：各部分共用一套用语，所以只有**仓库根一份 `GLOSSARY.md`**，架构决定统一放 **`docs/adr/`**。
+## 文档分类
 
-没有根目录 `GLOSSARY-MAP.md`，也没有各子项目自己的 `GLOSSARY.md` —— 探查时不要去凑这两样。`src/` 下的 `assets/components/grokbot/lib/pages` 是前端分层，`src-tauri/` 是同一产品的 Rust 侧（Cargo workspace：config / upgrade / core / 壳 / mcp-server），它们共用一套领域用语，不构成多上下文。
+- 根 `README.md`：产品介绍与文档入口。
+- 根 `AGENTS.md`：通用 AI 协作约定、事实速查和代码导航。
+- `docs/01-design/`：架构、产品和交互设计；标明当前实现或设计目标。
+- `docs/02-development/`：开发和集成操作指南。
+- `docs/adr/`：新架构决策，四位递增编号。
+- `docs/decisions/`：历史 ADR，保留原编号和背景。
+- `.scratch/`：一次性调研和任务拆解，不作为稳定文档入口。
 
-## Before exploring, read these
+## 准确性
 
-- **`GLOSSARY.md`**（仓库根）：领域名词的定义与禁用同义词
-- **`docs/adr/`**：与本次要改动区域相关的架构决定（ADR）
+版本、字段、端点、命令和测试结果都容易过期。维护者应从源码核验，不把计划、历史日志或未执行的验证写成当前事实。被替代的方案应保留在 ADR 历史中；失效的操作指南、研究草稿和任务交接文件应删除或重写。
 
-任一文件不存在就照常往下做：不要专门提示缺失，也不要建议先建起来。`/domain-modeling`（由 `/grill-with-docs`、`/improve-codebase-architecture` 引入）会在术语或决定真正确定下来的那一刻惰性创建它们。本仓库初始化时刻意**没有**创建 `GLOSSARY.md` 与 `docs/adr/` —— 第一条词条写下时才建。
-
-> 历史位置：既有 ADR-001~023 落在 **`docs/decisions/`**（文件名自描述，索引见 `CLAUDE.md`）。本次确认的约定是**新 ADR 写 `docs/adr/`**；读决定时两处都看，`docs/decisions/` 里的存量仍按现状权威对待（注意 ADR-007 的 env 只读结论已被 ADR-022 取代）。
-
-## File structure
-
-single-context（本仓库）：
-
-```
-/
-├── GLOSSARY.md
-├── docs/adr/
-│   ├── 0001-xxx.md
-│   └── 0002-yyy.md
-├── src/              # React SPA（与 Rust 侧共用用语）
-└── src-tauri/        # Cargo workspace（同一上下文）
-```
-
-multi-context 仅当根目录出现 `GLOSSARY-MAP.md`（指向各上下文的 `GLOSSARY.md`）时才成立；本仓库不是，所以按 multi-context 找 `GLOSSARY-MAP.md` 或 `src/<context>/GLOSSARY.md` 都是徒劳。
-
-## Use the glossary's vocabulary
-
-产出里点到领域概念（issue 标题、重构提案、假设、测试名）时，用 `GLOSSARY.md` 里定义的词，不要漂到词表明确避开的同义词。
-
-如果你需要的概念词表里还没有：这是个信号 —— 要么你在发明项目不用的说法（重新想想），要么确实是缺口（记下来交给 `/domain-modeling`）。
-
-## Flag ADR conflicts
-
-产出与既有 ADR 冲突时显式说出来，不要静默覆盖：
-
-> _与 ADR-0007（event-sourced orders）冲突，但值得重开，因为……_
+术语统一见仓库根 `GLOSSARY.md`。
