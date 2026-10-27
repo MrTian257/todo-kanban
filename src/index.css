@@ -768,6 +768,7 @@ input, textarea, select, button { font-family: inherit; }
    颜色一律吃 [data-theme] 的 CSS 变量，所以明暗 + 5 套皮肤零额外适配；
    不再调用任何 Vditor 主题 API（那是旧 MarkdownEditor 的 setTheme 路径）。 */
 .tk-block-editor { background: var(--card); }
+.tk-block-format-toolbar { max-width: min(95vw, 760px); }
 .tk-block-content { overflow-wrap: anywhere; }
 .tk-block-content:focus-within { box-shadow: inset 0 0 0 1px var(--ring); }
 .tk-block-paragraph { margin: 0 0 0.6em; }

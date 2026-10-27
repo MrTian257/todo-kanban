@@ -1,7 +1,7 @@
 // slash（/）菜单（规格票 13 D2 的消费方之一；票 05 §5）。
 //
-// 与块菜单**共用同一张合法性表** conversionTargetsFor：词表由数据表生成，
-// 于是"菜单里出现的选项一定合法"由构造保证，不需要在这里再写一遍 if。
+// 块转换项与块菜单**共用同一张合法性表** conversionTargetsFor；表格、分隔线和图片是插入动作，
+// 只在段落的菜单里追加，避免把插入误当成有损的格式转换。
 //
 // 三条必须守住的细节：
 // 1. **中文输入法组合期敲 / 不唤起**：组合输入时文本节点还在变化，此时弹菜单会打断选词。
@@ -13,14 +13,18 @@ import * as React from "react";
 import { LexicalTypeaheadMenuPlugin, MenuOption, useBasicTypeaheadTriggerMatch } from "@lexical/react/LexicalTypeaheadMenuPlugin";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import { $getSelection, $isRangeSelection, $getRoot, type TextNode } from "lexical";
+import { INSERT_TABLE_COMMAND } from "@lexical/table";
+import { INSERT_HORIZONTAL_RULE_COMMAND } from "@lexical/react/LexicalHorizontalRuleNode";
 import { conversionTargetsFor, type ConversionTarget } from "@/lib/blockOperations";
 import type { BlockKind } from "@/lib/markdownBlocks";
 
 /** 一个可选的块类型。key 用于去重与高亮。 */
+type SlashTarget = ConversionTarget | { kind: "insert-table" | "insert-divider" | "insert-image" };
+
 class SlashOption extends MenuOption {
   label: string;
-  target: ConversionTarget;
-  constructor(label: string, target: ConversionTarget) {
+  target: SlashTarget;
+  constructor(label: string, target: SlashTarget) {
     super(label + JSON.stringify(target));
     this.label = label;
     this.target = target;
@@ -51,6 +55,10 @@ function optionsFor(kind: BlockKind): SlashOption[] {
       continue;
     }
     options.push(new SlashOption(LABEL[target], { kind: target } as ConversionTarget));
+  }
+  if (kind === "paragraph") {
+    options.push(new SlashOption("表格", { kind: "insert-table" }));
+    options.push(new SlashOption("分隔线", { kind: "insert-divider" }));
   }
   return options;
 }
@@ -92,10 +100,11 @@ function currentBlockKind(editor: ReturnType<typeof useLexicalComposerContext>[0
 interface SlashMenuProps {
   /** 选中后由 BlockEditor 注入的纯函数执行器（与块菜单同一条路径）。 */
   onSelect: (blockIndex: number, target: ConversionTarget) => void;
+  onInsertImage?: () => void;
   disabled?: boolean;
 }
 
-export function BlockSlashMenu({ onSelect, disabled }: SlashMenuProps): React.ReactElement | null {
+export function BlockSlashMenu({ onSelect, onInsertImage, disabled }: SlashMenuProps): React.ReactElement | null {
   const [editor] = useLexicalComposerContext();
   const [query, setQuery] = React.useState<string | null>(null);
   const [kind, setKind] = React.useState<BlockKind>("paragraph");
@@ -105,10 +114,11 @@ export function BlockSlashMenu({ onSelect, disabled }: SlashMenuProps): React.Re
 
   const options = React.useMemo(() => {
     const all = optionsFor(kind);
+    if (kind === "paragraph" && onInsertImage) all.push(new SlashOption("图片", { kind: "insert-image" }));
     if (!query) return all;
     const q = query.trim().toLowerCase();
     return all.filter(option => option.label.toLowerCase().includes(q));
-  }, [kind, query]);
+  }, [kind, query, onInsertImage]);
 
   if (disabled) return null;
 
@@ -134,9 +144,23 @@ export function BlockSlashMenu({ onSelect, disabled }: SlashMenuProps): React.Re
         }
         closeMenu();
         const index = currentBlockIndex(editor);
-        if (index < 0) return;
-        // 结构操作会整篇重新导入，放到下一个微任务里做，避免在 Lexical 的 update 上下文里重入
-        queueMicrotask(() => onSelect(index, option.target));
+        if (index < 0 && !option.target.kind.startsWith("insert-")) return;
+        // 结构操作在微任务中执行，避免在 Lexical 的 update 上下文里重入。
+        queueMicrotask(() => {
+          switch (option.target.kind) {
+            case "insert-table":
+              editor.dispatchCommand(INSERT_TABLE_COMMAND, { rows: "2", columns: "2", includeHeaders: true });
+              break;
+            case "insert-divider":
+              editor.dispatchCommand(INSERT_HORIZONTAL_RULE_COMMAND, undefined);
+              break;
+            case "insert-image":
+              onInsertImage?.();
+              break;
+            default:
+              if (index >= 0) onSelect(index, option.target);
+          }
+        });
       }}
       triggerFn={triggerFn}
       menuRenderFn={(anchorElementRef, { selectedIndex, selectOptionAndCleanUp, setHighlightedIndex }) => {

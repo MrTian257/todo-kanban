@@ -24,6 +24,7 @@ import { CheckListPlugin } from "@lexical/react/LexicalCheckListPlugin";
 import { TablePlugin } from "@lexical/react/LexicalTablePlugin";
 import { LinkPlugin } from "@lexical/react/LexicalLinkPlugin";
 import { HorizontalRulePlugin } from "@lexical/react/LexicalHorizontalRulePlugin";
+import { MarkdownShortcutPlugin, DEFAULT_TRANSFORMERS } from "@lexical/react/LexicalMarkdownShortcutPlugin";
 import { TabIndentationPlugin } from "@lexical/react/LexicalTabIndentationPlugin";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import { ListNode, ListItemNode } from "@lexical/list";
@@ -32,6 +33,7 @@ import { TableNode, TableRowNode, TableCellNode } from "@lexical/table";
 import { LinkNode, AutoLinkNode } from "@lexical/link";
 import { CodeNode, CodeHighlightNode } from "@lexical/code";
 import { HorizontalRuleNode } from "@lexical/react/LexicalHorizontalRuleNode";
+import { CHECK_LIST } from "@lexical/markdown";
 import {
   $getRoot, $getSelection, $isRangeSelection, $insertNodes, ElementNode,
   type LexicalNode, type NodeKey, type SerializedLexicalNode,
@@ -67,6 +69,10 @@ interface Props {
   className?: string;
   placeholder?: string;
 }
+
+// Lexical 默认快捷输入不含任务列表；Notion 风格需要 `[] ` / `- [ ] ` 直接起任务项。
+// CHECK_LIST 放在其它列表转换前，避免通用无序列表先消费 `- [ ]`。
+const NOTION_MARKDOWN_TRANSFORMERS = [CHECK_LIST, ...DEFAULT_TRANSFORMERS];
 
 /** 收集一个子树的全部节点 key，用于「后代脏 ⇒ 所属顶层块脏」。 */
 function collectKeys(node: LexicalNode, into: Set<NodeKey>): void {
@@ -372,13 +378,12 @@ export function BlockEditor(props: Props) {
     <div ref={rootBox} className={cn("tk-block-editor flex h-full min-h-0 flex-col", props.className)} data-block-editor="on">
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-b px-4 py-2 text-xs text-muted-foreground">
         {props.owner && <button type="button" className="rounded px-2 py-1 hover:bg-muted" onClick={() => filePicker.current?.click()}>插入图片</button>}
-        <span>直接输入即成块 · 悬停出现把手可拖动整块 · 粘贴或拖入图片自动存为附件</span>
+        <span>输入 Markdown 标记后按空格转换 · 输入 / 插入块 · 选中文字显示格式栏</span>
         {uploading && <span role="status">图片处理中，完成后可保存…</span>}
       </div>
       {error && <p role="alert" className="shrink-0 px-4 py-2 text-sm text-destructive">{error}</p>}
       <input ref={filePicker} type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden onChange={onPicked} />
       <LexicalComposer initialConfig={initialConfig}>
-        <BlockToolbar disabled={props.disabled} busy={uploading} onInsertImage={props.owner ? () => filePicker.current?.click() : undefined} />
         <div ref={contentBox} className="relative min-h-0 flex-1 overflow-auto">
           <RichTextPlugin
             contentEditable={<ContentEditable
@@ -397,11 +402,13 @@ export function BlockEditor(props: Props) {
           <TablePlugin />
           <LinkPlugin />
           <HorizontalRulePlugin />
+          <MarkdownShortcutPlugin transformers={NOTION_MARKDOWN_TRANSFORMERS} />
           <TabIndentationPlugin />
+          <BlockToolbar disabled={props.disabled} busy={uploading} onInsertImage={props.owner ? () => filePicker.current?.click() : undefined} />
           {anchor && <BlockHandle actions={actions} disabled={!!props.disabled} anchorElem={anchor} />}
           {/* slash 菜单与块菜单走同一条路径（actions.convertAt → 纯函数 → 重新导入）：
               词表由 conversionTargetsFor 生成，所以两个菜单永远给出一致的合法项。 */}
-          <BlockSlashMenu disabled={!!props.disabled} onSelect={(index, target) => actions.convertAt(index, target)} />
+          <BlockSlashMenu disabled={!!props.disabled} onInsertImage={props.owner ? () => filePicker.current?.click() : undefined} onSelect={(index, target) => actions.convertAt(index, target)} />
           <SyncPlugin
             value={props.value}
             onChange={props.onChange}

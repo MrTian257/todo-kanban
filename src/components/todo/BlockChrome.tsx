@@ -6,11 +6,12 @@
 // contenteditable，源文层原样复用）只在"逻辑不住在组件里"时成立。
 
 import * as React from "react";
+import { createPortal } from "react-dom";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import { DraggableBlockPlugin_EXPERIMENTAL } from "@lexical/react/LexicalDraggableBlockPlugin";
 import {
   $getRoot, $getSelection, $isRangeSelection, FORMAT_TEXT_COMMAND,
-  type LexicalEditor,
+  COMMAND_PRIORITY_LOW, SELECTION_CHANGE_COMMAND, type LexicalEditor,
 } from "lexical";
 import { $setBlocksType } from "@lexical/selection";
 import { $createHeadingNode, $createQuoteNode } from "@lexical/rich-text";
@@ -50,7 +51,7 @@ interface ToolbarProps {
 }
 
 /**
- * 格式工具栏。把旧 Vditor 那排按钮的核心能力补回来。
+ * 选区格式工具栏。跟随选区浮动，提供块格式、行内格式与媒体插入。
  *
  * 两个必须守住的细节：
  * 1. 每个按钮都显式 type="button" —— 三个宿主都在 <form> 里，缺了它点一下就提交整个表单。
@@ -59,7 +60,51 @@ interface ToolbarProps {
  */
 export function BlockToolbar({ disabled, busy, onInsertImage }: ToolbarProps): React.ReactElement {
   const [editor] = useLexicalComposerContext();
+  const [position, setPosition] = React.useState<{ top: number; left: number } | null>(null);
   const off = !!disabled || !!busy;
+
+  React.useEffect(() => {
+    let frame = 0;
+    const updatePosition = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const root = editor.getRootElement();
+        const selection = window.getSelection();
+        if (!root || !selection || selection.isCollapsed || !selection.rangeCount) {
+          setPosition(null);
+          return;
+        }
+        const range = selection.getRangeAt(0);
+        if (!root.contains(range.startContainer) || !root.contains(range.endContainer)) {
+          setPosition(null);
+          return;
+        }
+        const rect = range.getBoundingClientRect();
+        const sideInset = Math.min(380, window.innerWidth * 0.475);
+        const left = Math.min(window.innerWidth - sideInset, Math.max(sideInset, rect.left + rect.width / 2));
+        const top = rect.top >= 48 || rect.bottom + 50 >= window.innerHeight
+          ? Math.max(8, rect.top - 42)
+          : rect.bottom + 8;
+        setPosition({ top, left });
+      });
+    };
+    const unregister = editor.registerCommand(SELECTION_CHANGE_COMMAND, () => {
+      updatePosition();
+      return false;
+    }, COMMAND_PRIORITY_LOW);
+    const unregisterUpdates = editor.registerUpdateListener(updatePosition);
+    document.addEventListener("selectionchange", updatePosition);
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    return () => {
+      unregister();
+      unregisterUpdates();
+      document.removeEventListener("selectionchange", updatePosition);
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+      cancelAnimationFrame(frame);
+    };
+  }, [editor]);
 
   const keepSelection = (event: React.MouseEvent) => event.preventDefault();
 
@@ -88,8 +133,10 @@ export function BlockToolbar({ disabled, busy, onInsertImage }: ToolbarProps): R
     >{label}</button>
   );
 
-  return (
-    <div className="flex shrink-0 flex-wrap items-center gap-1 border-b px-3 py-1.5 text-xs text-muted-foreground" role="toolbar" aria-label="格式工具栏" data-block-editor-toolbar="on">
+  if (!position || disabled) return <></>;
+
+  return createPortal(
+    <div className="tk-block-format-toolbar flex flex-wrap items-center gap-1 rounded-lg border bg-popover px-2 py-1.5 text-xs text-popover-foreground shadow-lg" role="toolbar" aria-label="格式工具栏" data-block-editor-toolbar="on" style={{ position: "fixed", top: position.top, left: position.left, transform: "translateX(-50%)", zIndex: 100 }}>
       {text("B", "加粗", formatText("bold"), "font-bold")}
       {text("I", "斜体", formatText("italic"), "italic")}
       {text("S", "删除线", formatText("strikethrough"), "line-through")}
@@ -118,7 +165,8 @@ export function BlockToolbar({ disabled, busy, onInsertImage }: ToolbarProps): R
       })}
       {text("分隔线", "插入分隔线", () => editor.dispatchCommand(INSERT_HORIZONTAL_RULE_COMMAND, undefined))}
       {onInsertImage && text("图片", "插入图片", onInsertImage)}
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -204,6 +252,17 @@ export function BlockHandle({ actions, disabled, anchorElem }: HandleProps): Rea
         menuComponent={
           <div ref={menuRef as React.RefObject<HTMLDivElement>} className="tk-block-handle flex items-center gap-0.5 rounded border bg-card px-1 py-0.5 shadow-sm">
             <span aria-hidden="true" className="cursor-grab px-1 text-muted-foreground active:cursor-grabbing" title="拖动调整此块位置">⠿</span>
+            <button
+              type="button"
+              aria-label="在下方新建块"
+              title="在下方新建块"
+              onMouseDown={event => event.preventDefault()}
+              onClick={() => {
+                const index = indexOfActive();
+                if (index >= 0) actions.insertAfter(index);
+              }}
+              className="rounded px-1 text-muted-foreground hover:bg-muted"
+            >＋</button>
             <button
               type="button"
               aria-label="块菜单"
