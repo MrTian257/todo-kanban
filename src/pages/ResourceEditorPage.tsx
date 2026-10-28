@@ -82,6 +82,33 @@ function ResourceEditorForm({ resourceId }: { resourceId: string }) {
   const dirty =
     form.title !== initial.title || form.url !== initial.url || form.tags !== initial.tags ||
     form.note !== initial.note || ownerId !== initialOwnerId;
+
+  // ── 外部改动检测（ADR-0004：两框统一不只是组件统一，保护也要统一）──
+  // 资料同样会被 AI 经 MCP、局域网访客或自动脚本写；改之前资料页只有 useEditingGuard，
+  // 远端改动会被静默覆盖或在保存时才炸出冲突 —— 那是实打实的数据丢失。
+  // 语义与待办详情页保持一致：整条记录 JSON 比较 → 脏时不应用远端 → 两个出口。
+  const original = React.useRef(JSON.stringify(resource ?? null));
+  const [externalChange, setExternalChange] = React.useState(false);
+  React.useEffect(() => {
+    const current = JSON.stringify(resource ?? null);
+    if (current === original.current || saving) return;
+    if (dirty) { setExternalChange(true); return; }
+    // 没有本地改动 → 直接采纳远端，用户不必知道自己错过了什么
+    original.current = current;
+    setForm(initial);
+    setExternalChange(false);
+  }, [resource, dirty, saving, initial]);
+  /** 出口一：放弃本地编辑，改用最新内容。 */
+  const useRemote = React.useCallback(() => {
+    original.current = JSON.stringify(resource ?? null);
+    setForm(initial);
+    setExternalChange(false);
+  }, [resource, initial]);
+  /** 出口二：保留本地编辑，下一次保存覆盖远端（与待办页同名语义）。 */
+  const keepMine = React.useCallback(() => {
+    original.current = JSON.stringify(resource ?? null);
+    setExternalChange(false);
+  }, [resource]);
   // 未保存时拦截路由跳转（菜单、返回按钮、历史返回）
   useEditingGuard(dirty && !saved.current);
 
@@ -92,6 +119,8 @@ function ResourceEditorForm({ resourceId }: { resourceId: string }) {
 
   const save = async () => {
     if (saving) return;
+    // 外部改动未处理时不写库：否则会用过期快照覆盖别人的修改
+    if (externalChange) { setSaveError("资料已被其他窗口、MCP 或自动脚本修改，请先选择使用最新内容或保留我的编辑。"); return; }
     const title = form.title.trim();
     const errors = { title: title ? "" : "资料标题不能为空", url: urlError(url) };
     setFieldErrors(errors);
@@ -186,6 +215,14 @@ function ResourceEditorForm({ resourceId }: { resourceId: string }) {
         </Button>
       </div>
 
+      {/* 与待办详情页同款提示条：冲突优先展示（远端差异不解决，草稿恢复出来的也是过期基线） */}
+      {externalChange && (
+        <div role="alert" className="mb-3 flex flex-wrap items-center gap-2 rounded border p-3 text-sm">
+          <span>资料已被其他窗口、MCP 或自动脚本修改；你的编辑仍保留。</span>
+          <Button type="button" size="sm" onClick={useRemote}>使用最新内容</Button>
+          <Button type="button" size="sm" variant="outline" onClick={keepMine}>保留我的编辑</Button>
+        </div>
+      )}
       {saveError && <p role="alert" className="mb-3 text-sm text-destructive">{saveError}</p>}
 
       <form
