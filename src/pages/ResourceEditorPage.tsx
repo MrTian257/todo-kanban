@@ -78,6 +78,8 @@ function ResourceEditorForm({ resourceId }: { resourceId: string }) {
   const [fieldErrors, setFieldErrors] = React.useState<{ title?: string; url?: string }>({});
   const [saveError, setSaveError] = React.useState("");
   const [saving, setSaving] = React.useState(false);
+  const [descriptionProcessing, setDescriptionProcessing] = React.useState(false);
+  const [attachmentOwnerId] = React.useState(() => resource?.id ?? newId());
   const saved = React.useRef(false);
   const dirty =
     form.title !== initial.title || form.url !== initial.url || form.tags !== initial.tags ||
@@ -118,7 +120,7 @@ function ResourceEditorForm({ resourceId }: { resourceId: string }) {
   const leave = () => navigate("/library");
 
   const save = async () => {
-    if (saving) return;
+    if (saving || descriptionProcessing) return;
     // 外部改动未处理时不写库：否则会用过期快照覆盖别人的修改
     if (externalChange) { setSaveError("资料已被其他窗口、MCP 或自动脚本修改，请先选择使用最新内容或保留我的编辑。"); return; }
     const title = form.title.trim();
@@ -130,7 +132,7 @@ function ResourceEditorForm({ resourceId }: { resourceId: string }) {
     setSaveError("");
     try {
       const next: LibraryResource = {
-        id: resource?.id ?? newId(),
+        id: attachmentOwnerId,
         // 归属以表单为准；选择「未归属资料」时存 null（资料仍可在资料库的未归属筛选项下看到）
         projectId: ownerId || null,
         title,
@@ -159,7 +161,7 @@ function ResourceEditorForm({ resourceId }: { resourceId: string }) {
 
   // 快捷键：保存（等价于点「保存资料」；与页内 form 的 onSubmit 同一个 save()）
   useShortcut("save", () => {
-    if (saving) return;
+    if (saving || descriptionProcessing) return;
     void save();
   });
   // 快捷键：关闭资料编辑（走既有 leave，脏状态由 NavigationGuard 统一拦截）
@@ -209,7 +211,7 @@ function ResourceEditorForm({ resourceId }: { resourceId: string }) {
           <kbd className="tk-kbd">{formatShortcut("save", isMacOS)}</kbd>
         </span>
         {/* 顶栏按钮用 form= 关联表单：既是真正提交按钮（回车可保存），又只触发一次 onSubmit */}
-        <Button type="submit" form="resource-form" className="gap-2" disabled={saving} title={`${formatShortcut("save", isMacOS)} 保存资料`}>
+        <Button type="submit" form="resource-form" className="gap-2" disabled={saving || descriptionProcessing} title={`${formatShortcut("save", isMacOS)} 保存资料`}>
           <Save className="h-4 w-4" />
           {saving ? "保存中…" : "保存资料"}
         </Button>
@@ -250,7 +252,9 @@ function ResourceEditorForm({ resourceId }: { resourceId: string }) {
                 所以资料备注从此可以贴图，且保存时引用回写 attachment://<resourceId>/<file>。 */}
             <BlockEditor
               value={form.note}
-              owner={{ kind: "resource", id: resource?.id ?? newId() }}
+              owner={{ kind: "resource", id: attachmentOwnerId }}
+              disabled={saving}
+              onProcessingChange={setDescriptionProcessing}
               label="资料备注"
               placeholder="记录使用场景、关键结论或注意事项…"
               onChange={(markdown) => setField("note", markdown)}

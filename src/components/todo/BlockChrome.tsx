@@ -208,7 +208,9 @@ export function BlockHandle({ actions, disabled, anchorElem }: HandleProps): Rea
     if (!activeElement) return -1;
     const root = editor.getRootElement();
     if (!root) return -1;
-    return Array.from(root.children).indexOf(activeElement);
+    return editor.getEditorState().read(() => {
+      return $getRoot().getChildren().findIndex(child => editor.getElementByKey(child.getKey()) === activeElement);
+    });
   }, [activeElement, editor]);
 
   /** 打开菜单时读一次该块类型，用来算合法转换目标（菜单里只出现合法的）。 */

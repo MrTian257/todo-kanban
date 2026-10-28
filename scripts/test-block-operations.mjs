@@ -42,6 +42,8 @@ try {
     const out = joinBlocks(convertBlock(splitBlocks('待办事项\n\n其它\n'), 0, { kind: 'list', listKind }));
     assert.ok(out.startsWith(prefix + '待办事项'), listKind + ' 前缀：' + JSON.stringify(out));
     assert.ok(out.endsWith('\n\n其它\n'), listKind + ' 不影响后面的块（逐字节）');
+    // 空段落转列表必须留下可输入的空列表项骨架（slash 在空块里选列表）
+    assert.deepEqual(convertSource({ kind: 'paragraph', source: '' }, { kind: 'list', listKind }), [prefix], listKind + ' 空块骨架');
   }
 
   // ── 4. 段落 → 引用 / 代码块 ──

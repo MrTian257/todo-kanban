@@ -96,6 +96,9 @@ export function convertSource(block: { kind: BlockKind; source: string }, target
         .map(line => line.trim())
         .filter(Boolean);
       const marker = (index: number) => listMarkerFor(target.listKind, index);
+      // 空段落转列表：必须留下一个空列表项骨架（标题/引用/代码都有同样的空骨架），
+      // 否则源文仍是空串，编辑器里看不出「转换成功」，用户也没处输入第一项。
+      if (lines.length === 0) return [marker(0)];
       // 首行带标记，后续行缩进两格接在同一项里（保留用户原来的段落断行语义）
       return [lines.map((line, index) => (index === 0 ? marker(0) + line : "  " + line)).join("\n")];
     }

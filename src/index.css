@@ -769,7 +769,7 @@ input, textarea, select, button { font-family: inherit; }
    不再调用任何 Vditor 主题 API（那是旧 MarkdownEditor 的 setTheme 路径）。 */
 .tk-block-editor { background: var(--card); }
 .tk-block-format-toolbar { max-width: min(95vw, 760px); }
-.tk-block-content { overflow-wrap: anywhere; }
+.tk-block-content { overflow-wrap: anywhere; padding-left: 5.5rem; }
 .tk-block-content:focus-within { box-shadow: inset 0 0 0 1px var(--ring); }
 .tk-block-paragraph { margin: 0 0 0.6em; }
 .tk-block-h1 { font-size: 1.6em; font-weight: 650; margin: 0.8em 0 0.4em; }
@@ -777,12 +777,20 @@ input, textarea, select, button { font-family: inherit; }
 .tk-block-h3 { font-size: 1.18em; font-weight: 600; margin: 0.7em 0 0.35em; }
 .tk-block-h4, .tk-block-h5, .tk-block-h6 { font-size: 1.05em; font-weight: 600; margin: 0.6em 0 0.3em; }
 .tk-block-quote { border-left: 3px solid var(--border); padding-left: 0.9em; margin: 0 0 0.6em; color: var(--muted-foreground); }
+.tk-block-ul { list-style-type: disc; }
+.tk-block-ol { list-style-type: decimal; }
 .tk-block-ul, .tk-block-ol { margin: 0 0 0.6em 1.3em; padding: 0; }
 .tk-block-li { margin: 0.15em 0; }
-.tk-block-code { background: color-mix(in oklab, var(--muted) 70%, transparent); border-radius: 8px; padding: 10px 12px; margin: 0 0 0.6em; overflow-x: auto; font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.92em; white-space: pre; }
+.tk-block-check { list-style: none; position: relative; margin-left: -1.3em; padding-left: 1.3em; }
+/* Lexical 的 CheckListPlugin 按 li 的 ::before 宽度计算可点区域，并且只认 target=li：
+   方框必须落在 li 的盒模型内（left:0 + padding-left），否则点方框命中 ul、点不到、勾选无效。 */
+.tk-block-check::before { content: "☐"; position: absolute; left: 0; top: 0.15em; width: 1.3em; height: 1.3em; line-height: 1.3; cursor: pointer; }
+.tk-block-check[aria-checked="true"]::before { content: "☑"; }
+.tk-block-code { display: block; background: color-mix(in oklab, var(--muted) 70%, transparent); border-radius: 8px; padding: 10px 12px; margin: 0 0 0.6em; overflow-x: auto; font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.92em; white-space: pre; }
 .tk-block-table { width: 100%; border-collapse: collapse; margin: 0 0 0.6em; display: table; overflow-x: auto; }
 .tk-block-table td, .tk-block-table th { border: 1px solid var(--border); padding: 4px 8px; }
 .tk-block-link { color: var(--primary); text-decoration: underline; }
+.tk-block-strike { text-decoration: line-through; }
 .tk-block-inline-code { background: color-mix(in oklab, var(--muted) 70%, transparent); border-radius: 4px; padding: 1px 4px; font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.92em; }
 .tk-block-source { margin: 0 0 0.6em; }
 .tk-block-source > summary { cursor: default; list-style: none; }

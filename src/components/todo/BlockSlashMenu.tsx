@@ -131,6 +131,10 @@ export function BlockSlashMenu({ onSelect, onInsertImage, disabled }: SlashMenuP
         // 先把 "/过滤词" 从正文里删掉（它只是命令，不是内容）
         if (textNodeContainingQuery) {
           const matching = query ?? "";
+          // discrete：onSelectOption 本身运行在 typeahead 的 editor.update 里，
+          // 普通嵌套 update 的提交会被排到外层 update 之后；而下面的结构转换在
+          // queueMicrotask 里同步读 EditorState，早于外层提交就会把 "/" 当成正文
+          // 一起重新导入（标题里出现 "/"）。discrete 让外层 update 立即提交。
           editor.update(() => {
             const text = textNodeContainingQuery.getTextContent();
             const start = text.lastIndexOf("/");
@@ -140,7 +144,7 @@ export function BlockSlashMenu({ onSelect, onInsertImage, disabled }: SlashMenuP
               textNodeContainingQuery.setTextContent(before);
             }
             void matching;
-          });
+          }, { discrete: true });
         }
         closeMenu();
         const index = currentBlockIndex(editor);

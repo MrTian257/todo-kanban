@@ -163,8 +163,7 @@ function SyncPlugin(props: SyncProps): null {
 
   const importMarkdown = React.useCallback((markdown: string) => {
     const display = attachmentRefToDisplay(markdown);
-    docRef.current = splitBlocks(display);
-    touchedKeys.current = new Set();
+    const nextDoc = splitBlocks(display);
     applyingExternal.current = true;
     try {
       // **必须包一层 { root }**：Lexical 的 parseEditorState 要的是 EditorState 形态
@@ -172,6 +171,9 @@ function SyncPlugin(props: SyncProps): null {
       // "Cannot read properties of undefined (reading 'type')"，表现就是编辑器一片空白、正文不显示。
       const nextState = editor.parseEditorState(JSON.stringify({ root: markdownToEditorJson(display) }));
       editor.setEditorState(nextState, { tag: IMPORT_TAG });
+      docRef.current = nextDoc;
+      touchedKeys.current = new Set();
+      latest.current.onImportError("");
     } catch (failure) {
       // 解析失败绝不能静默：空白编辑器是最难排查的故障形态（本次即栽在这里）。
       latest.current.onImportError(failure instanceof Error ? failure.message : String(failure));
@@ -248,32 +250,36 @@ function SyncPlugin(props: SyncProps): null {
     }
     if (!files.length) return;
     if (files.some(file => !IMAGE_TYPES.has(file.type))) { latest.current.onImageError("请选择 PNG、JPEG、GIF 或 WebP 图片。"); return; }
+    // 上一次图片错误不能一直挂着：本次校验已通过，真正失败会在下面重新上报。
+    latest.current.onImageError("");
     publish();   // 先把已输入的文本落回宿主，再动文档
     const baseline = lastEmitted.current;
     busy.current = true;
     latest.current.onProcessingChange?.(true);
     try {
-      const nodes: LexicalNode[] = [];
+      const images: { src: string; alt: string }[] = [];
+      const owner = latest.current.owner!;
       for (const file of files) {
         // 压缩 → 按 owner 落盘为附件 → 插入展示 URL；保存时再换回 attachment:// 引用
         const blob = await compressImage(file);
         if (blob.size > MAX_IMAGE_BYTES) throw new Error("「" + file.name + "」压缩后仍超过 5 MB，请缩小后重试");
-        const attachment = await importImage(new File([blob], file.name, { type: blob.type || file.type }), latest.current.owner!);
-        nodes.push($createImageNode(attachmentDisplayUrl(attachment.ref), file.name.replace(/[\[\]\\\r\n]/g, "_")));
+        const attachment = await importImage(new File([blob], file.name, { type: blob.type || file.type }), owner);
+        images.push({ src: attachmentDisplayUrl(attachment.ref), alt: file.name.replace(/[\[\]\\\r\n]/g, "_") });
       }
       editor.update(() => {
         // **竞态双检**：处理期间宿主内容变了（切任务 / 外部更新）就拒绝插入，
         // 否则会把图片插进另一条备注（票 05 §8、票 08 竞态不变式）。
-        if (baseline !== lastEmitted.current) { latest.current.onImageError("备注已更新，请重新插入图片。"); return; }
+        if (baseline !== lastEmitted.current || owner.id !== latest.current.owner?.id || owner.kind !== latest.current.owner?.kind) { latest.current.onImageError("备注已更新，请重新插入图片。"); return; }
+        const nodes = images.map(image => $createImageNode(image.src, image.alt));
         const selection = $getSelection();
         if ($isRangeSelection(selection)) selection.insertNodes(nodes);
         else $insertNodes(nodes);
-      });
-      publish();
+      }, { discrete: true });
     } catch (error) {
       latest.current.onImageError(error instanceof Error ? error.message : "图片读取失败，请重试");
     } finally {
       busy.current = false;
+      publish();
       latest.current.onProcessingChange?.(false);
     }
   }, [editor, publish]);
@@ -291,12 +297,23 @@ function SyncPlugin(props: SyncProps): null {
    * 这是本期明写的取舍；光标恢复留给后续（需要建立 Lexical 节点 ↔ 块 id 的双向映射）。
    */
   const runStructure = React.useCallback((op: (doc: BlockDoc) => BlockDoc) => {
+    if (latest.current.disabled || busy.current || composing.current) return;
     const markdown = buildMarkdown();
-    const doc = splitBlocks(attachmentRefToDisplay(markdown));
+    let doc = splitBlocks(attachmentRefToDisplay(markdown));
+    // 空文档在 Markdown 里没有块（splitBlocks("") 返回 0 块），但编辑器里一定有一个
+    // 可放光标的空段落；否则「在空段落上敲 / 转成标题」会被纯函数当成无块操作直接吞掉。
+    if (doc.blocks.length === 0) {
+      doc = {
+        ...doc,
+        blocks: [{ id: 0, kind: "paragraph", start: 0, end: 0, source: "", touched: false, node: null }],
+        gaps: [doc.gaps[0] ?? ""],
+      };
+    }
     // 刚 split 出来的 doc 里 id 就是下标，所以把手给的 DOM 下标可以直接当块 id 用
     const next = op(doc);
     const out = attachmentDisplayToRef(joinBlocks(next));
     importMarkdown(out);
+    if (out !== markdown) latest.current.onChange(out);
     requestAnimationFrame(() => editor.focus());
   }, [buildMarkdown, importMarkdown, editor]);
 
@@ -330,20 +347,23 @@ function SyncPlugin(props: SyncProps): null {
 
 /** 三个宿主共用的块编辑器。用法与旧 MarkdownEditor 一致：受控 value + onChange。 */
 export function BlockEditor(props: Props) {
+  const [error, setError] = React.useState("");
   const initialConfig = React.useMemo(() => ({
     namespace: "tk-block-editor",
     editable: !props.disabled,
     nodes: [HeadingNode, QuoteNode, ListNode, ListItemNode, TableNode, TableRowNode, TableCellNode,
       CodeNode, CodeHighlightNode, LinkNode, AutoLinkNode, HorizontalRuleNode, ImageNode, SourceBlockNode],
-    onError: (error: Error) => { console.error("块编辑器异常", error); },
+    // 不能在这里 throw：Lexical 是在自己的 try/catch 里回调 onError 的，抛出去会打断
+    // 它的恢复流程（编辑状态/选择可能一起坏掉），React 的错误边界也接不住 update 里的异常。
+    // 控制台留完整堆栈，界面把消息交给 role="alert"。
+    onError: (error: Error) => { console.error("块编辑器异常", error); setError(error.message); },
     // 主题类名由 index.css 的 .tk-block-* 提供；颜色一律吃 [data-theme] CSS 变量，
     // 不再调用任何 Vditor 主题 API（ADR-0003 后果 2）。
     theme: {
       paragraph: "tk-block-paragraph",
       heading: { h1: "tk-block-h1", h2: "tk-block-h2", h3: "tk-block-h3", h4: "tk-block-h4", h5: "tk-block-h5", h6: "tk-block-h6" },
       quote: "tk-block-quote",
-      list: { ul: "tk-block-ul", ol: "tk-block-ol" },
-      listitem: "tk-block-li",
+      list: { ul: "tk-block-ul", ol: "tk-block-ol", listitem: "tk-block-li", listitemChecked: "tk-block-check", listitemUnchecked: "tk-block-check" },
       code: "tk-block-code",
       table: "tk-block-table",
       tab: "tk-block-tab",
@@ -354,7 +374,6 @@ export function BlockEditor(props: Props) {
 
   const flushRef = React.useRef<(() => void) | null>(null);
   const imageInsertRef = React.useRef<((files: File[]) => Promise<void>) | null>(null);
-  const [error, setError] = React.useState("");
   const [uploading, setUploading] = React.useState(false);
   const filePicker = React.useRef<HTMLInputElement>(null);
   const rootBox = React.useRef<HTMLDivElement>(null);
@@ -422,7 +441,7 @@ export function BlockEditor(props: Props) {
               className="tk-block-content h-full min-h-[280px] px-5 py-4 text-sm leading-relaxed outline-none"
               spellCheck
             />}
-            placeholder={<p className="pointer-events-none absolute left-5 top-4 text-muted-foreground">{props.placeholder ?? "直接输入备注…"}</p>}
+            placeholder={<p className="pointer-events-none absolute left-[5.5rem] top-4 text-muted-foreground">{props.placeholder ?? "直接输入备注…"}</p>}
             ErrorBoundary={LexicalErrorBoundary}
           />
           <HistoryPlugin />
@@ -434,10 +453,10 @@ export function BlockEditor(props: Props) {
           <MarkdownShortcutPlugin transformers={NOTION_MARKDOWN_TRANSFORMERS} />
           <TabIndentationPlugin />
           <BlockToolbar disabled={props.disabled} busy={uploading} onInsertImage={props.owner ? () => filePicker.current?.click() : undefined} />
-          {anchor && <BlockHandle actions={actions} disabled={!!props.disabled} anchorElem={anchor} />}
+          {anchor && <BlockHandle actions={actions} disabled={!!props.disabled || uploading} anchorElem={anchor} />}
           {/* slash 菜单与块菜单走同一条路径（actions.convertAt → 纯函数 → 重新导入）：
               词表由 conversionTargetsFor 生成，所以两个菜单永远给出一致的合法项。 */}
-          <BlockSlashMenu disabled={!!props.disabled} onInsertImage={props.owner ? () => filePicker.current?.click() : undefined} onSelect={(index, target) => actions.convertAt(index, target)} />
+          <BlockSlashMenu disabled={!!props.disabled || uploading} onInsertImage={props.owner ? () => filePicker.current?.click() : undefined} onSelect={(index, target) => actions.convertAt(index, target)} />
           <SyncPlugin
             value={props.value}
             onChange={props.onChange}

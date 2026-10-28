@@ -11,7 +11,7 @@ import { DecoratorNode, type LexicalNode, type NodeKey, type SerializedLexicalNo
 import type { ReactElement } from "react";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import { $getNodeByKey } from "lexical";
-import { attachmentDisplayUrl } from "@/lib/attachments";
+import { useLexicalEditable } from "@lexical/react/useLexicalEditable";
 
 // ───────────────────────── 透明块 ─────────────────────────
 
@@ -55,14 +55,13 @@ export class SourceBlockNode extends DecoratorNode<ReactElement> {
   updateDOM(): false { return false; }
   /** 透明块整块选中，不做行内编辑（票 05 §2：拖它=拖整段）。 */
   isInline(): boolean { return false; }
-  decorate(): ReactElement { return <SourceBlockView nodeKey={this.getKey()} />; }
+  decorate(): ReactElement { return <SourceBlockView nodeKey={this.getKey()} source={this.__source} />; }
 }
 
 /** 透明块视图：默认等宽只读展示，点「编辑源文」换成 textarea。 */
-function SourceBlockView({ nodeKey }: { nodeKey: string }): ReactElement {
+function SourceBlockView({ nodeKey, source }: { nodeKey: string; source: string }): ReactElement {
   const [editor] = useLexicalComposerContext();
-  const node = editor ? editor.getEditorState().read(() => $getNodeByKey<SourceBlockNode>(nodeKey)) : null;
-  const source = node instanceof SourceBlockNode ? node.getSource() : "";
+  const editable = useLexicalEditable();
   const commit = (next: string) => {
     editor.update(() => {
       const target = $getNodeByKey<SourceBlockNode>(nodeKey);
@@ -78,6 +77,7 @@ function SourceBlockView({ nodeKey }: { nodeKey: string }): ReactElement {
       </summary>
       <textarea
         value={source}
+        disabled={!editable}
         onChange={(event) => commit(event.target.value)}
         rows={Math.min(20, Math.max(3, source.split("\n").length + 1))}
         aria-label="编辑源文块"
@@ -131,9 +131,8 @@ export class ImageNode extends DecoratorNode<ReactElement> {
   updateDOM(): false { return false; }
   isInline(): boolean { return true; }   // 段内夹图是合法形态（票 02 R2-2 的实测夹具形状）
   decorate(): ReactElement {
-    // 展示 URL 必须走 attachmentDisplayUrl：附件引用在 Windows 与其它平台形态不同，
-    // 自己拼 URL 会让某一边显示不出来（票 07 §5）。
-    return <img src={attachmentDisplayUrl(this.__src)} alt={this.__altText} title={this.__title ?? undefined} loading="lazy" />;
+    // SyncPlugin 导入时已转换成展示 URL，这里不能再次追加 localhost 前缀。
+    return <img src={this.__src} alt={this.__altText} title={this.__title ?? undefined} loading="lazy" />;
   }
 }
 

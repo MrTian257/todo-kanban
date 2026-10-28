@@ -39,12 +39,12 @@ export function blockToLexicalNodes(block: Block): LexicalNode[] {
     case "heading":
       return [{ type: "heading", version: 1, tag: `h${Math.min(6, Math.max(1, (node as { depth: number }).depth))}`, children: inlineToLexical((node as { children?: Content[] }).children ?? []) }];
     case "list":
-      return [listToLexical(node as MdList)];
+      return [listToLexical(node as MdList, block.source)];
     case "blockquote":
       return [{ type: "quote", version: 1, children: blockChildrenToLexical((node as { children?: Content[] }).children ?? []) }];
     case "code":
       // 缩进代码被碰过时 markdownBlocks 的 serializer 已归一为围栏；这里统一产 code 节点。
-      return [{ type: "code", version: 1, language: (node as { lang?: string | null }).lang ?? "", children: [{ type: "code-highlight", version: 1, text: (node as { value: string }).value, children: [{ type: "code-token", version: 1, text: (node as { value: string }).value, syntax: "text" }] }] }];
+      return [{ type: "code", version: 1, language: (node as { lang?: string | null }).lang ?? "", children: [{ ...textNode((node as { value: string }).value, 0), type: "code-highlight" }] }];
     case "table":
       return [tableToLexical(node as MdTable)];
     case "thematicBreak":
@@ -83,9 +83,16 @@ function kindOfChild(type: string): Block["kind"] | "unsupported" {
   return "unsupported";
 }
 
-function listToLexical(node: MdList): LexicalNode {
+function listToLexical(node: MdList, source = ""): LexicalNode {
   const ordered = !!node.ordered;
-  const isTask = (node.children ?? []).some(item => (item as { checked?: boolean | null }).checked !== undefined && (item as { checked?: boolean | null }).checked !== null);
+  const topLevelChecks = [...source.matchAll(/^[-*+][ \t]+\[([ xX])\](?=[ \t]|$)/gm)].map(match => match[1].toLowerCase() === "x");
+  // 空任务项（`- [ ] `）在 remark-gfm 里会退化成 checked=null 的普通无序列表，
+  // 于是空列表项无法用 AST 区分「任务列表」和「正文恰好是 [ ]」。这里用原始源文的
+  // 顶层任务标记兜底：slash 在空块里选「任务列表」后重新打开仍应是任务列表。
+  const isTask = topLevelChecks.length > 0 || (node.children ?? []).some(item => {
+    const checked = (item as { checked?: boolean | null }).checked;
+    return checked !== undefined && checked !== null;
+  });
   return {
     type: "list", version: 1,
     // Lexical 的 listType 三值：bullet / number / check。任务列表在 Lexical 里是 check 型，
@@ -93,14 +100,15 @@ function listToLexical(node: MdList): LexicalNode {
     listType: isTask ? "check" : ordered ? "number" : "bullet",
     tag: ordered ? "ol" : "ul",
     start: typeof node.start === "number" ? node.start : 1,
-    children: (node.children ?? []).map(item => listitemToLexical(item as MdNode)),
+    children: (node.children ?? []).map((item, index) => listitemToLexical(item as MdNode, isTask, topLevelChecks[index])),
   };
 }
 
-function listitemToLexical(item: MdNode): LexicalNode {
+function listitemToLexical(item: MdNode, isTask = false, sourceChecked?: boolean): LexicalNode {
   const checked = (item as { checked?: boolean | null }).checked;
   const out: LexicalNode = { type: "listitem", version: 1, children: itemChildrenToLexical(item.children ?? []) };
   if (checked !== undefined && checked !== null) out.checked = checked;
+  else if (isTask) out.checked = sourceChecked ?? false;
   return out;
 }
 
@@ -118,18 +126,15 @@ function tableToLexical(node: MdTable): LexicalNode {
   const rows = (node.children ?? []) as unknown as MdNode[];
   return {
     type: "table", version: 1,
-    // 对齐存在 **table 节点**上（mdast 的 align 数组），不在行或单元格里 —— 两头都必须带上它，
-    // 否则 :--- / ---: 会在往返中被静默抹平。
-    // ⚠ 对组件的显式要求：Lexical 内置 TableNode 的序列化里**没有 align 字段**，
-    //   直接用它会在 importJSON 时丢掉对齐 ⇒ 组件必须注册一个携带 align 的自定义表格节点，
-    //   或把 align 折进单元格 headerState 之外的自有字段。这条不能靠桥这边解决。
+    // 同时写入单元格 format：Lexical 内置 TableNode 不保留自定义 align 字段。
     align: node.align ?? [],
     children: rows.map((row, rowIndex) => ({
       type: "tablerow", version: 1,
-      children: ((row.children ?? []) as MdNode[]).map(cell => ({
+      children: ((row.children ?? []) as MdNode[]).map((cell, column) => ({
         type: "tablecell", version: 1,
         // header 行 = 第一行（GFM 管道表只有这一种表头语义）
         headerState: rowIndex === 0 ? 1 : 0,
+        format: node.align?.[column] ?? "",
         children: cellChildrenToLexical((cell.children ?? []) as Content[]),
       })),
     })),
@@ -171,7 +176,7 @@ function inlineToLexical(children: Content[]): LexicalNode[] {
         out.push({ type: "link", version: 1, url: node.url ?? "", target: "_blank", title: node.title ?? null, children: inlineToLexical(node.children ?? []) });
         break;
       case "image":
-        out.push({ type: "image", version: 1, src: node.url ?? "", altText: node.alt ?? "", width: null, height: null }); break;
+        out.push({ type: "image", version: 1, src: node.url ?? "", altText: node.alt ?? "", title: node.title ?? null, width: null, height: null }); break;
       case "break":
         // Lexical 的 linebreak 是硬换行。ADR-0001 §6：只有用户主动 Shift+Enter 才产它，
         // 而 mdast 的 break 正是源文里两尾随空格/反斜杠的产物 —— 语义对得上。
@@ -265,6 +270,8 @@ function listToMarkdown(node: LexicalNode, indent: number): string {
 
 function codeText(children: LexicalNode[]): string {
   return children.map(child => {
+    if (child.type === "linebreak") return "\n";
+    if (child.type === "tab") return "\t";
     if (typeof child.text === "string") return child.text;
     if (child.children) return codeText(child.children);
     return "";
@@ -277,7 +284,8 @@ function tableToMarkdown(node: LexicalNode): string {
   const width = Math.max(...rows.map(row => row.length));
   const normalized = rows.map(row => [...row, ...Array(Math.max(0, width - row.length)).fill("")]);
   const head = normalized[0];
-  const align = Array.isArray(node.align) ? (node.align as (string | null)[]) : [];
+  const align = Array.isArray(node.align) ? (node.align as (string | null)[]) :
+    (node.children?.[0]?.children ?? []).map(cell => ({ 1: "left", 2: "center", 3: "right" }[Number(cell.format)] ?? cell.format));
   // 分隔行按 mdast 的 align 还原：left→:---  right→---:  center→:---:  null→---
   const divider = head.map((_, col) => {
     switch (align[col]) {
@@ -319,7 +327,16 @@ function inlineToMarkdown(nodes: LexicalNode[]): string {
         out += "[" + label + "](" + url + title + ")";
         break;
       }
-      case "image": out += `![${String(node.altText ?? "")}](${String(node.src ?? "")})`; break;
+      case "image": {
+        // 图片 title 与链接 title 一样是**内容**：被碰过的块重新序列化时必须原样写回，
+        // 否则「编辑同段落的其它文字」会把图片说明静默抹掉。
+        // title 里的双引号换成单引号，避免提前闭合 title 段。
+        const rawTitle = node.title == null ? "" : String(node.title);
+        const safeTitle = rawTitle.split('"').join("'");
+        const title = safeTitle.length ? ' "' + safeTitle + '"' : "";
+        out += `![${String(node.altText ?? "")}](${String(node.src ?? "")}${title})`;
+        break;
+      }
       case "list": out += listToMarkdown(node, 0); break;
       case "sourceblock": out += String(node.source ?? node[BLOCK_SOURCE_KEY] ?? ""); break;
       default: out += inlineToMarkdown(node.children ?? []);
@@ -343,7 +360,10 @@ function wrapFormat(text: string, format: number): string {
   if (format & 16) return T + out + T;   // 行内代码：反引号包裹后不再叠加其它标记（Markdown 里 code 优先）
   if (format & 4) out = "~~" + out + "~~";
   if (format & 1) out = "**" + out + "**";
-  if (format & 2) out = "_" + out + "_";
+  // 斜体只能用 `*` 不能用 `_`：CommonMark 的 `_` 不允许词内强调，而中文没有空格分词，
+  // `与_斜体_、` 这样的相邻写法在重新打开时不会被解析成斜体（会原样显示下划线）。
+  // `*` 没有这条限制，`中文*斜体*中文` 也能正确往返。
+  if (format & 2) out = "*" + out + "*";
   return out;
 }
 

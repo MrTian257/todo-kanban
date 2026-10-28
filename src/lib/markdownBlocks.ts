@@ -62,7 +62,9 @@ const parser = unified().use(remarkParse).use(blockRemarkPlugins);
 // 序列化只挂 stringify：解析结果（mdast）直接喂进来，不重复解析。
 const serializer = unified().use(remarkStringify, {
   // 与仓库既有 .md 风格对齐；这些**只影响被碰过的块**。
-  bullet: "-", emphasis: "_", strong: "*", rule: "-",
+  // 斜体用 `*`：`_` 在中文等无空格分词的语言里属于词内强调，CommonMark 不解析，
+  // 被碰过的块重新打开会显示字面下划线（blockDocument.wrapFormat 同规则）。
+  bullet: "-", emphasis: "*", strong: "*", rule: "-",
   // fences:true 让所有代码块都序列化成围栏——这正是 §5 第 7 类「缩进代码被碰过归一为围栏」
   // 的实现方式，不需要额外标记（本文件里唯一的形态转换由此自动成立）。
   fences: true, setext: false,
