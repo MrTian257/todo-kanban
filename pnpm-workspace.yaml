@@ -1,2 +1,9 @@
 allowBuilds:
   esbuild: true
+
+# unified 必须锁定单版本：remark-parse/remark-gfm 会各带一份 11.0.0，
+# 而 react-markdown 侧是 11.0.5；两份的类型实例不同，unified().use(...) 的
+# Processor 泛型就会对不上，tsc 直接报 "No overload matches this call"。
+# npm 的扁平 node_modules 侥幸没暴露这点，pnpm 的隔离布局会。
+overrides:
+  unified: 11.0.5
