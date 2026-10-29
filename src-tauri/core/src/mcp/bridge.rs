@@ -169,8 +169,10 @@ fn call_tool(name: &str, args: &Value) -> AppResult<Value> {
             apply_ai_markers(&mut payload, &expected);
             let path = resolve_db_file()?.ok_or_else(|| AppError::invalid("数据库不存在"))?;
             let id = crate::svc::proposals::create_at(&path, payload, expected)?;
+            // `id` 是 MCP 客户端与 HTTP 集成测试的查询契约（提案状态资源也用 `id`）；
+            // `proposalId` 保留为旧字段名，避免已接入的调用方读不到。
             Ok(
-                json!({"proposalId":id,"status":"pending","message":"变更尚未应用，请用户在应用的工作流页面确认"}),
+                json!({"id":id.clone(),"proposalId":id,"status":"pending","message":"变更尚未应用，请用户在应用的工作流页面确认"}),
             )
         }
         "db_save_state" => {

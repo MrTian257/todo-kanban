@@ -636,6 +636,9 @@ export async function initPomodoro(): Promise<void> {
         completedFocusCount: snapshot.completedFocusCount,
       });
       if (snapshot.running) ensureTicker();
+      // 恢复成功后刷新快照（savedAt / remainingMs）：否则第二次崩溃时快照已被清掉或过期，
+      // 正在跑的这轮就再也恢复不回来。
+      writeSnapshot();
     } else if (snapshot.endsAt !== null && snapshot.sessionId !== null) {
       // 关闭期间本轮已经走完：补记一条（按计划时长计），但不自动开始下一轮
       const planned = phaseDuration(config, snapshot.phase);
@@ -668,8 +671,27 @@ export async function initPomodoro(): Promise<void> {
         phase: "focus",
         remainingMs: config.focusMs,
       });
+      clearSnapshot();
+    } else if (!snapshot.running && snapshot.sessionId !== null) {
+      // 暂停中的轮次：endsAt 为 null，但累计时长 / 会话 id / 剩余时长都在。
+      // 旧实现在这里两个分支都不匹配，末尾无条件 clearSnapshot() 把整轮静默丢弃。
+      setState({
+        phase: snapshot.phase,
+        running: false,
+        endsAt: null,
+        remainingMs: snapshot.remainingMs,
+        accumulatedMs: snapshot.accumulatedMs,
+        startedAt: snapshot.startedAt,
+        segmentStartedAt: null,
+        interruptions: snapshot.interruptions,
+        sessionId: snapshot.sessionId,
+        completedFocusCount: snapshot.completedFocusCount,
+      });
+      // 暂停态也保留快照：用户重启后仍能继续计时或重置，而不是丢一轮。
+      writeSnapshot();
+    } else {
+      clearSnapshot();
     }
-    clearSnapshot();
   }
 
   window.addEventListener("focus", resync);

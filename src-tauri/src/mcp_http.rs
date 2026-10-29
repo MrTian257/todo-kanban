@@ -1255,23 +1255,25 @@ mod http_tests {
         let (status, body) = call(srv.port, "sk-ro-0000", json!({"jsonrpc":"2.0","id":2,"method":"resources/read",
             "params":{"uri":"todo-kanban://proposals"}}));
         assert_eq!(status, 200, "{body}");
-        let text = body["result"]["content"][0]["text"].as_str().unwrap();
+        let text = body["result"]["contents"][0]["text"].as_str().unwrap();
         let parsed: Value = serde_json::from_str(text).unwrap();
         assert!(
             parsed["pending"].as_array().unwrap().iter().any(|item| item["id"].as_str() == Some(proposal_id.as_str())),
             "刚提的提案必须在列表里：{parsed}"
         );
         assert!(parsed["pending"][0]["payloadBytes"].is_number(), "应给出体积而非正文");
-        // 摘要只该有 id / 时间 / 状态 / 体积：出现快照字段名就说明把正文漏出去了
-        let keys: Vec<&str> = parsed["pending"][0]
+        // 摘要只该有 id / 时间 / 状态 / 体积：出现快照字段名就说明把正文漏出去了。
+        // serde_json 的 Map 默认按 key 字典序输出，所以比较前排序，别锁死序列化顺序。
+        let mut keys: Vec<&str> = parsed["pending"][0]
             .as_object()
             .unwrap()
             .keys()
             .map(String::as_str)
             .collect();
+        keys.sort_unstable();
         assert_eq!(
             keys,
-            vec!["id", "createdAt", "status", "payloadBytes"],
+            vec!["createdAt", "id", "payloadBytes", "status"],
             "提案摘要字段超出预期，可能泄漏快照：{keys:?}"
         );
     }

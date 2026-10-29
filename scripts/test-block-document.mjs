@@ -69,9 +69,14 @@ try {
 
   // ---------- B. 明写降级组：断言降级后的真实形态，不假装恒等 ----------
   // 脚注引用在 Lexical 里没有对应行内节点 → 降级为可读文本 [id]。
+  // 降级后的 `[note]` 是**字面文本**，序列化时会按 escapeMarkdownText 转义成 `\[note\]`
+  // （不转义的话重新打开可能被当成链接/引用标记），所以断言走语义：重新解析后段落文本是 [note]。
   {
     const out = editorJsonToMarkdown(markdownToEditorJson('正文[^note]\n\n[^note]: 脚注内容。\n'));
-    assert.ok(out.includes('[note]'), '脚注引用应降级为字面 [note]，实际=' + JSON.stringify(out));
+    assert.ok(!/正文\[\^note\]/.test(out), '脚注引用不应原样保留成 [^note]，实际=' + JSON.stringify(out));
+    const paragraph = parse(out).children.find(node => node.type === 'paragraph');
+    const text = (paragraph?.children ?? []).map(node => node.value ?? '').join('');
+    assert.equal(text, '正文[note]', '脚注引用应降级为可读文本 [note]，实际=' + JSON.stringify(out));
   }
   // 行内 HTML 当字面文本，不产 HTML 节点（票 07 §5：不得执行/导航）。
   {

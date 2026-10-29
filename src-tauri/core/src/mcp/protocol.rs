@@ -206,12 +206,12 @@ mod tests {
     }
 
     #[test]
-    fn resources_list_has_6() {
+    fn resources_list_has_7() {
         let resp =
             handle_request(&json!({ "jsonrpc": "2.0", "id": 3, "method": "resources/list" }))
                 .unwrap();
         let resources = resp["result"]["resources"].as_array().unwrap();
-        assert_eq!(resources.len(), 6);
+        assert_eq!(resources.len(), 7);
         // v11：自定义字段定义与自动脚本（只读资源）
         assert!(resources
             .iter()
@@ -220,6 +220,10 @@ mod tests {
         assert!(resources
             .iter()
             .any(|item| item["uri"] == "todo-kanban://pomodoro"));
+        // 提案状态资源：只读 AI 也能查自己提交的提案（ADR-022 / ADR-023）
+        assert!(resources
+            .iter()
+            .any(|item| item["uri"] == "todo-kanban://proposals"));
     }
 
     #[test]

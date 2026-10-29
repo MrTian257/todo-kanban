@@ -268,8 +268,10 @@ export function reportCacheKey(
   anchor: string,
   includeMerges: boolean,
   moduleStats: boolean,
+  /** 开发人员归类 / 类型规则的配置版本：配置一改缓存必须失效，否则切周期回来会显示旧规则结果 */
+  configRevision = 0,
 ): string {
-  return [projectId, kind, anchor, includeMerges ? "m1" : "m0", moduleStats ? "d1" : "d0"].join("|");
+  return [projectId, kind, anchor, includeMerges ? "m1" : "m0", moduleStats ? "d1" : "d0", `c${configRevision}`].join("|");
 }
 
 export function peekReport(key: string): ReportResult | null {

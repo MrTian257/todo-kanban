@@ -226,6 +226,9 @@ fn stats_at(conn: &Connection, days: i64, now_ms: i64) -> AppResult<PomodoroStat
     let sessions = sessions_since(conn, from_ms)?;
     let mut buckets: BTreeMap<String, (i64, i64, i64)> = BTreeMap::new();
     let mut completed_days: BTreeSet<String> = BTreeSet::new();
+    // 查询窗口是 365 天（为连续天数回溯），但近 N 天 KPI 只能统计窗口内的会话，
+    // 否则从 `days=7` 调用的 MCP 资源 / 桌面「近 30 天」会把一年的历史都算进来。
+    let window_start = from_date.format("%Y-%m-%d").to_string();
     let (mut focus_count, mut focus_ms, mut completed_count, mut interruptions) = (0i64, 0i64, 0i64, 0i64);
     for session in &sessions {
         // 休息段不参与专注统计，但仍在 recent 列表里可见
@@ -235,13 +238,20 @@ fn stats_at(conn: &Connection, days: i64, now_ms: i64) -> AppResult<PomodoroStat
         let Some(day) = local_day(session.started_at) else {
             continue;
         };
+        let in_window = day.as_str() >= window_start.as_str();
+        if session.completed {
+            completed_days.insert(day.clone());
+            if in_window {
+                completed_count += 1;
+            }
+        }
+        if !in_window {
+            // 窗口外的历史只参与连续天数，不参与 KPI 与分日数组
+            continue;
+        }
         focus_count += 1;
         focus_ms += session.actual_ms;
         interruptions += session.interruptions;
-        if session.completed {
-            completed_count += 1;
-            completed_days.insert(day.clone());
-        }
         let entry = buckets.entry(day).or_insert((0, 0, 0));
         entry.0 += 1;
         entry.1 += session.actual_ms;
@@ -377,6 +387,25 @@ mod tests {
         assert_eq!(stats.focus_count, 2);
         assert_eq!(stats.completed_count, 2);
         assert_eq!(stats.focus_ms, 50 * 60_000);
+    }
+
+    /// 近 N 天 KPI 只统计窗口内；窗口外的历史只参与连续天数回溯（365 天）。
+    /// 否则「近 7 天 / 近 30 天」会把一年历史全算进总量（最长放大约 12 倍）。
+    #[test]
+    fn stats_totals_respect_window_but_streak_looks_back() {
+        let conn = db_with_tables();
+        let today = chrono::Local::now().date_naive();
+        let long_ago = today - chrono::Duration::days(100);
+        record_in_conn(&conn, &session("old", "focus", at(long_ago, 9), true), at(today, 9)).unwrap();
+        record_in_conn(&conn, &session("today", "focus", at(today, 9), true), at(today, 9)).unwrap();
+        let stats = stats_at(&conn, 7, at(today, 12)).unwrap();
+        assert_eq!(stats.focus_count, 1, "近 7 天总量不得把 100 天前的会话算进来");
+        assert_eq!(stats.focus_ms, 25 * 60_000);
+        assert_eq!(stats.completed_count, 1);
+        assert_eq!(stats.days.len(), 7);
+        assert_eq!(stats.days.iter().map(|day| day.focus_count).sum::<i64>(), 1);
+        assert_eq!(stats.from_day, (today - chrono::Duration::days(6)).format("%Y-%m-%d").to_string());
+        assert_eq!(stats.streak_days, 1);
     }
 
     /// 只有"完成"的专注才计入连续天数；中断的专注不影响 streak

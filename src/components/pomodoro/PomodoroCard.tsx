@@ -10,6 +10,7 @@ import {
   resetPomodoro,
   skipPomodoro,
   startPomodoro,
+  todayFocusCount,
   usePomodoro,
 } from "@/lib/pomodoroStore";
 
@@ -20,6 +21,8 @@ export function PomodoroCard() {
   const ratio = progress(remainingMs, total);
   const cycleDone = completedFocusCount % config.longBreakEvery;
   const started = running || remainingMs < total;
+  // 「今日累计」必须来自按本地日分桶的统计（completedFocusCount 是会话级计数，跨天不清零）。
+  const todayDone = todayFocusCount();
 
   return (
     <section
@@ -80,7 +83,7 @@ export function PomodoroCard() {
             <i key={index} data-done={index < cycleDone ? "1" : "0"} aria-hidden="true" />
           ))}
         </span>
-        <span className="tk-pomodoro-stat">今日累计完成 {completedFocusCount} 轮</span>
+        <span className="tk-pomodoro-stat">今日累计完成 {todayDone} 轮</span>
         {interruptions > 0 && <span className="tk-pomodoro-stat">本轮暂停 {interruptions} 次</span>}
       </div>
     </section>

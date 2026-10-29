@@ -127,7 +127,9 @@ export function GitReportPage() {
     [result, configuredKinds],
   );
 
-  const cacheKey = project ? reportCacheKey(project.id, kind, anchor, includeMerges, moduleStats) : "";
+  // 缓存键带 workflow.revision：保存「开发人员归类 / 类型规则」后 revision 自增，
+  // 命中不到旧报告 → 回空态并提示刷新，不会静默展示旧规则算出来的结果。
+  const cacheKey = project ? reportCacheKey(project.id, kind, anchor, includeMerges, moduleStats, workflow.revision) : "";
   /** 请求序号：切换项目/周期会作废进行中的请求，避免「切到本周却显示上周结果」的竞态 */
   const requestSeq = React.useRef(0);
 
@@ -152,7 +154,7 @@ export function GitReportPage() {
       toast.error("该项目还没有配置仓库地址，请先在项目资料里填写前端/后端仓库");
       return;
     }
-    const key = reportCacheKey(project.id, kind, anchor, includeMerges, moduleStats);
+    const key = reportCacheKey(project.id, kind, anchor, includeMerges, moduleStats, workflow.revision);
     const window = utcWindow(periodRange(kind, anchor));
     const seq = (requestSeq.current += 1);
     setLoading(true);

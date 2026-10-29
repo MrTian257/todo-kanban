@@ -32,13 +32,36 @@ export function reorderManual<T extends ManuallyOrdered>(
   const visible = orderedVisibleIds
     .map(id => byId.get(id))
     .filter((item): item is T => !!item);
-  const slots = visible.map(item => item.sortOrder).sort((a, b) => a - b);
+  if (visible.length < 2) return items;
+  // 顺序没变（原地放开 / 只有单项）直接返回，避免给「同序号归一」制造无意义写入。
+  const currentOrder = [...visible].sort(compareManualOrder).map(item => item.id);
+  if (currentOrder.length === orderedVisibleIds.length
+    && currentOrder.every((id, index) => id === orderedVisibleIds[index])) return items;
+
   const changes = new Map<string, T>();
-  visible.forEach((item, index) => {
-    const sortOrder = slots[index];
-    if (sortOrder === undefined || item.sortOrder === sortOrder) return;
-    changes.set(item.id, { ...item, sortOrder, updatedAt: now });
-  });
+  const slots = visible.map(item => item.sortOrder).sort((a, b) => a - b);
+  if (new Set(slots).size === slots.length) {
+    visible.forEach((item, index) => {
+      const sortOrder = slots[index];
+      if (sortOrder === undefined || item.sortOrder === sortOrder) return;
+      changes.set(item.id, { ...item, sortOrder, updatedAt: now });
+    });
+  } else {
+    // 槽位重复（MCP / 局域网新建的记录 sortOrder 默认都是 0，旧数据也会被归一成 0）：
+    // 原槽位无法表达严格先后，若照原值回填会全部被判「序号没变」→ 拖拽静默无效。
+    // 从最小槽位起给可见项分配互不相同的序号，并跳开未显示项占用的值。
+    const visibleIds = new Set(visible.map(item => item.id));
+    const hiddenSlots = new Set(
+      items.filter(item => !visibleIds.has(item.id)).map(item => item.sortOrder),
+    );
+    let cursor = Math.min(...slots);
+    for (const item of visible) {
+      while (hiddenSlots.has(cursor)) cursor += 1;
+      const sortOrder = cursor++;
+      if (item.sortOrder === sortOrder) continue;
+      changes.set(item.id, { ...item, sortOrder, updatedAt: now });
+    }
+  }
   if (!changes.size) return items;
   return items.map(item => changes.get(item.id) ?? item);
 }

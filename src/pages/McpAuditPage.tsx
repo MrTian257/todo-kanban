@@ -70,7 +70,11 @@ export function McpAuditPage() {
   const [loading, setLoading] = React.useState(false);
   const [confirmClear, setConfirmClear] = React.useState(false);
 
-  const load = React.useCallback(async () => {
+  // 请求序号：筛选/翻页快速切换时，只让最后一次请求的响应落地（否则旧响应覆盖新筛选）。
+  const requestSeq = React.useRef(0);
+
+  const load = React.useCallback(async (nextOffset = offset) => {
+    const seq = (requestSeq.current += 1);
     setLoading(true);
     try {
       const page = await mcpAuditList({
@@ -78,14 +82,15 @@ export function McpAuditPage() {
         transport: transport === "all" ? undefined : transport,
         onlyFailures,
         limit: PAGE_SIZE,
-        offset,
+        offset: nextOffset,
       });
+      if (seq !== requestSeq.current) return;
       setEntries(page.entries);
       setTotal(page.total);
     } catch (error) {
-      toast.error(String(error));
+      if (seq === requestSeq.current) toast.error(String(error));
     } finally {
-      setLoading(false);
+      if (seq === requestSeq.current) setLoading(false);
     }
   }, [actor, transport, onlyFailures, offset]);
 
@@ -102,7 +107,8 @@ export function McpAuditPage() {
       const removed = await mcpAuditClear();
       toast.success(`已清空 ${removed} 条审计记录`);
       setOffset(0);
-      await load();
+      // 显式传 0：setOffset 是异步的，当前闭包里的 offset 可能仍是旧页码。
+      await load(0);
       setActors([]);
       mcpAuditActors().then(setActors).catch(() => undefined);
     } catch (error) {

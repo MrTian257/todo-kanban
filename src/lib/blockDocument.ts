@@ -64,7 +64,10 @@ type MdTable = MdNode & { align?: (string | null)[] | null };
 
 /** 无法完整往返的语法整块保留为可编辑源文，不能用空节点或纯文本替代。 */
 function canEditNode(node: MdNode): boolean {
-  if (["html", "inlineMath", "math", "definition", "footnoteDefinition", "footnoteReference", "linkReference", "imageReference"].includes(node.type)) return false;
+  // footnoteReference 有明确的降级分支（inlineToLexical 里转成字面 [id]），不属于「无法往返」；
+  // 把它挡在这里会让含脚注引用的整段退化成源文块，`[^note]` 原样留下，脚注降级永远走不到
+  // （回归断言见 scripts/test-block-document.mjs 的「明写降级组」）。
+  if (["html", "inlineMath", "math", "definition", "footnoteDefinition", "linkReference", "imageReference"].includes(node.type)) return false;
   if (node.type === "blockquote" && (node.children ?? []).some(child => kindOfChild(child.type) === "unsupported")) return false;
   if (node.type === "listItem") {
     const children = node.children ?? [];
@@ -198,12 +201,16 @@ function inlineToLexical(children: Content[]): LexicalNode[] {
         out.push(...withFormat(inlineToLexical(node.children ?? []), 2)); break;   // 2 = italic
       case "delete":
         out.push(...withFormat(inlineToLexical(node.children ?? []), 4)); break;   // 4 = strikethrough
-      case "link":
+      case "link": {
         // title 是**内容**不是样式：mdast 的 link.title 丢了就是语义丢失，不属于 §4 允许的"规范化"。
         // ⚠ 组件侧约束：@lexical/link 的 LinkNode 有 __title/getTitle/setTitle，但 SerializedLinkNode
         //   是否回传 title 未证实 ⇒ 装配时必须核实；不回传就得用自定义 link 节点或 import 后 setTitle 回填。
-        out.push({ type: "link", version: 1, url: node.url ?? "", target: "_blank", title: node.title ?? null, children: inlineToLexical(node.children ?? []) });
+        // 空标签链接 `[](url)` 在 Lexical 里没有可见文本，导入时会被整节点丢弃 → URL 静默消失。
+        // 用地址补出可见标签（规范化），保证被碰过的块不会丢链接。
+        const linkChildren = node.children?.length ? inlineToLexical(node.children) : [textNode(node.url ?? "", 0)];
+        out.push({ type: "link", version: 1, url: node.url ?? "", target: "_blank", title: node.title ?? null, children: linkChildren });
         break;
+      }
       case "image":
         out.push({ type: "image", version: 1, src: node.url ?? "", altText: node.alt ?? "", title: node.title ?? null, width: null, height: null }); break;
       case "break":
@@ -356,10 +363,12 @@ function markdownTitle(value: unknown): string {
 }
 
 function markdownDestination(value: unknown): string {
-  // 尖括号形式允许空格和括号；实体和转义解码后仍为原始地址。
+  // 普通地址保持 `(https://…)` 的自然形态：无空白/尖括号/括号时不需要尖括号，
+  // 多包一层 `<…>` 会让「编辑过一个块」后整段链接外观发生变化（往返断言会抓到）。
+  // 只有地址本身含空白、尖括号或括号时才用 `<…>`——该形态允许这些字符，解码后地址不变。
   const url = String(value ?? "").replace(/&/g, "&amp;").replace(/\\/g, "\\\\")
     .replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
-  return `<${url}>`;
+  return /[\s<>()]/.test(url) ? `<${url}>` : url;
 }
 
 function inlineToMarkdown(nodes: LexicalNode[]): string {

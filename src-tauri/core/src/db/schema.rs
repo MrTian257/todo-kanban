@@ -699,6 +699,9 @@ mod tests {
                PRIMARY KEY (todo_id, attachment_id));
              INSERT INTO attachments VALUES ('a1','t1-0001.png','截图.png','t1/t1-0001.png','image/png',12,1,1);
              INSERT INTO todo_attachments VALUES ('t1','a1',1,1);
+             -- 宿主行必须真实存在，否则「正文零迁移」断言查不到行（QueryReturnedNoRows），
+             -- 会把测试自身的准备缺失误报成迁移失败。
+             INSERT INTO todos (id, note) VALUES ('t1', '正文不许被动 ![x](attachment://t1/t1-0001.png)');
              PRAGMA user_version = 15;",
         )
         .unwrap();

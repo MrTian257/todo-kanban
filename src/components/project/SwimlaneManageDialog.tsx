@@ -38,6 +38,9 @@ export function SwimlaneManageDialog({ projectId, open, onOpenChange }: Props) {
   const [lanes, setLanes] = React.useState<Swimlane[]>([]);
   const [newName, setNewName] = React.useState("");
   const [newStatus, setNewStatus] = React.useState<TodoStatus>("todo");
+  // 删除二次确认走 Dialog：window.confirm 在 Tauri 2 的 macOS WKWebView 里没有实现，
+  // 会静默按「取消」返回 false（TodoRow 的删除确认已因同一问题改成 Dialog）。
+  const [pendingDelete, setPendingDelete] = React.useState<Swimlane | null>(null);
 
   React.useEffect(() => {
     if (open && project) {
@@ -97,10 +100,14 @@ export function SwimlaneManageDialog({ projectId, open, onOpenChange }: Props) {
       toast.error("每个状态至少保留一个泳道（先添加同状态泳道）");
       return;
     }
-    if (!window.confirm(`删除泳道「${lane.name}」？其下待办将移入同状态第一个泳道。`)) return;
-    setLanes(lanes.filter((l) => l.id !== id));
+    setPendingDelete(lane);
   };
 
+  const confirmRemove = () => {
+    if (!pendingDelete) return;
+    setLanes(lanes.filter((l) => l.id !== pendingDelete.id));
+    setPendingDelete(null);
+  };
   const move = (index: number, dir: -1 | 1) => {
     const target = index + dir;
     if (target < 0 || target >= lanes.length) return;
@@ -110,8 +117,9 @@ export function SwimlaneManageDialog({ projectId, open, onOpenChange }: Props) {
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[85vh] max-w-xl overflow-y-auto">
+    <>
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent className="max-h-[85vh] max-w-xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle>管理泳道</DialogTitle>
           <DialogDescription>
@@ -198,7 +206,23 @@ export function SwimlaneManageDialog({ projectId, open, onOpenChange }: Props) {
           </Button>
           <Button onClick={save} disabled={saving}>{saving ? "保存中…" : "保存"}</Button>
         </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!pendingDelete} onOpenChange={(value) => { if (!value) setPendingDelete(null); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>删除泳道</DialogTitle>
+            <DialogDescription>
+              {pendingDelete ? `删除泳道「${pendingDelete.name}」？其下待办将移入同状态第一个泳道。` : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPendingDelete(null)}>取消</Button>
+            <Button variant="destructive" onClick={confirmRemove}>删除</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }

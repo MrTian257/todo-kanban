@@ -15,6 +15,8 @@ export function deleteWithUndo(kind: DeleteKind, id: string, label: string) {
         : state.resources.find(r => r.id === id);
   const record = find(before);
   const projectTasks = kind === "project" ? JSON.stringify(before.todos.filter(t => t.projectId === id)) : "";
+  // 删除是否已经真正提交：8s 定时器跑过之后，撤销按钮不能再假装成功。
+  let committed = false;
   const timer = setTimeout(async () => {
     pending.delete(key);
     const current = useAppStore.getState();
@@ -23,6 +25,7 @@ export function deleteWithUndo(kind: DeleteKind, id: string, label: string) {
       toast.error("内容已更新，本次删除已取消。");
       return;
     }
+    committed = true;
     try {
       if (kind === "todo") current.removeTodo(id);
       else if (kind === "project") current.removeProject(id);
@@ -32,6 +35,11 @@ export function deleteWithUndo(kind: DeleteKind, id: string, label: string) {
     } catch (error) { toast.error(`删除未保存：${String(error)}`); }
   }, 8000);
   toast(`将在 8 秒后删除「${label}」`, { duration: 8000, action: { label: "撤销", onClick: () => {
+    // 定时器已执行（或正在执行）：记录已从 store 删除，撤销只能如实告知失败。
+    if (committed) {
+      toast.error("删除已执行，无法撤销");
+      return;
+    }
     clearTimeout(timer); pending.delete(key); toast.success("已撤销删除");
   } } });
 }

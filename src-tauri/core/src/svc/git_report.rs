@@ -460,7 +460,13 @@ fn parse_iso_to_epoch_secs(iso: &str) -> Option<i64> {
         return None;
     }
     let mut secs = days_from_civil(year, month, day) * 86_400 + hour * 3600 + minute * 60 + second;
-    let rest = s.get(19..).unwrap_or("");
+    let mut rest = s.get(19..).unwrap_or("");
+    // 跳过小数秒：`2026-08-05T02:00:00.000+08:00` 的时区从 `.000` 之后才开始。
+    // 固定从第 19 字节读 rest 会把 ".000+08:00" 当成无时区（偏移被静默丢弃，分桶整体偏移）。
+    if let Some(fraction) = rest.strip_prefix('.') {
+        let digits = fraction.bytes().take_while(|byte| byte.is_ascii_digit()).count();
+        rest = fraction.get(digits..).unwrap_or("");
+    }
     let sign = if rest.starts_with('+') {
         1
     } else if rest.starts_with('-') {
@@ -1518,6 +1524,16 @@ mod tests {
         assert_eq!(local_day("2028-02-29T12:00:00Z", 0), "2028-02-29");
         // 脏数据退化：取前 10 位而不是报错
         assert_eq!(local_day("not-a-date", 480), "not-a-date");
+    }
+
+    /// 带小数秒 + 非零偏移的形态（GitLab 返回 `2026-08-05T02:00:00.000+00:00` 这类）时区必须生效，
+    /// 否则偏移被静默当成 0，按天/按小时分桶整体错位。
+    #[test]
+    fn iso_with_fractional_seconds_keeps_offset() {
+        assert_eq!(local_day("2026-08-04T00:30:00.000+08:00", 0), "2026-08-03");
+        assert_eq!(local_hour("2026-08-04T00:30:00.500+08:00", 0), "16");
+        assert_eq!(local_day("2026-08-04T00:30:00.000Z", 0), "2026-08-04");
+        assert_eq!(local_day("2026-08-04T23:30:00.999-02:00", 0), "2026-08-05");
     }
 
     #[test]

@@ -309,10 +309,11 @@ pub fn run(
             continue;
         }
         let mut fired: HashSet<&str> = HashSet::new();
+        // 基线必须在进入多轮循环前固定：新建任务没有「保存前快照」，若每轮都用本轮起点当基线，
+        // 第 2 轮起 fieldChanged 类触发器就永远看不到变化（级联结果还会随规则 id 顺序漂移）。
+        let base = before.cloned().unwrap_or_else(|| todo.clone());
         let mut touched = false;
         for _pass in 0..AUTOMATION_PASSES {
-            // 始终以保存前快照对比当前值，覆盖用户变更与跨轮级联。
-            let base = before.cloned().unwrap_or_else(|| todo.clone());
             let mut progress = false;
             for rule in &active {
                 if budget == 0 || fired.contains(rule.id.as_str()) {
