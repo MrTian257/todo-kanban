@@ -319,7 +319,31 @@ function cellToCellText(cell: LexicalNode): string {
 
 /** 单元格里的竖线必须转义，否则列数会错位（票 07 表格行的保真点）。 */
 function escapeCell(text: string): string {
-  return text.replace(/\|/g, "\\|").replace(/\n/g, " ");
+  // 普通文本已经转义，行内代码和链接地址未必转义；只补未被转义的竖线。
+  return text.replace(/(\\*)\|/g, (_match, slashes: string) =>
+    slashes + (slashes.length % 2 === 0 ? "\\|" : "|"))
+    .replace(/\n/g, " ");
+}
+
+/** 文本节点中的标点是字面内容，不能在重开时被当成 Markdown 语法。 */
+function escapeMarkdownText(text: string): string {
+  return text.replace(/[\\`*_{}\[\]()#+\-.!<>~&$|=]/g, "\\$&")
+    // 行首四空格或制表符会成为缩进代码，用实体保留第一个空白字符。
+    .replace(/(^|\n)(?= {4}|\t)([ \t])/g, (_match, prefix: string, space: string) =>
+      prefix + (space === "\t" ? "&#9;" : "&#32;"));
+}
+
+function markdownTitle(value: unknown): string {
+  if (value == null) return "";
+  const title = String(value).replace(/&/g, "&amp;").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  return ` "${title}"`;
+}
+
+function markdownDestination(value: unknown): string {
+  // 尖括号形式允许空格和括号；实体和转义解码后仍为原始地址。
+  const url = String(value ?? "").replace(/&/g, "&amp;").replace(/\\/g, "\\\\")
+    .replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
+  return `<${url}>`;
 }
 
 function inlineToMarkdown(nodes: LexicalNode[]): string {
@@ -331,23 +355,11 @@ function inlineToMarkdown(nodes: LexicalNode[]): string {
       case "lineboundary": out += "\n"; break;
       case "link": {
         const label = inlineToMarkdown(node.children ?? []);
-        const url = String(node.url ?? "");
-        // 有 title 必须写回 [label](url "title")，否则链接的说明文字在往返中消失。
-        // title 里的双引号换成单引号，避免提前闭合 title 段。
-        const rawTitle = node.title == null ? "" : String(node.title);
-        const safeTitle = rawTitle.split('"').join("'");
-        const title = safeTitle.length ? ' "' + safeTitle + '"' : "";
-        out += "[" + label + "](" + url + title + ")";
+        out += `[${label}](${markdownDestination(node.url)}${markdownTitle(node.title)})`;
         break;
       }
       case "image": {
-        // 图片 title 与链接 title 一样是**内容**：被碰过的块重新序列化时必须原样写回，
-        // 否则「编辑同段落的其它文字」会把图片说明静默抹掉。
-        // title 里的双引号换成单引号，避免提前闭合 title 段。
-        const rawTitle = node.title == null ? "" : String(node.title);
-        const safeTitle = rawTitle.split('"').join("'");
-        const title = safeTitle.length ? ' "' + safeTitle + '"' : "";
-        out += `![${String(node.altText ?? "")}](${String(node.src ?? "")}${title})`;
+        out += `![${escapeMarkdownText(String(node.altText ?? ""))}](${markdownDestination(node.src)}${markdownTitle(node.title)})`;
         break;
       }
       case "list": out += listToMarkdown(node, 0); break;
@@ -369,15 +381,29 @@ function inlineToMarkdown(nodes: LexicalNode[]): string {
  * 下划线/高亮/上下标在 CommonMark 里没有对应写法，被碰过时按纯文本输出（明写取舍，不引入 HTML）。
  */
 function wrapFormat(text: string, format: number): string {
-  let out = text;
-  if (format & 16) return T + out + T;   // 行内代码：反引号包裹后不再叠加其它标记（Markdown 里 code 优先）
+  if (!text) return "";
+  if (format & 16) {
+    const longest = (text.match(/`+/g) ?? []).reduce((max, run) => Math.max(max, run.length), 0);
+    const fence = T.repeat(longest + 1);
+    // 边界反引号需要空格隔开；两端原有空格则补一对，抵消 Markdown 的去边界空格规则。
+    const padding = text.startsWith(T) || text.endsWith(T) ||
+      (text.startsWith(" ") && text.endsWith(" ") && /[^ ]/.test(text)) ? " " : "";
+    return fence + padding + text + padding + fence;
+  }
+  let out = escapeMarkdownText(text);
+  if (!(format & 7)) return out;
+  // 强调分隔符不能贴着内部空白；让首尾空白留在格式标记外。
+  const leading = out.match(/^\s*/)?.[0] ?? "";
+  const trailing = out.match(/\s*$/)?.[0] ?? "";
+  out = out.slice(leading.length, out.length - trailing.length);
+  if (!out) return escapeMarkdownText(text);
   if (format & 4) out = "~~" + out + "~~";
   if (format & 1) out = "**" + out + "**";
   // 斜体只能用 `*` 不能用 `_`：CommonMark 的 `_` 不允许词内强调，而中文没有空格分词，
   // `与_斜体_、` 这样的相邻写法在重新打开时不会被解析成斜体（会原样显示下划线）。
   // `*` 没有这条限制，`中文*斜体*中文` 也能正确往返。
   if (format & 2) out = "*" + out + "*";
-  return out;
+  return leading + out + trailing;
 }
 
 // ───────────────────────── 与 markdownBlocks 的接缝 ─────────────────────────

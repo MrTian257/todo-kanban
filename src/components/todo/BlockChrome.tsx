@@ -24,7 +24,7 @@ import type { ConversionTarget } from "@/lib/blockOperations";
 import { conversionTargetsFor } from "@/lib/blockOperations";
 import type { BlockKind } from "@/lib/markdownBlocks";
 
-/** 结构动作：由 BlockEditor 注入，内部走「当前源文 → 纯函数操作 → 重新导入」。 */
+/** 结构动作：由 BlockEditor 按实际节点定位；转换复用源文规则，只替换目标块。 */
 export interface StructureActions {
   convertAt: (blockIndex: number, target: ConversionTarget) => void;
   removeAt: (blockIndex: number) => void;

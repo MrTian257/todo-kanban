@@ -35,7 +35,7 @@ import { CodeNode, CodeHighlightNode } from "@lexical/code";
 import { HorizontalRuleNode } from "@lexical/react/LexicalHorizontalRuleNode";
 import { CHECK_LIST } from "@lexical/markdown";
 import {
-  $getRoot, $getSelection, $isRangeSelection, $insertNodes, ElementNode,
+  $getRoot, $getSelection, $isRangeSelection, $insertNodes, $createParagraphNode, $parseSerializedNode, ElementNode,
   type LexicalNode, type NodeKey, type SerializedLexicalNode,
 } from "lexical";
 import { cn } from "@/lib/utils";
@@ -43,12 +43,12 @@ import {
   attachmentDisplayToRef, attachmentDisplayUrl, attachmentRefToDisplay, importImage, MAX_IMAGE_BYTES,
   type AttachmentOwner,
 } from "@/lib/attachments";
-import { splitBlocks, joinBlocks, type Block, type BlockDoc } from "@/lib/markdownBlocks";
+import { splitBlocks, type Block, type BlockDoc } from "@/lib/markdownBlocks";
 import { blockNodeToMarkdown, markdownToEditorJson } from "@/lib/blockDocument";
 import { ImageNode, SourceBlockNode, $createImageNode } from "./BlockNodes";
 import { BlockToolbar, BlockHandle, type StructureActions } from "./BlockChrome";
 import { BlockSlashMenu } from "./BlockSlashMenu";
-import { convertBlock, removeBlock, duplicateBlock, insertBlockAfter } from "@/lib/blockOperations";
+import { canConvert, convertSource, type ConversionTarget } from "@/lib/blockOperations";
 import { compressImage, IMAGE_BATCH_MAX_BYTES, IMAGE_BATCH_MAX_COUNT, IMAGE_MAX_BYTES, IMAGE_TYPES } from "./markdownImages";
 
 interface Props {
@@ -97,8 +97,8 @@ interface SyncProps {
   onProcessingChange?: (busy: boolean) => void;
   registerFlush: (fn: (() => void) | null) => void;
   registerImageInsert: (fn: ((files: File[]) => Promise<void>) | null) => void;
-  /** 结构操作入口：把手/块菜单调用纯函数后整篇重新导入（注入自 BlockEditor）。 */
-  registerStructure: (fn: ((op: (doc: BlockDoc) => BlockDoc) => void) | null) => void;
+  /** 按编辑器实际节点定位，空段落也占一个位置。 */
+  registerStructure: (actions: StructureActions | null) => void;
   onImageError: (message: string) => void;
   /** 导入解析失败时把原因交给宿主显示（不要静默留空白） */
   onImportError: (message: string) => void;
@@ -297,36 +297,63 @@ function SyncPlugin(props: SyncProps): null {
     return () => latest.current.registerImageInsert(null);
   }, [insertImages]);
 
-  /**
-   * 结构操作：先把当前状态落成 Markdown，再在**块文档纯函数**上执行一次操作，最后整篇重新导入。
-   *
-   * 为什么这样做（而不是直接改 Lexical 节点）：规格 D1 要求结构逻辑只有一份实现、
-   * 且必须能在没有 DOM 的情况下被断言。代价是**会失去光标位置**（重新导入后光标落到文末），
-   * 这是本期明写的取舍；光标恢复留给后续（需要建立 Lexical 节点 ↔ 块 id 的双向映射）。
-   */
-  const runStructure = React.useCallback((op: (doc: BlockDoc) => BlockDoc) => {
+  // 结构动作直接操作选中的节点，不能先把整篇转为 Markdown：空段落会消失，
+  // 相邻列表也可能合并，重解析后的下标不再是菜单所指向的块。
+  const runStructure = React.useCallback((index: number, action: "remove" | "duplicate" | "insert" | ConversionTarget) => {
     if (!initialized.current || latest.current.disabled || busy.current || composing.current) return;
-    const markdown = buildMarkdown();
-    let doc = splitBlocks(attachmentRefToDisplay(markdown));
-    // 空文档在 Markdown 里没有块（splitBlocks("") 返回 0 块），但编辑器里一定有一个
-    // 可放光标的空段落；否则「在空段落上敲 / 转成标题」会被纯函数当成无块操作直接吞掉。
-    if (doc.blocks.length === 0) {
-      doc = {
-        ...doc,
-        blocks: [{ id: 0, kind: "paragraph", start: 0, end: 0, source: "", touched: false, node: null }],
-        gaps: [doc.gaps[0] ?? ""],
-      };
-    }
-    // 刚 split 出来的 doc 里 id 就是下标，所以把手给的 DOM 下标可以直接当块 id 用
-    const next = op(doc);
-    const out = attachmentDisplayToRef(joinBlocks(next));
-    if (!importMarkdown(out)) return;
-    if (out !== markdown) latest.current.onChange(out);
-    requestAnimationFrame(() => editor.focus());
-  }, [buildMarkdown, importMarkdown, editor]);
+    const state = editor.getEditorState();
+    const serialized = state.toJSON().root.children[index];
+    const key = state.read(() => $getRoot().getChildren()[index]?.getKey());
+    if (!serialized || !key) return;
+    editor.update(() => {
+      const root = $getRoot();
+      const node = root.getChildren().find(child => child.getKey() === key);
+      if (!node) return;
+      if (action === "remove") {
+        node.remove();
+        if (root.getChildrenSize() === 0) root.append($createParagraphNode());
+        return;
+      }
+      if (action === "insert") {
+        const paragraph = $createParagraphNode();
+        node.insertAfter(paragraph);
+        paragraph.selectStart();
+        return;
+      }
+      if (action === "duplicate") {
+        node.insertAfter($parseSerializedNode(serialized));
+        return;
+      }
+      const subtree = new Set<NodeKey>();
+      collectKeys(node, subtree);
+      const mapped = keyToBlock.current.get(key);
+      const untouched = mapped && ![...subtree].some(item => touchedKeys.current.has(item));
+      const source = untouched ? mapped.source : blockNodeToMarkdown(serialized);
+      const kind = splitBlocks(source).blocks[0]?.kind ?? "paragraph";
+      if (!canConvert(kind, action.kind)) return;
+      // 仍复用源文转换规则，只解析目标块，不重建其余块或丢弃空段落。
+      const replacements = convertSource({ kind, source }, action).flatMap(markdown =>
+        markdownToEditorJson(markdown).children ?? []);
+      let previous = node;
+      for (const replacement of replacements) {
+        const next = $parseSerializedNode(replacement as Parameters<typeof $parseSerializedNode>[0]);
+        previous.insertAfter(next);
+        previous = next;
+      }
+      if (replacements.length) {
+        node.remove();
+        if (previous instanceof ElementNode) previous.selectStart();
+      }
+    }, { discrete: true });
+  }, [editor]);
 
   React.useEffect(() => {
-    latest.current.registerStructure(runStructure);
+    latest.current.registerStructure({
+      convertAt: (index, target) => runStructure(index, target),
+      removeAt: index => runStructure(index, "remove"),
+      duplicateAt: index => runStructure(index, "duplicate"),
+      insertAfter: index => runStructure(index, "insert"),
+    });
     return () => latest.current.registerStructure(null);
   }, [runStructure]);
 
@@ -391,15 +418,14 @@ export function BlockEditor(props: Props) {
 
   const registerFlush = React.useCallback((fn: (() => void) | null) => { flushRef.current = fn; }, []);
   const registerImageInsert = React.useCallback((fn: ((files: File[]) => Promise<void>) | null) => { imageInsertRef.current = fn; }, []);
-  const structureRef = React.useRef<((op: (doc: BlockDoc) => BlockDoc) => void) | null>(null);
-  const registerStructure = React.useCallback((fn: ((op: (doc: BlockDoc) => BlockDoc) => void) | null) => { structureRef.current = fn; }, []);
-  /** 把手/块菜单的动作表：每个动作只做一件事 —— 调一次纯函数。 */
+  const structureRef = React.useRef<StructureActions | null>(null);
+  const registerStructure = React.useCallback((actions: StructureActions | null) => { structureRef.current = actions; }, []);
+  /** 把手和 slash 菜单共用实际节点定位。 */
   const actions: StructureActions = React.useMemo(() => ({
-    // 块 id 在下标空间里就等于下标（刚 split 出来的 doc），所以这里直接把下标当 id 用
-    convertAt: (index, target) => structureRef.current?.(doc => convertBlock(doc, index, target)),
-    removeAt: index => structureRef.current?.(doc => removeBlock(doc, index)),
-    duplicateAt: index => structureRef.current?.(doc => duplicateBlock(doc, index)),
-    insertAfter: index => structureRef.current?.(doc => insertBlockAfter(doc, index, "paragraph")),
+    convertAt: (index, target) => structureRef.current?.convertAt(index, target),
+    removeAt: index => structureRef.current?.removeAt(index),
+    duplicateAt: index => structureRef.current?.duplicateAt(index),
+    insertAfter: index => structureRef.current?.insertAfter(index),
   }), []);
   /** 把手要 portal 进的锚点元素；挂载后才拿得到，所以用 state。 */
   const [anchor, setAnchor] = React.useState<HTMLElement | null>(null);
@@ -476,7 +502,7 @@ export function BlockEditor(props: Props) {
           <TabIndentationPlugin />
           <BlockToolbar disabled={props.disabled} busy={uploading} onInsertImage={props.owner ? () => filePicker.current?.click() : undefined} />
           {anchor && <BlockHandle actions={actions} disabled={!!props.disabled || uploading} anchorElem={anchor} />}
-          {/* slash 菜单与块菜单走同一条路径（actions.convertAt → 纯函数 → 重新导入）：
+          {/* slash 菜单与块菜单走同一条路径（定位节点 → 源文转换 → 替换目标块）：
               词表由 conversionTargetsFor 生成，所以两个菜单永远给出一致的合法项。 */}
           <BlockSlashMenu disabled={!!props.disabled || uploading} onInsertImage={props.owner ? () => filePicker.current?.click() : undefined} onSelect={(index, target) => actions.convertAt(index, target)} />
           <SyncPlugin
