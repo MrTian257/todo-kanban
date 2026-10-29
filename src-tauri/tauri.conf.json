@@ -27,7 +27,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis"],
     "license": "Apache-2.0",
     "licenseFile": "../LICENSE",
     "copyright": "Copyright 2026 muyu257@foxmail.com",
