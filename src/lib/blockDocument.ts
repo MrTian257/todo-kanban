@@ -56,7 +56,7 @@ export function blockToLexicalNodes(block: Block): LexicalNode[] {
   }
 }
 
-interface MdNode { type: string; children?: Content[]; value?: string; identifier?: string; depth?: number; lang?: string | null; ordered?: boolean; start?: number | null; checked?: boolean | null; spread?: boolean; align?: (string | null)[] | null; url?: string; title?: string | null; alt?: string | null; }
+interface MdNode { type: string; position?: Content["position"]; children?: Content[]; value?: string; identifier?: string; depth?: number; lang?: string | null; ordered?: boolean; start?: number | null; checked?: boolean | null; spread?: boolean; align?: (string | null)[] | null; url?: string; title?: string | null; alt?: string | null; }
 type MdList = MdNode & { children: MdNode[] };
 // mdast 的 Table / TableRow / TableCell 一律用 children 存下级（**没有 rows 字段**；
 // GFM 语法文档里的 "row list" 是说法不是属性名）。读错字段会让整张表静默消失。
@@ -98,11 +98,16 @@ function kindOfChild(type: string): Block["kind"] | "unsupported" {
 
 function listToLexical(node: MdList, source = ""): LexicalNode {
   const ordered = !!node.ordered;
-  const topLevelChecks = [...source.matchAll(/^[-*+][ \t]+\[([ xX])\](?=[ \t]|$)/gm)].map(match => match[1].toLowerCase() === "x");
-  // 空任务项（`- [ ] `）在 remark-gfm 里会退化成 checked=null 的普通无序列表，
-  // 于是空列表项无法用 AST 区分「任务列表」和「正文恰好是 [ ]」。这里用原始源文的
-  // 顶层任务标记兜底：slash 在空块里选「任务列表」后重新打开仍应是任务列表。
-  const isTask = topLevelChecks.length > 0 || (node.children ?? []).some(item => {
+  const items = node.children ?? [];
+  const itemSources = items.map(item => nodeSource(item, source, node.position?.start.offset));
+  // 只恢复原始源文中「整个列表项仅有任务标记」的情况。按 AST 位置逐项对应，
+  // 不能把筛选后的标记数组按列表下标分配，也不能清除正文中合法的 [ ]。
+  const emptyChecks = items.map((item, index) => {
+    if (typeof item.checked === "boolean") return undefined;
+    const match = /^ {0,3}(?:[-*+]|\d+[.)])[ \t]+\[([ xX])\][ \t]*(?:\r?\n[ \t]*)*$/.exec(itemSources[index]);
+    return match ? match[1].toLowerCase() === "x" : undefined;
+  });
+  const isTask = emptyChecks.some(checked => checked !== undefined) || items.some(item => {
     const checked = (item as { checked?: boolean | null }).checked;
     return checked !== undefined && checked !== null;
   });
@@ -111,25 +116,36 @@ function listToLexical(node: MdList, source = ""): LexicalNode {
     // Lexical 的 listType 三值：bullet / number / check。任务列表在 Lexical 里是 check 型，
     // 层级与序号连续性都在这个块内（ADR-0001 §5 第 3 类：整棵列表树 = 一个块）。
     listType: isTask ? "check" : ordered ? "number" : "bullet",
-    tag: ordered ? "ol" : "ul",
+    tag: !isTask && ordered ? "ol" : "ul",
     start: typeof node.start === "number" ? node.start : 1,
-    children: (node.children ?? []).map((item, index) => listitemToLexical(item as MdNode, isTask, topLevelChecks[index])),
+    children: items.map((item, index) => listitemToLexical(item, isTask, emptyChecks[index], itemSources[index])),
   };
 }
 
-function listitemToLexical(item: MdNode, isTask = false, sourceChecked?: boolean): LexicalNode {
+/** source 起点与 parentStart 对应；没有可靠位置时不猜测或删除正文。 */
+function nodeSource(node: MdNode, source: string, parentStart: number | undefined): string {
+  const start = node.position?.start.offset;
+  const end = node.position?.end.offset;
+  if (parentStart === undefined || start === undefined || end === undefined || start < parentStart || end < start) return "";
+  return source.slice(start - parentStart, end - parentStart);
+}
+
+function listitemToLexical(item: MdNode, isTask = false, emptyChecked?: boolean, source = ""): LexicalNode {
   const checked = (item as { checked?: boolean | null }).checked;
-  const out: LexicalNode = { type: "listitem", version: 1, children: itemChildrenToLexical(item.children ?? []) };
+  const out: LexicalNode = {
+    type: "listitem", version: 1,
+    children: emptyChecked !== undefined ? [] : itemChildrenToLexical(item.children ?? [], source, item.position?.start.offset),
+  };
   if (checked !== undefined && checked !== null) out.checked = checked;
-  else if (isTask) out.checked = sourceChecked ?? false;
+  else if (isTask) out.checked = emptyChecked ?? false;
   return out;
 }
 
-function itemChildrenToLexical(children: Content[]): LexicalNode[] {
+function itemChildrenToLexical(children: Content[], source = "", sourceStart?: number): LexicalNode[] {
   const flat: LexicalNode[] = [];
   for (const child of children) {
     const type = (child as { type: string }).type;
-    if (type === "list") flat.push(listToLexical(child as MdList));       // 嵌套列表作为子 list 节点
+    if (type === "list") flat.push(listToLexical(child as MdList, nodeSource(child as MdNode, source, sourceStart)));
     else flat.push({ type: "paragraph", version: 1, children: inlineToLexical((child as { children?: Content[] }).children ?? []) });
   }
   return flat;

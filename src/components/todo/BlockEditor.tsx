@@ -27,7 +27,7 @@ import { HorizontalRulePlugin } from "@lexical/react/LexicalHorizontalRulePlugin
 import { MarkdownShortcutPlugin, DEFAULT_TRANSFORMERS } from "@lexical/react/LexicalMarkdownShortcutPlugin";
 import { TabIndentationPlugin } from "@lexical/react/LexicalTabIndentationPlugin";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
-import { ListNode, ListItemNode } from "@lexical/list";
+import { ListNode, ListItemNode, $createListNode, $createListItemNode } from "@lexical/list";
 import { HeadingNode, QuoteNode } from "@lexical/rich-text";
 import { TableNode, TableRowNode, TableCellNode } from "@lexical/table";
 import { LinkNode, AutoLinkNode } from "@lexical/link";
@@ -331,6 +331,15 @@ function SyncPlugin(props: SyncProps): null {
       const source = untouched ? mapped.source : blockNodeToMarkdown(serialized);
       const kind = splitBlocks(source).blocks[0]?.kind ?? "paragraph";
       if (!canConvert(kind, action.kind)) return;
+      if (action.kind === "list" && action.listKind === "task" && !source.trim()) {
+        // 空任务项没有正文，不经 Markdown 解析，避免把 [ ] 标记解析成文本。
+        const list = $createListNode("check");
+        const item = $createListItemNode(false);
+        list.append(item);
+        node.replace(list);
+        item.selectStart();
+        return;
+      }
       // 仍复用源文转换规则，只解析目标块，不重建其余块或丢弃空段落。
       const replacements = convertSource({ kind, source }, action).flatMap(markdown =>
         markdownToEditorJson(markdown).children ?? []);
