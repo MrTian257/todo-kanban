@@ -324,8 +324,9 @@ pub fn save(mut value: Workflow, expected: i64) -> AppResult<Workflow> {
     if current.revision != expected {
         return Err(AppError::invalid("配置已变化，请刷新后重试"));
     }
-    // 提醒数量收敛：超出上限时按时间保留最早的，避免无界增长
-    clamp_reminders(&mut value);
+    if value.reminders.len() > REMINDER_LIMIT {
+        return Err(AppError::invalid("提醒最多保存 2000 条，请清理后重试；本次未保存"));
+    }
     validate(&value, &db::load_state(&tx)?)?;
     value.revision = current.revision + 1;
     write(&tx, &value)?;
@@ -439,72 +440,84 @@ pub fn claim_reminders() -> AppResult<Vec<ReminderDispatch>> {
     Ok(claimed)
 }
 
-/// 领取实现（供单测用内存库调用；调用方负责事务提交）
+// 租约单独存储，不把领取当作投递成功，也不因后台轮询改变前端配置版本。
+// value = (提醒时间, 领取时间)，重新排期的同 id 提醒不能被旧回执确认。
+type ReminderClaims = HashMap<String, (i64, i64)>;
+fn read_claims(conn: &Connection) -> AppResult<ReminderClaims> {
+    let raw: Option<String> = conn.query_row(
+        "SELECT value FROM app_meta WHERE key='reminder_claims'", [], |row| row.get(0),
+    ).optional()?;
+    Ok(match raw { Some(raw) => serde_json::from_str(&raw)?, None => HashMap::new() })
+}
+fn write_claims(conn: &Connection, claims: &ReminderClaims) -> AppResult<()> {
+    conn.execute(
+        "INSERT INTO app_meta(key,value) VALUES('reminder_claims',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        [serde_json::to_string(claims)?],
+    )?;
+    Ok(())
+}
+
 fn claim_in_tx(tx: &Connection, now: i64) -> AppResult<Vec<ReminderDispatch>> {
     let mut value = read(tx)?;
-    if !value.reminders_enabled {
-        return Ok(vec![]);
-    }
+    if !value.reminders_enabled { return Ok(vec![]); }
+    let mut claims = read_claims(tx)?;
+    let previous = claims.clone();
+    claims.retain(|id, (at, _)| value.reminders.iter().any(|item|
+        item.id == *id && item.at == *at && item.delivered_at.is_none()));
     let mut result = Vec::new();
     let mut changed = false;
-    let pending: Vec<(usize, String, i64)> = value
-        .reminders
-        .iter()
-        .enumerate()
-        .filter(|(_, reminder)| {
-            reminder.at <= now
-                && reminder
-                    .delivered_at
-                    .is_none_or(|claimed| now - claimed > CLAIM_LEASE_MS)
-        })
-        .take(CLAIM_BATCH)
-        .map(|(index, reminder)| (index, reminder.id.clone(), reminder.at))
-        .collect();
-    for (index, id, at) in pending {
-        let todo_id = value.reminders[index].todo_id.clone();
-        let task: Option<(String, String, bool)> = tx
-            .query_row(
-                "SELECT title,status,archived FROM todos WHERE id=?1",
-                [&todo_id],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-            )
-            .optional()?;
-        value.reminders[index].delivered_at = Some(now);
-        changed = true;
+    let pending: Vec<usize> = value.reminders.iter().enumerate()
+        .filter(|(_, item)| item.at <= now && item.delivered_at.is_none()
+            && claims.get(&item.id).is_none_or(|(_, claimed)| now - claimed > CLAIM_LEASE_MS))
+        .take(CLAIM_BATCH).map(|(index, _)| index).collect();
+    for index in pending {
+        let item = &mut value.reminders[index];
+        let task: Option<(String, String, bool)> = tx.query_row(
+            "SELECT title,status,archived FROM todos WHERE id=?1", [&item.todo_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        ).optional()?;
         if let Some((title, status, archived)) = task {
             if status != "done" && !archived {
-                result.push(ReminderDispatch {
-                    id,
-                    title,
-                    at,
-                    claimed_at: now,
-                });
+                claims.insert(item.id.clone(), (item.at, now));
+                result.push(ReminderDispatch { id: item.id.clone(), title, at: item.at, claimed_at: now });
+                continue;
             }
         }
+        item.delivered_at = Some(now);
+        claims.remove(&item.id);
+        changed = true;
     }
-    if changed {
-        value.revision += 1;
-        write(tx, &value)?;
-    }
+    if claims != previous { write_claims(tx, &claims)?; }
+    if changed { value.revision += 1; write(tx, &value)?; }
     Ok(result)
 }
-/// 提醒发送失败：仅在本次领取未被覆盖时释放租约并延后重试。
-pub fn retry_reminder(reminder: &ReminderDispatch) -> AppResult<()> {
+
+fn finish_reminder(reminder: &ReminderDispatch, delivered: bool) -> AppResult<()> {
     let conn = db::open_existing(&super::db_cmds::db_path()?, true)?;
     let tx = rusqlite::Transaction::new_unchecked(&conn, rusqlite::TransactionBehavior::Immediate)?;
+    let mut claims = read_claims(&tx)?;
+    if claims.get(&reminder.id) != Some(&(reminder.at, reminder.claimed_at)) { return Ok(()); }
     let mut value = read(&tx)?;
-    if let Some(item) = value.reminders.iter_mut().find(|item| {
-        item.id == reminder.id
-            && item.at == reminder.at
-            && item.delivered_at == Some(reminder.claimed_at)
-    }) {
-        item.delivered_at = None;
-        item.at = now() + RETRY_DELAY_MS;
+    if let Some(item) = value.reminders.iter_mut().find(|item|
+        item.id == reminder.id && item.at == reminder.at && item.delivered_at.is_none()) {
+        if delivered { item.delivered_at = Some(now()); }
+        else { item.at = now() + RETRY_DELAY_MS; }
         value.revision += 1;
         write(&tx, &value)?;
     }
+    claims.remove(&reminder.id);
+    write_claims(&tx, &claims)?;
     tx.commit()?;
     Ok(())
+}
+
+/// 仅在系统通知成功后确认；已确认的提醒永不再领取。
+pub fn acknowledge_reminder(reminder: &ReminderDispatch) -> AppResult<()> {
+    finish_reminder(reminder, true)
+}
+/// 发送失败时释放本次租约并延后重试。
+pub fn retry_reminder(reminder: &ReminderDispatch) -> AppResult<()> {
+    finish_reminder(reminder, false)
 }
 /// 清理过期提醒：已投递且早于保留窗口的记录删除，过期未投递的标记为已处理（不再补发）。
 /// 任务仍在运行时到期提醒照常补发；只有超过宽限期（默认 7 天）的历史提醒才被丢弃。

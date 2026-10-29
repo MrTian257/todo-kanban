@@ -462,11 +462,41 @@ pub fn git_commit_info(repo: &str, short_hash: &str) -> AppResult<CommitInfo> {
 
 /// 附加提交所属分支信息（git 查询结果补全）
 pub fn attach_branches(repo: &str, commits: &mut [CommitInfo]) {
-    for c in commits.iter_mut() {
-        if let Ok(b) = git_cli::commit_branches(repo, &c.hash) {
-            c.branches = b;
+    if commits.is_empty() { return; }
+    let Ok(refs) = run_git(repo, &["for-each-ref", "--format=%(refname:short) %(objectname)", "refs/heads", "refs/remotes"]) else { return; };
+    let Some(graph) = commit_graph(repo, &["--all"]) else { return; };
+    // 极大仓库不做可选标注，避免本地遍历退化成无界工作。
+    if graph.len().saturating_mul(refs.lines().count()) > 2_000_000 {
+        log::warn!("提交分支标注已跳过：仓库规模超过预算");
+        return;
+    }
+    let mut membership: HashMap<String, Vec<String>> = commits.iter().map(|c| (c.hash.clone(), vec![])).collect();
+    for line in refs.lines() {
+        let Some((name, tip)) = line.split_once(' ') else { continue; };
+        let mut seen = HashSet::new();
+        let mut stack = vec![tip.to_string()];
+        while let Some(hash) = stack.pop() {
+            if !seen.insert(hash.clone()) { continue; }
+            if let Some(branches) = membership.get_mut(&hash) { branches.push(name.to_string()); }
+            if let Some(parents) = graph.get(&hash) { stack.extend(parents.iter().cloned()); }
         }
     }
+    for commit in commits { if let Some(branches) = membership.remove(&commit.hash) { commit.branches = branches; } }
+}
+
+/// 一次批量读取提交图；遇到截断整次放弃，不能拿不完整图断言来源。
+fn commit_graph(repo: &str, revisions: &[&str]) -> Option<HashMap<String, Vec<String>>> {
+    let mut args = vec!["rev-list", "--parents", "--topo-order", "--max-count=100001"];
+    args.extend_from_slice(revisions);
+    let out = git_cli::run_git_with_timeout(repo, &args, std::time::Duration::from_secs(3)).ok()?;
+    if out.lines().count() > 100_000 {
+        log::warn!("提交图标注已跳过：历史超过 100000 条");
+        return None;
+    }
+    Some(out.lines().filter_map(|line| {
+        let mut parts = line.split_whitespace();
+        Some((parts.next()?.to_string(), parts.map(str::to_string).collect()))
+    }).collect())
 }
 
 /// 当前检出分支名（未检出/失败返回 None）
@@ -501,13 +531,14 @@ pub fn annotate_commit_origins(repo: &str, ref_branch: &str, commits: &mut [Comm
     if commits.is_empty() {
         return;
     }
-    let refs = run_git(repo, &["for-each-ref", "--format=%(refname):%(objectname)"]);
+    let refs = run_git(repo, &["for-each-ref", "--format=%(refname):%(objectname)"])
+        .and_then(|refs| run_git(repo, &["rev-parse", "--verify", ref_branch]).map(|tip| format!("{refs}\n{tip}")));
     let key = (repo.to_string(), ref_branch.to_string());
     let cached = refs.as_ref().ok().and_then(|refs| {
         ORIGIN_CACHE.lock().ok().and_then(|cache| {
             cache
                 .get(&key)
-                .filter(|(snapshot, at, _)| snapshot == refs && at.elapsed().as_secs() < 60)
+                .filter(|(snapshot, at, _)| snapshot == refs && at.elapsed().as_secs() < 1800)
                 .map(|(_, _, analysis)| analysis.clone())
         })
     });
@@ -553,140 +584,77 @@ pub fn annotate_commit_origins(repo: &str, ref_branch: &str, commits: &mut [Comm
 }
 
 fn build_origin_analysis(repo: &str, ref_branch: &str) -> Option<OriginAnalysis> {
-    // 参考分支不存在 → 无法判定，保持空串
-    if run_git(repo, &["rev-parse", "--verify", "--quiet", ref_branch]).is_err() {
-        return None;
+    let tip = run_git(repo, &["rev-parse", "--verify", ref_branch]).ok()?.trim().to_string();
+    let graph = commit_graph(repo, &[ref_branch])?;
+    if graph.is_empty() { return None; }
+    let reach: HashSet<String> = graph.keys().cloned().collect();
+    let mut chain = Vec::new();
+    let mut cursor = Some(tip);
+    while let Some(hash) = cursor {
+        cursor = graph.get(&hash).and_then(|parents| parents.first()).cloned();
+        chain.push(hash);
     }
-    let fp = rev_set(repo, &["rev-list", "--first-parent", ref_branch]);
-    let reach = rev_set(repo, &["rev-list", ref_branch]);
-    if reach.is_empty() {
-        return None;
-    }
-
-    // 主线上的合并提交 → 其引入的侧提交集合（合并提交自身在主线，排除）
-    let mut intro_by_commit: HashMap<String, String> = HashMap::new();
-    if let Ok(merges) = run_git(
-        repo,
-        &["rev-list", "--first-parent", "--merges", ref_branch],
-    ) {
-        for m in merges.lines().map(|l| l.trim()).filter(|l| !l.is_empty()) {
-            let Ok(fp1) = run_git(repo, &["rev-parse", &format!("{m}^")]) else {
-                continue;
-            };
-            let first_parent = fp1.lines().next().unwrap_or("").trim().to_string();
-            if first_parent.is_empty() {
-                continue;
-            }
-            let Ok(side) = run_git(repo, &["rev-list", m, "--not", &first_parent]) else {
-                continue;
-            };
-            for c in side
-                .lines()
-                .map(|l| l.trim())
-                .filter(|l| !l.is_empty() && *l != m)
-            {
-                intro_by_commit
-                    .entry(c.to_string())
-                    .or_insert_with(|| short_hash(m));
-            }
+    let fp: HashSet<String> = chain.iter().cloned().collect();
+    let mut intro_by_commit = HashMap::new();
+    let mut seen = HashSet::new();
+    // 从最早主线提交开始，每个节点仅访问一次，记录第一次引入它的合并。
+    for main in chain.iter().rev() {
+        let mut stack = vec![main.clone()];
+        while let Some(hash) = stack.pop() {
+            if !seen.insert(hash.clone()) { continue; }
+            if !fp.contains(&hash) { intro_by_commit.insert(hash.clone(), short_hash(main)); }
+            if let Some(parents) = graph.get(&hash) { stack.extend(parents.iter().cloned()); }
         }
     }
-
-    let (cherry_set, cherry_source) = detect_cherry_picks(repo, ref_branch);
-
-    Some(OriginAnalysis {
-        fp,
-        reach,
-        intro_by_commit,
-        cherry_set,
-        cherry_source,
-    })
+    let (cherry_set, cherry_source) = detect_cherry_picks(repo, ref_branch)?;
+    Some(OriginAnalysis { fp, reach, intro_by_commit, cherry_set, cherry_source })
 }
 
 /// 剪切特征检测（相对参考分支 B）：返回（剪切提交集合, 提交 → 来源说明）
 /// ① 消息尾注：`git log B --grep="cherry picked from commit"`（git cherry-pick -x 写入；源并入 B 也能识别）
 /// ② 跨分支补丁等价：对每个其它分支 X 跑 `git cherry -v X B`，`- ` 前缀行 = B 侧提交的补丁在 X 已存在
 ///    （常规剪切：源未并入 B 时由补丁等价识别，来源记为分支名）
-fn detect_cherry_picks(repo: &str, ref_branch: &str) -> (HashSet<String>, HashMap<String, String>) {
-    let mut set: HashSet<String> = HashSet::new();
-    let mut source: HashMap<String, String> = HashMap::new();
-
-    // ① 消息尾注
-    if let Ok(trailer) = run_git(
-        repo,
-        &[
-            "log",
-            ref_branch,
-            "--grep=cherry picked from commit",
-            "--format=%H",
-        ],
-    ) {
-        for h in trailer.lines().map(|l| l.trim()).filter(|l| !l.is_empty()) {
-            set.insert(h.to_string());
-            if let Ok(body) = run_git(repo, &["show", "-s", "--format=%B", h]) {
-                for line in body.lines() {
-                    let line = line.trim();
-                    // git cherry-pick -x 实际写入的是 `(cherry picked from commit <sha>)`（带括号）；
-                    // 同时兼容无括号的手写形态。
-                    let trailer = line
-                        .strip_prefix("cherry picked from commit ")
-                        .or_else(|| line.strip_prefix("(cherry picked from commit "))
-                        .map(|rest| rest.trim_end_matches(')'));
-                    if let Some(rest) = trailer {
-                        if let Some(sha) = rest.split_whitespace().next() {
-                            source.insert(h.to_string(), short_hash(sha));
-                            break;
-                        }
-                    }
-                }
+fn detect_cherry_picks(repo: &str, ref_branch: &str) -> Option<(HashSet<String>, HashMap<String, String>)> {
+    let started = std::time::Instant::now();
+    let budget = std::time::Duration::from_secs(5);
+    let bounded = |args: &[&str]| {
+        let remaining = budget.checked_sub(started.elapsed())?;
+        git_cli::run_git_with_timeout(repo, args, remaining.min(std::time::Duration::from_secs(1))).ok()
+    };
+    let mut set = HashSet::new();
+    let mut source = HashMap::new();
+    // 同一条 log 同时取 hash 与正文，消除逐提交 show 子进程。
+    let trailer = bounded(&["log", ref_branch, "--grep=cherry picked from commit", "--format=%H%x1f%B%x1e"])?;
+    for record in trailer.split('\u{1e}') {
+        let Some((hash, body)) = record.trim().split_once('\u{1f}') else { continue; };
+        for line in body.lines().map(str::trim) {
+            let value = line.strip_prefix("cherry picked from commit ")
+                .or_else(|| line.strip_prefix("(cherry picked from commit "));
+            if let Some(sha) = value.and_then(|value| value.trim_end_matches(')').split_whitespace().next()) {
+                set.insert(hash.to_string());
+                source.insert(hash.to_string(), short_hash(sha));
+                break;
             }
         }
     }
-
-    // ② 跨分支补丁等价（本地 + 远端分支）
-    if let Ok(branches) = run_git(
-        repo,
-        &[
-            "for-each-ref",
-            "--format=%(refname:short)",
-            "refs/heads",
-            "refs/remotes",
-        ],
-    ) {
-        for x in branches
-            .lines()
-            .map(|l| l.trim())
-            .filter(|l| !l.is_empty() && *l != ref_branch)
-        {
-            // git cherry -v <upstream=X> <head=B>：列出 B 侧独有的非合并提交，`- `= 补丁已在 X 中存在
-            let Ok(out) = run_git(repo, &["cherry", "-v", x, ref_branch]) else {
-                continue;
-            };
-            for line in out.lines() {
-                if let Some(rest) = line.strip_prefix("- ") {
-                    if let Some(hash) = rest.split_whitespace().next() {
-                        if set.insert(hash.to_string()) {
-                            source.insert(hash.to_string(), format!("补丁等价于 {x}"));
-                        }
-                    }
-                }
+    let branches = bounded(&["for-each-ref", "--format=%(refname:short)", "refs/heads", "refs/remotes"])?;
+    let branches: Vec<_> = branches.lines().filter(|name| !name.is_empty() && *name != ref_branch).collect();
+    if branches.len() > 16 {
+        log::warn!("提交来源标注已跳过：补丁比较分支超过 16 条");
+        return None;
+    }
+    for branch in branches {
+        let Some(out) = bounded(&["cherry", "-v", branch, ref_branch]) else {
+            log::warn!("提交来源标注已跳过：补丁比较超过预算或失败");
+            return None;
+        };
+        for line in out.lines() {
+            if let Some(hash) = line.strip_prefix("- ").and_then(|rest| rest.split_whitespace().next()) {
+                if set.insert(hash.to_string()) { source.insert(hash.to_string(), format!("补丁等价于 {branch}")); }
             }
         }
     }
-
-    (set, source)
-}
-
-/// 执行 rev-list 类命令并收集非空行哈希集合
-fn rev_set(repo: &str, args: &[&str]) -> HashSet<String> {
-    run_git(repo, args)
-        .map(|out| {
-            out.lines()
-                .map(|l| l.trim().to_string())
-                .filter(|l| !l.is_empty())
-                .collect()
-        })
-        .unwrap_or_default()
+    Some((set, source))
 }
 
 /// 短 hash（7 位，与前端 shortHash 一致）

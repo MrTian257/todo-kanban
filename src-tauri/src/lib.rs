@@ -5,6 +5,7 @@
 
 pub mod commands;
 mod desktop;
+mod http_security;
 /// 局域网共享：内嵌 HTTP 服务（访客面板 + REST + SSE 实时推送）
 mod lan_server;
 /// MCP HTTP 传输：内嵌 /mcp 端点 + 多 AI Token + 审计留痕（与 stdio 共用 core::mcp）
@@ -138,7 +139,9 @@ pub fn run() {
         .setup(move |_app| {
             #[cfg(target_os = "macos")]
             {
-                menu::install(_app)?;
+                if let Err(error) = menu::install(_app) {
+                    log::warn!("应用菜单不可用：{error}");
+                }
                 // Dock/系统退出也走前端保存保护（tao 不产生 ExitRequested）
                 desktop::install_quit_protection(&_app.handle().clone());
             }

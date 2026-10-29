@@ -580,19 +580,6 @@ impl AttachmentSnapshot {
             if !path.is_file() || path.metadata()?.len() != file.5 as u64 {
                 return Err(AppError::invalid("备份附件缺失或大小不符"));
             }
-            // 附件相对路径的首段必须是快照中仍存在的宿主（待办或资料任一），
-            // 否则恢复出来的索引会指向不存在的宿主目录，GC 一跑就把文件判成孤儿。
-            if !path
-                .strip_prefix(root)
-                .ok()
-                .and_then(|relative| relative.to_str())
-                .and_then(|relative| relative.split_once('/'))
-                .is_some_and(|(owner_id, _)| {
-                    todos.contains(owner_id) || resources.contains(owner_id)
-                })
-            {
-                return Err(AppError::invalid("备份附件目录与宿主快照不一致"));
-            }
         }
         let mut stmt = conn.prepare(
             "SELECT owner_kind,owner_id,attachment_id,seq,created_at FROM note_attachments",
@@ -601,6 +588,10 @@ impl AttachmentSnapshot {
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
             .collect::<Result<Vec<AttachmentLinkRow>, _>>()?;
         let ids: std::collections::HashSet<_> = files.iter().map(|file| file.0.as_str()).collect();
+        let referenced: std::collections::HashSet<_> = links.iter().map(|link| link.2.as_str()).collect();
+        if files.iter().any(|file| !referenced.contains(file.0.as_str())) {
+            return Err(AppError::invalid("备份附件没有有效备注引用"));
+        }
         // 关系行两端都必须还在快照里：附件行在、宿主也在（且 kind 对得上），否则恢复出来的是悬空引用
         if links
             .iter()

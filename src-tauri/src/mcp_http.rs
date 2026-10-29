@@ -179,7 +179,7 @@ pub fn start(settings: McpHttpSettings) -> Result<(), String> {
         return Err("未找到数据文件，请先在应用里完成初始化".to_string());
     }
     let host = display_host(&settings);
-    let listener = std::net::TcpListener::bind((bind_host(&settings), settings.port))
+    let listener = crate::http_security::bind((bind_host(&settings), settings.port))
         .map_err(|error| format!("端口 {} 无法绑定（可能被占用）：{error}", settings.port))?;
     listener
         .set_nonblocking(true)
@@ -259,36 +259,9 @@ pub fn auto_start() {
 
 // ── 请求处理 ────────────────────────────────────────────
 
-/// DNS rebinding / 跨站防护：规范 MUST 校验 Origin。
-/// 规则：没有 Origin 头就放行（原生客户端、CLI、服务端到服务端都不发这个头；
-/// 浏览器顶层导航也不发，所以把 URL 贴进浏览器看说明页仍然可用）；
-/// 有 Origin 就必须与 Host 指向同一台主机，否则拒绝——这正好挡住
-/// 「远程网页借 DNS 重绑定访问本机 MCP 端点」这条攻击路径。
+/// Host 必须属于本机，浏览器 Origin 必须与 Host 同源。
 fn origin_allowed(origin: Option<&str>, host: Option<&str>) -> bool {
-    let Some(origin) = origin.map(str::trim).filter(|value| !value.is_empty()) else {
-        return true;
-    };
-    let Some(host) = host.map(str::trim).filter(|value| !value.is_empty()) else {
-        return false; // 浏览器声称来自某站点，却没给 Host：不予信任
-    };
-    let Some(rest) = origin.split_once("://").map(|(_, rest)| rest) else {
-        return false; // 不是绝对 URI
-    };
-    let origin_authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    let origin_name = origin_authority.rsplit_once(':').map(|(name, _)| name).unwrap_or(origin_authority);
-    let host_name = host
-        .strip_prefix('[')
-        .map(|value| value.split_once(']').map(|(addr, _)| addr).unwrap_or(value))
-        .unwrap_or_else(|| host.rsplit_once(':').map(|(name, _)| name).unwrap_or(host));
-    // localhost 与 127.0.0.1（以及 ::1）是同一台机器的不同写法，必须互相认账
-    // 局部函数而不是闭包：闭包在这里需要两个不同的省略生命周期，写成函数最省事也最清楚
-    fn normalize(name: &str) -> &str {
-        match name {
-            "localhost" | "127.0.0.1" | "::1" | "[::1]" => "loopback",
-            other => other,
-        }
-    }
-    normalize(origin_name) == normalize(host_name) || origin_authority.eq_ignore_ascii_case(host)
+    crate::http_security::allowed(origin, host)
 }
 
 /// Accept 协商：客户端按规范应同时接受 json 与 event-stream。
@@ -396,7 +369,48 @@ fn build_router(ctx: Arc<Ctx>) -> Router {
         .route("/health", get(handle_health))
         .fallback(handle_root)
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
+        .layer(axum::middleware::from_fn_with_state(ctx.clone(), guard_request))
         .with_state(ctx)
+}
+
+#[derive(Clone)]
+struct Audited;
+
+async fn guard_request(
+    State(ctx): State<Arc<Ctx>>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let peer = request.extensions().get::<ConnectInfo<SocketAddr>>()
+        .map(|peer| peer.0.to_string()).unwrap_or_default();
+    let metadata = json!({"method": format!("HTTP {}", request.method())});
+    if !crate::http_security::headers_allowed(request.headers()) {
+        mcp::audit_denied(&ctx.db_path, TRANSPORT, &peer, &metadata, "Host 或 Origin 校验失败");
+        return json_response(StatusCode::FORBIDDEN, &mcp::error(Value::Null, -32000, "Host 或 Origin 校验失败"), None);
+    }
+    if request.uri().path() != "/mcp" { return next.run(request).await; }
+    let provided = provided_token(request.headers());
+    let path = ctx.db_path.clone();
+    let auth = tokio::task::spawn_blocking(move || mcp::authorize(&path, provided.as_deref())).await;
+    let auth = match auth {
+        Ok(Ok(auth)) => auth,
+        _ => {
+            mcp::audit_denied(&ctx.db_path, TRANSPORT, &peer, &metadata, "授权失败");
+            return json_response(StatusCode::UNAUTHORIZED, &mcp::error(Value::Null, -32001, "授权失败"), None);
+        }
+    };
+    let started = Instant::now();
+    let response = next.run(request).await;
+    if response.extensions().get::<Audited>().is_none() {
+        let context = McpContext { db_path: ctx.db_path.clone(), transport: TRANSPORT,
+            actor: auth.actor, token_id: auth.token_id, readonly: auth.readonly, peer };
+        let mut entry = mcp::audit_from(&context, &metadata, None, started.elapsed().as_millis() as i64);
+        entry.ok = response.status().is_success() && response.status() != StatusCode::OK;
+        entry.status = if entry.ok { "OK" } else { "CLIENT_ERROR" }.into();
+        entry.error = if entry.ok { String::new() } else { format!("HTTP {}：请求未进入协议调度", response.status()) };
+        if let Err(error) = mcp::audit_append(&ctx.db_path, &entry) { log::warn!("MCP 审计写入失败：{error}"); }
+    }
+    response
 }
 
 /// POST /mcp：一条 JSON-RPC（与 stdio 一致不支持批量数组）
@@ -495,7 +509,11 @@ async fn handle_post(
     })
     .await;
     match outcome {
-        Ok(reply) => reply.into_response(),
+        Ok(mut reply) => {
+            // dispatch 自行记录协议审计；未知会话属于前置拒绝，由中间件补记。
+            if reply.status() != StatusCode::NOT_FOUND { reply.extensions_mut().insert(Audited); }
+            reply
+        }
         Err(error) => {
             set_error(format!("MCP HTTP 工作线程异常：{error}"));
             json_response(
@@ -531,41 +549,6 @@ fn dispatch(
     let HttpRequest { provided, peer, session: header_session, declared_version: declared, body: request, started } = input;
     let method = request["method"].as_str().unwrap_or("");
     let is_initialize = method == "initialize";
-    // 会话解析：initialize 总是新建（两个客户端各拿一个 id，互不干扰）；
-    // 带 id 的请求必须是已知会话（未知 → 404，规范里叫 Invalid session ID）；
-    // 不带 id 的非 initialize 请求走一次性会话，会被协议层挡在 -32002。
-    let (session_key, issued) = if is_initialize {
-        let id = format!("s-{}", uuid::Uuid::new_v4().simple());
-        prune_sessions(sessions);
-        if let Ok(mut guard) = sessions.lock() {
-            guard.insert(
-                id.clone(),
-                SessionEntry { session: mcp::Session::default(), last_seen: Instant::now() },
-            );
-        }
-        (Some(id.clone()), Some(id))
-    } else {
-        (header_session.map(str::to_string), None)
-    };
-    // 带了会话头但表里没有：可能是服务重启过或客户端拼错，按规范回 404 让它重新 initialize
-    if !is_initialize {
-        let known = match &session_key {
-            Some(id) => sessions.lock().map(|guard| guard.contains_key(id)).unwrap_or(true),
-            None => true,
-        };
-        if !known {
-            return json_response(
-                StatusCode::NOT_FOUND,
-                &mcp::error(
-                    request.get("id").cloned().unwrap_or(Value::Null),
-                    -32000,
-                    "未知会话：请重新 initialize",
-                ),
-                None,
-            );
-        }
-    }
-
     // 鉴权（读 app_meta：启用状态 + 全局只读 + 管理 Key / 多 AI Token）
     let authenticated = mcp::authorize(db_path, *provided);
     let context = match &authenticated {
@@ -601,6 +584,41 @@ fn dispatch(
             log::warn!("MCP 审计写入失败：{error}");
         }
         return json_response(StatusCode::UNAUTHORIZED, &response, None);
+    }
+
+    // 会话解析：initialize 总是新建（两个客户端各拿一个 id，互不干扰）；
+    // 带 id 的请求必须是已知会话（未知 → 404，规范里叫 Invalid session ID）；
+    // 不带 id 的非 initialize 请求走一次性会话，会被协议层挡在 -32002。
+    let (session_key, issued) = if is_initialize {
+        let id = format!("s-{}", uuid::Uuid::new_v4().simple());
+        prune_sessions(sessions);
+        if let Ok(mut guard) = sessions.lock() {
+            guard.insert(
+                id.clone(),
+                SessionEntry { session: mcp::Session::default(), last_seen: Instant::now() },
+            );
+        }
+        (Some(id.clone()), Some(id))
+    } else {
+        (header_session.map(str::to_string), None)
+    };
+    // 带了会话头但表里没有：可能是服务重启过或客户端拼错，按规范回 404 让它重新 initialize
+    if !is_initialize {
+        let known = match &session_key {
+            Some(id) => sessions.lock().map(|guard| guard.contains_key(id)).unwrap_or(true),
+            None => true,
+        };
+        if !known {
+            return json_response(
+                StatusCode::NOT_FOUND,
+                &mcp::error(
+                    request.get("id").cloned().unwrap_or(Value::Null),
+                    -32000,
+                    "未知会话：请重新 initialize",
+                ),
+                None,
+            );
+        }
     }
 
     // 返回（响应, 协商版本）：协商版本要回显到 MCP-Protocol-Version 头

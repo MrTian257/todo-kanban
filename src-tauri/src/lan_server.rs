@@ -99,12 +99,11 @@ fn set_error(message: String) {
 }
 
 /// 访问令牌校验：查询串 ?t= / X-Lan-Token / Authorization: Bearer 三者任一匹配。
-/// 令牌为空视为「局域网内免验证」（设置页会给出风险提示）。
+/// 空令牌拒绝访问，Host 必须属于本机，浏览器请求必须同源。
 fn authorized(ctx: &ServerCtx, query: &TokenQuery, headers: &HeaderMap) -> bool {
+    if !crate::http_security::headers_allowed(headers) { return false; }
     let expected = ctx.settings.token.trim();
-    if expected.is_empty() {
-        return true;
-    }
+    if expected.is_empty() { return false; }
     if query.t.as_deref().map(str::trim) == Some(expected) {
         return true;
     }
@@ -207,12 +206,11 @@ async fn api_state(
     // 同一个阻塞任务里取共享快照与自定义字段定义（访客面板据此渲染字段输入）
     let result = tokio::task::spawn_blocking(move || {
         let state = db_cmds::lan_scoped_state(&settings)?;
-        let field_defs = match todo_kanban_core::svc::workflow::load() {
-            Ok(workflow) => {
-                serde_json::to_value(&workflow.field_defs).unwrap_or_else(|_| json!([]))
-            }
-            Err(_) => json!([]),
-        };
+        let workflow = todo_kanban_core::svc::workflow::load()?;
+        let scope = lan::scope_ids(&settings);
+        let field_defs = serde_json::to_value(workflow.field_defs.into_iter()
+            .filter(|field| field.project_id.as_ref().is_none_or(|id| scope.contains(id)))
+            .collect::<Vec<_>>())?;
         Ok::<_, todo_kanban_core::error::AppError>((state, field_defs))
     })
     .await;
@@ -340,12 +338,13 @@ pub fn start(app: tauri::AppHandle, settings: LanShareSettings) -> Result<(), St
     if !settings.enabled {
         return Ok(());
     }
+    if settings.token.trim().is_empty() { return Err("启用局域网共享前请设置访问令牌".into()); }
     let scope = lan::scope_ids(&settings);
     if scope.is_empty() {
         return Err("请先勾选至少一个要共享的项目".to_string());
     }
     let port = settings.port;
-    let listener = std::net::TcpListener::bind(("0.0.0.0", port))
+    let listener = crate::http_security::bind(("0.0.0.0", port))
         .map_err(|error| format!("端口 {port} 无法绑定（可能被占用）：{error}"))?;
     listener
         .set_nonblocking(true)

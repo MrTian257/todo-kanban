@@ -627,7 +627,7 @@ export function SettingsPage() {
                     value={lanToken}
                     onChange={(event) => setLanToken(event.target.value)}
                     className="font-mono"
-                    placeholder="留空 = 局域网内免验证"
+                    placeholder="启用共享时必须设置访问令牌"
                   />
                   <Button type="button" variant="outline" size="icon" aria-label="显示或隐藏访问令牌" onClick={() => setLanShowToken((value) => !value)}>
                     {lanShowToken ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}

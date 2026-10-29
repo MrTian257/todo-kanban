@@ -200,18 +200,19 @@ pub fn install(app: &tauri::App) {
 pub fn start(app: tauri::AppHandle) {
     std::thread::spawn(move || {
         // 启动时先做一次过期提醒清理（丢弃超过宽限期的历史提醒），再进入周期任务。
-        let mut sweep_due = true;
+        let mut last_sweep: Option<std::time::Instant> = None;
         loop {
             std::thread::sleep(std::time::Duration::from_secs(30));
             let mut errors = Vec::new();
             if let Err(error) = todo_kanban_core::svc::backups::automatic() {
                 errors.push(format!("自动备份失败：{error}"));
             }
-            if sweep_due {
-                sweep_due = false;
+            if last_sweep.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(3600)) {
                 match todo_kanban_core::svc::workflow::sweep_reminders() {
-                    Ok(removed) if removed > 0 => log::info!("已清理 {removed} 条过期提醒"),
-                    Ok(_) => {}
+                    Ok(removed) => {
+                        last_sweep = Some(std::time::Instant::now());
+                        if removed > 0 { log::info!("已清理 {removed} 条过期提醒"); }
+                    }
                     Err(error) => errors.push(format!("提醒清理失败：{error}")),
                 }
             }
@@ -234,6 +235,8 @@ pub fn start(app: tauri::AppHandle) {
                                         errors.push(format!("提醒重试登记失败：{retry}"));
                                     }
                                     errors.push(format!("系统提醒失败：{error}"));
+                                } else if let Err(error) = todo_kanban_core::svc::workflow::acknowledge_reminder(&reminder) {
+                                    errors.push(format!("提醒投递确认失败：{error}"));
                                 }
                             }
                         }

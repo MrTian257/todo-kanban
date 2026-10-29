@@ -819,6 +819,9 @@ pub fn lan_read_from_db(path: &Path) -> AppResult<LanShareSettings> {
 
 /// 保存局域网共享设置（写 app_meta；仅配置，不触发业务快照写链）
 pub fn lan_set_settings(settings: LanShareSettings) -> AppResult<()> {
+    if settings.enabled && settings.token.trim().is_empty() {
+        return Err(AppError::invalid("启用局域网共享前请设置访问令牌"));
+    }
     let path = db_path()?;
     let conn = db::open(&path)?;
     db::init(&conn)?;

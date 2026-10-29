@@ -91,12 +91,22 @@ pub fn merge_todos(
     for todo in &payload.todos {
         let mut item = todo.clone();
         if let Some(prev) = existing.get(item.id.as_str()) {
+            if !scope.contains(prev.project_id.as_str()) {
+                return Err(AppError::invalid("不能覆盖未共享项目的待办"));
+            }
             item.repo_path = prev.repo_path.clone();
             item.commits = prev.commits.clone();
             item.seq = prev.seq;
             item.created_at = prev.created_at;
             item.created_by = prev.created_by.clone();
             item.ai_coordinated = prev.ai_coordinated;
+        } else {
+            item.repo_path.clear();
+            item.commits.clear();
+            item.seq = 0;
+            item.created_at = super::workflow::now();
+            item.created_by = "human".into();
+            item.ai_coordinated = false;
         }
         merged.todos.push(item);
     }

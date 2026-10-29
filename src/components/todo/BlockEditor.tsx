@@ -51,6 +51,9 @@ import { BlockSlashMenu } from "./BlockSlashMenu";
 import { canConvert, convertSource, type ConversionTarget } from "@/lib/blockOperations";
 import { compressImage, IMAGE_BATCH_MAX_BYTES, IMAGE_BATCH_MAX_COUNT, IMAGE_MAX_BYTES, IMAGE_TYPES } from "./markdownImages";
 
+// Markdown 段落没有富文本缩进属性：只允许列表缩进，行内 Tab 另按字面保存。
+const canIndentListItem = (node: ElementNode) => node.getType() === "listitem";
+
 interface Props {
   /** 整段备注（引用形态，含 attachment://）。 */
   value: string;
@@ -135,12 +138,16 @@ function SyncPlugin(props: SyncProps): null {
       // **快路**：没有任何脏键、顶层块数量也没变 → 逐字节返回原文。
       // 这是「打开→保存不产生 diff」最强的一条保证（ADR-0001 §7 / 票 02 R2-5），
       // 也让「纯打开、聚焦、移动光标」自动不脏。
-      if (dirty.size === 0 && children.length === doc.blocks.length) {
+      const emptyPlaceholder = doc.blocks.length === 0 && children.length === 1 && children[0].getTextContent() === "";
+      if (dirty.size === 0 && (children.length === doc.blocks.length || emptyPlaceholder)) {
         return attachmentDisplayToRef(doc.source);
       }
       // 顺序与 $getRoot().getChildren() 一一对应：状态序列化不会重排顶层节点
       const serializedChildren = stateJson.root.children;
       const parts: string[] = [];
+      const originalIndices = new Map(doc.blocks.map((block, index) => [block.id, index]));
+      const newline = doc.source.includes("\r\n") ? "\r\n" : "\n";
+      let previousIndex = -1;
       children.forEach((child, index) => {
         const mapped = keyToBlock.current.get(child.getKey());
         const subtree = new Set<NodeKey>();
@@ -148,10 +155,17 @@ function SyncPlugin(props: SyncProps): null {
         const isDirty = [...subtree].some(key => dirty.has(key));
         // 未碰 → 沿用原始字节（标记符、缩进、转义、尾随空格一律不动）；
         // 碰过 → 用序列化形态重新出 Markdown，允许规范化（§4 明写）。
-        if (mapped && !isDirty) { parts.push(mapped.source); return; }
-        parts.push(blockNodeToMarkdown(serializedChildren[index]));
+        const source = mapped && !isDirty ? mapped.source
+          : blockNodeToMarkdown(serializedChildren[index]).replace(/\r?\n/g, newline);
+        if (!source) return;
+        const originalIndex = mapped ? originalIndices.get(mapped.id) ?? -1 : -1;
+        const gap = originalIndex >= 0 && originalIndex === previousIndex + 1
+          ? doc.gaps[originalIndex] ?? ""
+          : parts.length === 0 ? doc.gaps[0] ?? "" : newline + newline;
+        parts.push(gap + source);
+        previousIndex = originalIndex;
       });
-      const body = parts.filter(part => part.length > 0).join("\n\n");
+      const body = parts.join("");
       const display = body.length === 0 ? "" : body + doc.tail;
       return attachmentDisplayToRef(display);
     });
@@ -342,7 +356,9 @@ function SyncPlugin(props: SyncProps): null {
       }
       // 仍复用源文转换规则，只解析目标块，不重建其余块或丢弃空段落。
       const replacements = convertSource({ kind, source }, action).flatMap(markdown =>
-        markdownToEditorJson(markdown).children ?? []);
+        action.kind === "paragraph"
+          ? [{ type: "paragraph", version: 1, children: [{ type: "text", version: 1, text: markdown, format: 0, detail: 0, mode: "normal", style: "" }] }]
+          : markdownToEditorJson(markdown).children ?? []);
       let previous = node;
       for (const replacement of replacements) {
         const next = $parseSerializedNode(replacement as Parameters<typeof $parseSerializedNode>[0]);
@@ -508,7 +524,7 @@ export function BlockEditor(props: Props) {
           <LinkPlugin />
           <HorizontalRulePlugin />
           <MarkdownShortcutPlugin transformers={NOTION_MARKDOWN_TRANSFORMERS} />
-          <TabIndentationPlugin />
+          <TabIndentationPlugin $canIndent={canIndentListItem} />
           <BlockToolbar disabled={props.disabled} busy={uploading} onInsertImage={props.owner ? () => filePicker.current?.click() : undefined} />
           {anchor && <BlockHandle actions={actions} disabled={!!props.disabled || uploading} anchorElem={anchor} />}
           {/* slash 菜单与块菜单走同一条路径（定位节点 → 源文转换 → 替换目标块）：

@@ -31,7 +31,7 @@ const VERBATIM_KINDS = new Set(["verbatim", "definition", "footnoteDefinition", 
 
 /** 一个块 → Lexical 顶层节点数组（可能多个：列表会展开成 list + listitem 树）。 */
 export function blockToLexicalNodes(block: Block): LexicalNode[] {
-  if (VERBATIM_KINDS.has(block.kind) || !block.node || !canEditNode(block.node)) {
+  if (VERBATIM_KINDS.has(block.kind) || !block.node || !canEditNode(block.node, block.source)) {
     return [{ type: "sourceblock", version: 1, source: block.source, [BLOCK_SOURCE_KEY]: block.source }];
   }
   const node = block.node;
@@ -56,26 +56,35 @@ export function blockToLexicalNodes(block: Block): LexicalNode[] {
   }
 }
 
-interface MdNode { type: string; position?: Content["position"]; children?: Content[]; value?: string; identifier?: string; depth?: number; lang?: string | null; ordered?: boolean | null; start?: number | null; checked?: boolean | null; spread?: boolean | null; align?: (string | null)[] | null; url?: string; title?: string | null; alt?: string | null; }
+interface MdNode { type: string; position?: Content["position"]; children?: Content[]; value?: string; identifier?: string; depth?: number; lang?: string | null; meta?: string | null; ordered?: boolean | null; start?: number | null; checked?: boolean | null; spread?: boolean | null; align?: (string | null)[] | null; url?: string; title?: string | null; alt?: string | null; }
 type MdList = Omit<MdNode, "children"> & { children: MdNode[] };
 // mdast 的 Table / TableRow / TableCell 一律用 children 存下级（**没有 rows 字段**；
 // GFM 语法文档里的 "row list" 是说法不是属性名）。读错字段会让整张表静默消失。
 type MdTable = MdNode & { align?: (string | null)[] | null };
 
 /** 无法完整往返的语法整块保留为可编辑源文，不能用空节点或纯文本替代。 */
-function canEditNode(node: MdNode): boolean {
+function canEditNode(node: MdNode, source = "", sourceStart = node.position?.start.offset): boolean {
   // footnoteReference 有明确的降级分支（inlineToLexical 里转成字面 [id]），不属于「无法往返」；
   // 把它挡在这里会让含脚注引用的整段退化成源文块，`[^note]` 原样留下，脚注降级永远走不到
   // （回归断言见 scripts/test-block-document.mjs 的「明写降级组」）。
   if (["html", "inlineMath", "math", "definition", "footnoteDefinition", "linkReference", "imageReference"].includes(node.type)) return false;
   if (node.type === "blockquote" && (node.children ?? []).some(child => kindOfChild(child.type) === "unsupported")) return false;
+  if (node.type === "code" && node.meta) return false;
+  if (node.type === "list") {
+    const items = (node.children ?? []) as MdNode[];
+    // Lexical 不保存松散间距，也不能在同一列表混用普通项和任务项。
+    if (node.spread || items.some(item => item.spread)) return false;
+    const tasks = items.filter(item => typeof item.checked === "boolean" ||
+      /^ {0,3}(?:[-*+]|\d+[.)])[ \t]+\[([ xX])\][ \t]*(?:\r?\n[ \t]*)*$/.test(nodeSource(item, source, sourceStart))).length;
+    if (tasks > 0 && tasks < items.length) return false;
+  }
   if (node.type === "listItem") {
     const children = node.children ?? [];
     // 当前列表序列化器会把多个段落拼成一段，也无法保留其中的代码/引用块。
     if (children.filter(child => child.type === "paragraph").length > 1 ||
       children.some(child => child.type !== "paragraph" && child.type !== "list")) return false;
   }
-  return (node.children ?? []).every(child => canEditNode(child as MdNode));
+  return (node.children ?? []).every(child => canEditNode(child as MdNode, source, sourceStart));
 }
 
 function blockChildrenToLexical(children: Content[]): LexicalNode[] {
@@ -290,7 +299,7 @@ function blockLines(children: LexicalNode[]): string[] {
 function listToMarkdown(node: LexicalNode, indent: number): string {
   const pad = " ".repeat(indent);
   const type = String(node.listType ?? "bullet");
-  const start = typeof node.start === "number" && node.start > 0 ? node.start : 1;
+  const start = typeof node.start === "number" && node.start >= 0 ? node.start : 1;
   const items = (node.children ?? []).map((item, index) => {
     const marker = type === "number" ? `${start + index}. ` : "- ";
     const checkbox = type === "check" ? `[${item.checked ? "x" : " "}] ` : "";
@@ -377,6 +386,7 @@ function inlineToMarkdown(nodes: LexicalNode[]): string {
     switch (node.type) {
       case "text": out += wrapFormat(String(node.text ?? ""), Number(node.format ?? 0)); break;
       case "linebreak": out += "  \n"; break;          // 两尾随空格硬换行（§6：序列化不产反斜杠）
+      case "tab": out += "&#9;"; break;
       case "lineboundary": out += "\n"; break;
       case "link": {
         const label = inlineToMarkdown(node.children ?? []);

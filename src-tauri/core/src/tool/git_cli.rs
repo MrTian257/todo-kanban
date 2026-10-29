@@ -28,6 +28,11 @@ pub fn git_version() -> Option<String> {
 
 /// 执行 git 命令（路径已存在的仓库；错误转中文 Git 错误）
 pub fn run_git(repo: &str, args: &[&str]) -> AppResult<String> {
+    run_git_with_timeout(repo, args, GIT_TIMEOUT)
+}
+
+/// 可选来源标注使用较短预算，不拖住主查询。
+pub fn run_git_with_timeout(repo: &str, args: &[&str], timeout: Duration) -> AppResult<String> {
     let mut cmd = quiet_command("git");
     cmd.arg("-C")
         .arg(repo)
@@ -79,7 +84,7 @@ pub fn run_git(repo: &str, args: &[&str]) -> AppResult<String> {
         match child.try_wait() {
             Ok(Some(_)) => break,
             Ok(None) => {
-                if start.elapsed() > GIT_TIMEOUT {
+                if start.elapsed() > timeout {
                     // 超时必须 kill + wait，否则留下僵尸/孤儿 git 进程
                     let _ = child.kill();
                     let _ = child.wait();

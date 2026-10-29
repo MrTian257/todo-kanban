@@ -290,9 +290,24 @@ fn import_at(
     let mut conn = open_db(db_path)?;
     // Immediate 事务：seq 取号 / 落盘 / 两表写入与跨进程导入互斥
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let info = import_in_tx(&tx, &root, owner, owner_id, &bytes, mime, ext, original_name)?;
+    let mut pending = PendingFiles::default();
+    let info = import_in_tx(&tx, &root, owner, owner_id, &bytes, mime, ext, original_name, &mut pending)?;
     tx.commit()?;
+    pending.0.clear();
     Ok(info)
+}
+
+/// 事务提交前创建的文件：任意错误（含 commit 失败）都尽力删除本次落盘内容。
+#[derive(Default)]
+struct PendingFiles(Vec<PathBuf>);
+impl Drop for PendingFiles {
+    fn drop(&mut self) {
+        for path in &self.0 {
+            if let Err(error) = fs::remove_file(path) {
+                log::warn!("附件事务回滚清理失败 {}：{error}", path.display());
+            }
+        }
+    }
 }
 
 /// 事务内导入：seq = **同一宿主内** MAX+1；文件名冲突递增重试（残留孤儿文件场景）。
@@ -308,6 +323,7 @@ fn import_in_tx(
     mime: &str,
     ext: &str,
     original_name: &str,
+    pending: &mut PendingFiles,
 ) -> AppResult<AttachmentInfo> {
     let base = ensure_dir(root)?;
     let dir = ensure_dir(&base.join(owner_id))?;
@@ -322,6 +338,7 @@ fn import_in_tx(
         let target = dir.join(&candidate);
         if !target.exists() {
             write_atomic(&target, bytes)?;
+            pending.0.push(target);
             file_name = candidate;
             break;
         }
@@ -661,6 +678,7 @@ fn migrate_one(conn: &mut Connection, db_path: &Path, todo: &DbTodo) -> AppResul
     }
     let root = attachments_root_at(db_path);
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let mut pending = PendingFiles::default();
     let mut note = todo.note.clone();
     let mut count = 0usize;
     for url in urls {
@@ -679,6 +697,7 @@ fn migrate_one(conn: &mut Connection, db_path: &Path, todo: &DbTodo) -> AppResul
             mime,
             ext,
             &original,
+            &mut pending,
         )?;
         // 同一 data URL 多处出现一并替换
         note = note
@@ -694,6 +713,7 @@ fn migrate_one(conn: &mut Connection, db_path: &Path, todo: &DbTodo) -> AppResul
         )?;
     }
     tx.commit()?;
+    pending.0.clear();
     Ok(count)
 }
 
@@ -755,7 +775,31 @@ pub fn gc_orphans_at(db_path: &Path) -> AppResult<GcSummary> {
     let trash = delete_orphan_attachments(&tx)?;
     let removed_attachments = trash.len();
     tx.commit()?;
-    let moved_files = move_to_trash_at(&attachments_root_at(db_path), &trash);
+    let root = attachments_root_at(db_path);
+    let mut moved_files = move_to_trash_at(&root, &trash);
+    // 再拿 Immediate 锁扫描磁盘，避免与「先落盘后写索引」的导入并发。
+    let scan = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let mut stmt = scan.prepare("SELECT relative_path FROM attachments")?;
+    let indexed = stmt.query_map([], |row| row.get::<_, String>(0))?
+        .collect::<Result<std::collections::HashSet<_>, _>>()?;
+    drop(stmt);
+    let mut disk_orphans = Vec::new();
+    if root.exists() && !fs::symlink_metadata(&root)?.file_type().is_symlink() {
+        for owner in fs::read_dir(&root)? {
+            let owner = owner?;
+            let name = owner.file_name().to_string_lossy().into_owned();
+            if name == "trash" || !valid_owner_id(&name) || !owner.file_type()?.is_dir() { continue; }
+            for file in fs::read_dir(owner.path())? {
+                let file = file?;
+                let relative = format!("{name}/{}", file.file_name().to_string_lossy());
+                if file.file_type()?.is_file() && valid_relative(&relative) && !indexed.contains(&relative) {
+                    disk_orphans.push(relative);
+                }
+            }
+        }
+    }
+    moved_files += move_to_trash_at(&root, &disk_orphans);
+    scan.commit()?;
     Ok(GcSummary {
         removed_relations,
         removed_attachments,

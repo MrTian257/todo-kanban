@@ -10,7 +10,7 @@ import { createPortal } from "react-dom";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import { DraggableBlockPlugin_EXPERIMENTAL } from "@lexical/react/LexicalDraggableBlockPlugin";
 import {
-  $getRoot, $getSelection, $isRangeSelection, FORMAT_TEXT_COMMAND,
+  $getRoot, $getSelection, $setSelection, type RangeSelection, $isRangeSelection, FORMAT_TEXT_COMMAND,
   COMMAND_PRIORITY_LOW, SELECTION_CHANGE_COMMAND, type LexicalEditor,
 } from "lexical";
 import { $setBlocksType } from "@lexical/selection";
@@ -20,6 +20,7 @@ import { INSERT_UNORDERED_LIST_COMMAND, INSERT_ORDERED_LIST_COMMAND, INSERT_CHEC
 import { INSERT_TABLE_COMMAND } from "@lexical/table";
 import { TOGGLE_LINK_COMMAND } from "@lexical/link";
 import { INSERT_HORIZONTAL_RULE_COMMAND } from "@lexical/react/LexicalHorizontalRuleNode";
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import type { ConversionTarget } from "@/lib/blockOperations";
 import { conversionTargetsFor } from "@/lib/blockOperations";
 import type { BlockKind } from "@/lib/markdownBlocks";
@@ -62,6 +63,35 @@ export function BlockToolbar({ disabled, busy, onInsertImage }: ToolbarProps): R
   const [editor] = useLexicalComposerContext();
   const [position, setPosition] = React.useState<{ top: number; left: number } | null>(null);
   const off = !!disabled || !!busy;
+  const [inputKind, setInputKind] = React.useState<"link" | "table" | null>(null);
+  const [inputValue, setInputValue] = React.useState("");
+  const [inputError, setInputError] = React.useState("");
+  const savedSelection = React.useRef<RangeSelection | null>(null);
+  const openInput = (kind: "link" | "table") => {
+    editor.getEditorState().read(() => {
+      const selection = $getSelection();
+      savedSelection.current = $isRangeSelection(selection) ? selection.clone() : null;
+    });
+    setInputKind(kind);
+    setInputValue(kind === "link" ? "https://" : "3x3");
+    setInputError("");
+  };
+  const submitInput = () => {
+    if (off) return;
+    const value = inputValue.trim();
+    const size = /^(\d{1,2})\s*[xX×]\s*(\d{1,2})$/.exec(value);
+    if (inputKind === "table" && (!size || +size[1] < 1 || +size[2] < 1)) {
+      setInputError("请输入 1 至 99 行、1 至 99 列，例如 3x3");
+      return;
+    }
+    if (inputKind === "link" && !value) { setInputError("请输入链接地址"); return; }
+    editor.update(() => {
+      if (savedSelection.current) $setSelection(savedSelection.current.clone());
+      if (inputKind === "link") editor.dispatchCommand(TOGGLE_LINK_COMMAND, value);
+      else if (size) editor.dispatchCommand(INSERT_TABLE_COMMAND, { rows: size[1], columns: size[2], includeHeaders: true });
+    }, { discrete: true });
+    setInputKind(null);
+  };
 
   React.useEffect(() => {
     let frame = 0;
@@ -133,9 +163,10 @@ export function BlockToolbar({ disabled, busy, onInsertImage }: ToolbarProps): R
     >{label}</button>
   );
 
-  if (!position || disabled) return <></>;
+  if (disabled) return <></>;
 
-  return createPortal(
+  return <>
+    {position && !inputKind && createPortal(
     <div className="tk-block-format-toolbar flex flex-wrap items-center gap-1 rounded-lg border bg-popover px-2 py-1.5 text-xs text-popover-foreground shadow-lg" role="toolbar" aria-label="格式工具栏" data-block-editor-toolbar="on" style={{ position: "fixed", top: position.top, left: position.left, transform: "translateX(-50%)", zIndex: 100 }}>
       {text("B", "加粗", formatText("bold"), "font-bold")}
       {text("I", "斜体", formatText("italic"), "italic")}
@@ -153,21 +184,26 @@ export function BlockToolbar({ disabled, busy, onInsertImage }: ToolbarProps): R
       {text("❝", "引用", setBlock("quote"))}
       {text("代码块", "代码块", setBlock("code"))}
       <span className="mx-1 h-4 w-px bg-border" aria-hidden="true" />
-      {text("链接", "插入链接", () => {
-        const url = window.prompt("链接地址（留空则取消）", "https://");
-        if (url) editor.dispatchCommand(TOGGLE_LINK_COMMAND, url);
-      })}
-      {text("表格", "插入表格", () => {
-        const input = window.prompt("表格尺寸（行x列，例如 3x3）", "3x3") ?? "";
-        const match = /^(\d{1,2})\s*[xX×]\s*(\d{1,2})$/.exec(input.trim());
-        if (!match) return;
-        editor.dispatchCommand(INSERT_TABLE_COMMAND, { rows: match[1], columns: match[2], includeHeaders: true });
-      })}
+      {text("链接", "插入链接", () => openInput("link"))}
+      {text("表格", "插入表格", () => openInput("table"))}
       {text("分隔线", "插入分隔线", () => editor.dispatchCommand(INSERT_HORIZONTAL_RULE_COMMAND, undefined))}
       {onInsertImage && text("图片", "插入图片", onInsertImage)}
     </div>,
     document.body,
-  );
+  )}
+    <Dialog open={inputKind !== null} onOpenChange={open => { if (!open) setInputKind(null); }}>
+      <DialogContent data-block-editor-toolbar="on" onCloseAutoFocus={event => { event.preventDefault(); editor.focus(); }}>
+        <DialogTitle>{inputKind === "link" ? "插入链接" : "插入表格"}</DialogTitle>
+        <DialogDescription>{inputKind === "link" ? "输入链接地址" : "输入行数和列数，例如 3x3"}</DialogDescription>
+        <input aria-label={inputKind === "link" ? "链接地址" : "表格尺寸"}
+          className="rounded border bg-background px-3 py-2" value={inputValue}
+          onChange={event => setInputValue(event.target.value)}
+          onKeyDown={event => { if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); event.stopPropagation(); submitInput(); } }} />
+        {inputError && <p role="alert" className="text-sm text-destructive">{inputError}</p>}
+        <button type="button" disabled={off} className="rounded bg-primary px-3 py-2 text-primary-foreground" onClick={submitInput}>插入</button>
+      </DialogContent>
+    </Dialog>
+  </>;
 }
 
 /** 转段落用的工厂：Lexical 的 $createParagraphNode 在 lexical 包里，单独包一层只为可读。 */
