@@ -102,6 +102,7 @@ interface SyncProps {
   onImageError: (message: string) => void;
   /** 导入解析失败时把原因交给宿主显示（不要静默留空白） */
   onImportError: (message: string) => void;
+  engineError: React.RefObject<Error | null>;
 }
 
 function SyncPlugin(props: SyncProps): null {
@@ -119,6 +120,7 @@ function SyncPlugin(props: SyncProps): null {
   const composing = React.useRef(false);
   const busy = React.useRef(false);
   const applyingExternal = React.useRef(false);
+  const initialized = React.useRef(false);
 
   /** 把当前 Lexical 状态算成 Markdown（不比较、不回写）。publish 与结构操作共用它。 */
   const buildMarkdown = React.useCallback((): string => {
@@ -156,7 +158,7 @@ function SyncPlugin(props: SyncProps): null {
   }, [editor]);
 
   const publish = React.useCallback(() => {
-    if (composing.current || busy.current || applyingExternal.current) return;
+    if (!initialized.current || composing.current || busy.current || applyingExternal.current) return;
     const markdown = buildMarkdown();
     if (markdown !== lastEmitted.current) { lastEmitted.current = markdown; latest.current.onChange(markdown); }
   }, [buildMarkdown]);
@@ -166,18 +168,24 @@ function SyncPlugin(props: SyncProps): null {
     const nextDoc = splitBlocks(display);
     applyingExternal.current = true;
     try {
+      latest.current.engineError.current = null;
       // **必须包一层 { root }**：Lexical 的 parseEditorState 要的是 EditorState 形态
       // （{root: SerializedRootNode}），直接传裸 root 节点会在内部读 parsed.root.type 时抛
       // "Cannot read properties of undefined (reading 'type')"，表现就是编辑器一片空白、正文不显示。
       const nextState = editor.parseEditorState(JSON.stringify({ root: markdownToEditorJson(display) }));
+      // Lexical 会把解析异常交给 onError 后返回部分状态，不能把部分状态当成功导入。
+      if (latest.current.engineError.current) throw latest.current.engineError.current;
       editor.setEditorState(nextState, { tag: IMPORT_TAG });
+      if (latest.current.engineError.current) throw latest.current.engineError.current;
       docRef.current = nextDoc;
       touchedKeys.current = new Set();
+      initialized.current = true;
       latest.current.onImportError("");
     } catch (failure) {
       // 解析失败绝不能静默：空白编辑器是最难排查的故障形态（本次即栽在这里）。
       latest.current.onImportError(failure instanceof Error ? failure.message : String(failure));
-      return;
+      initialized.current = false;
+      return false;
     } finally {
       applyingExternal.current = false;
     }
@@ -190,6 +198,7 @@ function SyncPlugin(props: SyncProps): null {
       keyToBlock.current = map;
     });
     lastEmitted.current = markdown;
+    return true;
   }, [editor]);
 
   /** 把 Lexical 自己造的节点（回车拆块、粘贴新段落）并入脏集合，否则它们会被当成「未碰」而丢内容。 */
@@ -215,11 +224,10 @@ function SyncPlugin(props: SyncProps): null {
     return remove;
   }, [editor, publish]);
 
-  React.useEffect(() => { importMarkdown(props.value); }, [importMarkdown]);
-
   // 外部改动（MCP / 访客 / 自动脚本 / 宿主 reset）才重新导入；自己发出去的不回灌。
-  React.useEffect(() => {
-    if (props.value === lastEmitted.current) return;
+  // 在被动 effect 注册的插件可能发布初始空段落前完成回显，避免空状态覆盖宿主原文。
+  React.useLayoutEffect(() => {
+    if (initialized.current && props.value === lastEmitted.current) return;
     importMarkdown(props.value);
   }, [props.value, importMarkdown]);
 
@@ -240,7 +248,7 @@ function SyncPlugin(props: SyncProps): null {
   React.useEffect(() => { editor.setEditable(!props.disabled); }, [editor, props.disabled]);
 
   const insertImages = React.useCallback(async (files: File[]) => {
-    if (busy.current || latest.current.disabled) return;
+    if (!initialized.current || busy.current || latest.current.disabled) return;
     // 无 owner = 该宿主不开贴图（模板宿主）：粘贴/拖入直接给出说明，不静默丢弃。
     if (!latest.current.owner) { latest.current.onImageError("任务模板的描述暂不支持插入图片，请粘贴图片链接。"); return; }
     const perFile = (file: File) => (file.type === "image/gif" || file.type === "image/webp" ? MAX_IMAGE_BYTES : IMAGE_MAX_BYTES);
@@ -280,7 +288,7 @@ function SyncPlugin(props: SyncProps): null {
     } finally {
       busy.current = false;
       publish();
-      latest.current.onProcessingChange?.(false);
+      latest.current.onProcessingChange?.(composing.current);
     }
   }, [editor, publish]);
 
@@ -297,7 +305,7 @@ function SyncPlugin(props: SyncProps): null {
    * 这是本期明写的取舍；光标恢复留给后续（需要建立 Lexical 节点 ↔ 块 id 的双向映射）。
    */
   const runStructure = React.useCallback((op: (doc: BlockDoc) => BlockDoc) => {
-    if (latest.current.disabled || busy.current || composing.current) return;
+    if (!initialized.current || latest.current.disabled || busy.current || composing.current) return;
     const markdown = buildMarkdown();
     let doc = splitBlocks(attachmentRefToDisplay(markdown));
     // 空文档在 Markdown 里没有块（splitBlocks("") 返回 0 块），但编辑器里一定有一个
@@ -312,7 +320,7 @@ function SyncPlugin(props: SyncProps): null {
     // 刚 split 出来的 doc 里 id 就是下标，所以把手给的 DOM 下标可以直接当块 id 用
     const next = op(doc);
     const out = attachmentDisplayToRef(joinBlocks(next));
-    importMarkdown(out);
+    if (!importMarkdown(out)) return;
     if (out !== markdown) latest.current.onChange(out);
     requestAnimationFrame(() => editor.focus());
   }, [buildMarkdown, importMarkdown, editor]);
@@ -348,6 +356,8 @@ function SyncPlugin(props: SyncProps): null {
 /** 三个宿主共用的块编辑器。用法与旧 MarkdownEditor 一致：受控 value + onChange。 */
 export function BlockEditor(props: Props) {
   const [error, setError] = React.useState("");
+  const [importError, setImportError] = React.useState("");
+  const engineError = React.useRef<Error | null>(null);
   const initialConfig = React.useMemo(() => ({
     namespace: "tk-block-editor",
     editable: !props.disabled,
@@ -356,7 +366,7 @@ export function BlockEditor(props: Props) {
     // 不能在这里 throw：Lexical 是在自己的 try/catch 里回调 onError 的，抛出去会打断
     // 它的恢复流程（编辑状态/选择可能一起坏掉），React 的错误边界也接不住 update 里的异常。
     // 控制台留完整堆栈，界面把消息交给 role="alert"。
-    onError: (error: Error) => { console.error("块编辑器异常", error); setError(error.message); },
+    onError: (error: Error) => { engineError.current = error; console.error("块编辑器异常", error); setError(error.message); },
     // 主题类名由 index.css 的 .tk-block-* 提供；颜色一律吃 [data-theme] CSS 变量，
     // 不再调用任何 Vditor 主题 API（ADR-0003 后果 2）。
     theme: {
@@ -430,9 +440,21 @@ export function BlockEditor(props: Props) {
         {uploading && <span role="status">图片处理中，完成后可保存…</span>}
       </div>
       {error && <p role="alert" className="shrink-0 px-4 py-2 text-sm text-destructive">{error}</p>}
+      {importError && (
+        <>
+          <p role="alert" className="shrink-0 px-4 py-2 text-sm text-destructive">正文加载失败，已保留原文，可继续编辑 Markdown：{importError}</p>
+          <textarea
+            aria-label={`${props.label}（Markdown 源文）`}
+            className="min-h-[280px] flex-1 resize-none bg-transparent px-5 py-4 font-mono text-sm outline-none"
+            value={props.value}
+            disabled={props.disabled}
+            onChange={event => props.onChange(event.target.value)}
+          />
+        </>
+      )}
       <input ref={filePicker} type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden onChange={onPicked} />
       <LexicalComposer initialConfig={initialConfig}>
-        <div ref={contentBox} className="relative min-h-0 flex-1 overflow-auto">
+        <div ref={contentBox} className={cn("relative min-h-0 flex-1 overflow-auto", importError && "hidden")}>
           <RichTextPlugin
             contentEditable={<ContentEditable
               aria-label={props.label}
@@ -467,7 +489,8 @@ export function BlockEditor(props: Props) {
             registerImageInsert={registerImageInsert}
             registerStructure={registerStructure}
             onImageError={onImageError}
-            onImportError={onImageError}
+            onImportError={setImportError}
+            engineError={engineError}
           />
         </div>
       </LexicalComposer>

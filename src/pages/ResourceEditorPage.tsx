@@ -65,7 +65,7 @@ function ResourceEditorForm({ resourceId }: { resourceId: string }) {
     const preferred = projects.find(item => item.id === activeProjectId && !item.archived);
     return preferred?.id ?? activeProjects[0]?.id ?? "";
   });
-  const initialOwnerId = React.useRef(ownerId).current;
+  const [initialOwnerId, setInitialOwnerId] = React.useState(ownerId);
   const owner = projects.find(item => item.id === ownerId);
 
   const initial = React.useMemo(() => ({
@@ -75,6 +75,7 @@ function ResourceEditorForm({ resourceId }: { resourceId: string }) {
     note: resource?.note ?? "",
   }), [resource]);
   const [form, setForm] = React.useState(initial);
+  const [baseline, setBaseline] = React.useState(initial);
   const [fieldErrors, setFieldErrors] = React.useState<{ title?: string; url?: string }>({});
   const [saveError, setSaveError] = React.useState("");
   const [saving, setSaving] = React.useState(false);
@@ -82,8 +83,8 @@ function ResourceEditorForm({ resourceId }: { resourceId: string }) {
   const [attachmentOwnerId] = React.useState(() => resource?.id ?? newId());
   const saved = React.useRef(false);
   const dirty =
-    form.title !== initial.title || form.url !== initial.url || form.tags !== initial.tags ||
-    form.note !== initial.note || ownerId !== initialOwnerId;
+    form.title !== baseline.title || form.url !== baseline.url || form.tags !== baseline.tags ||
+    form.note !== baseline.note || ownerId !== initialOwnerId;
 
   // ── 外部改动检测（ADR-0004：两框统一不只是组件统一，保护也要统一）──
   // 资料同样会被 AI 经 MCP、局域网访客或自动脚本写；改之前资料页只有 useEditingGuard，
@@ -98,19 +99,29 @@ function ResourceEditorForm({ resourceId }: { resourceId: string }) {
     // 没有本地改动 → 直接采纳远端，用户不必知道自己错过了什么
     original.current = current;
     setForm(initial);
+    setBaseline(initial);
+    const remoteOwnerId = resource?.projectId ?? "";
+    setOwnerId(remoteOwnerId);
+    setInitialOwnerId(remoteOwnerId);
     setExternalChange(false);
   }, [resource, dirty, saving, initial]);
   /** 出口一：放弃本地编辑，改用最新内容。 */
   const useRemote = React.useCallback(() => {
     original.current = JSON.stringify(resource ?? null);
     setForm(initial);
+    setBaseline(initial);
+    const remoteOwnerId = resource?.projectId ?? "";
+    setOwnerId(remoteOwnerId);
+    setInitialOwnerId(remoteOwnerId);
     setExternalChange(false);
   }, [resource, initial]);
   /** 出口二：保留本地编辑，下一次保存覆盖远端（与待办页同名语义）。 */
   const keepMine = React.useCallback(() => {
     original.current = JSON.stringify(resource ?? null);
+    setBaseline(initial);
+    setInitialOwnerId(resource?.projectId ?? "");
     setExternalChange(false);
-  }, [resource]);
+  }, [resource, initial]);
   // 未保存时拦截路由跳转（菜单、返回按钮、历史返回）
   useEditingGuard(dirty && !saved.current);
 

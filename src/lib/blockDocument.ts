@@ -31,7 +31,7 @@ const VERBATIM_KINDS = new Set(["verbatim", "definition", "footnoteDefinition", 
 
 /** 一个块 → Lexical 顶层节点数组（可能多个：列表会展开成 list + listitem 树）。 */
 export function blockToLexicalNodes(block: Block): LexicalNode[] {
-  if (VERBATIM_KINDS.has(block.kind) || !block.node) {
+  if (VERBATIM_KINDS.has(block.kind) || !block.node || !canEditNode(block.node)) {
     return [{ type: "sourceblock", version: 1, source: block.source, [BLOCK_SOURCE_KEY]: block.source }];
   }
   const node = block.node;
@@ -61,6 +61,19 @@ type MdList = MdNode & { children: MdNode[] };
 // mdast 的 Table / TableRow / TableCell 一律用 children 存下级（**没有 rows 字段**；
 // GFM 语法文档里的 "row list" 是说法不是属性名）。读错字段会让整张表静默消失。
 type MdTable = MdNode & { align?: (string | null)[] | null };
+
+/** 无法完整往返的语法整块保留为可编辑源文，不能用空节点或纯文本替代。 */
+function canEditNode(node: MdNode): boolean {
+  if (["html", "inlineMath", "math", "definition", "footnoteDefinition", "footnoteReference", "linkReference", "imageReference"].includes(node.type)) return false;
+  if (node.type === "blockquote" && (node.children ?? []).some(child => kindOfChild(child.type) === "unsupported")) return false;
+  if (node.type === "listItem") {
+    const children = node.children ?? [];
+    // 当前列表序列化器会把多个段落拼成一段，也无法保留其中的代码/引用块。
+    if (children.filter(child => child.type === "paragraph").length > 1 ||
+      children.some(child => child.type !== "paragraph" && child.type !== "list")) return false;
+  }
+  return (node.children ?? []).every(child => canEditNode(child as MdNode));
+}
 
 function blockChildrenToLexical(children: Content[]): LexicalNode[] {
   // 引用块内部：把每个子节点当块处理，但只支持段落/列表/标题三类（嵌套引用退化为文本，
@@ -135,7 +148,7 @@ function tableToLexical(node: MdTable): LexicalNode {
         // header 行 = 第一行（GFM 管道表只有这一种表头语义）
         headerState: rowIndex === 0 ? 1 : 0,
         format: node.align?.[column] ?? "",
-        children: cellChildrenToLexical((cell.children ?? []) as Content[]),
+        children: [{ type: "paragraph", version: 1, children: cellChildrenToLexical((cell.children ?? []) as Content[]) }],
       })),
     })),
   };
