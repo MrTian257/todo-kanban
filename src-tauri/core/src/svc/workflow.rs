@@ -495,19 +495,31 @@ fn claim_in_tx(tx: &Connection, now: i64) -> AppResult<Vec<ReminderDispatch>> {
 fn finish_reminder(reminder: &ReminderDispatch, delivered: bool) -> AppResult<()> {
     let conn = db::open_existing(&super::db_cmds::db_path()?, true)?;
     let tx = rusqlite::Transaction::new_unchecked(&conn, rusqlite::TransactionBehavior::Immediate)?;
-    let mut claims = read_claims(&tx)?;
+    finish_in_tx(&tx, reminder, delivered, now())?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// 确认/重试的事务体（供单测直接驱动，避免依赖全局数据库路径）。
+fn finish_in_tx(
+    tx: &Connection,
+    reminder: &ReminderDispatch,
+    delivered: bool,
+    at: i64,
+) -> AppResult<()> {
+    let mut claims = read_claims(tx)?;
+    // 只认本次领取的回执：同 id 提醒被重新排期/重领后，旧回执不能把新租约确认掉。
     if claims.get(&reminder.id) != Some(&(reminder.at, reminder.claimed_at)) { return Ok(()); }
-    let mut value = read(&tx)?;
+    let mut value = read(tx)?;
     if let Some(item) = value.reminders.iter_mut().find(|item|
         item.id == reminder.id && item.at == reminder.at && item.delivered_at.is_none()) {
-        if delivered { item.delivered_at = Some(now()); }
-        else { item.at = now() + RETRY_DELAY_MS; }
+        if delivered { item.delivered_at = Some(at); }
+        else { item.at = at + RETRY_DELAY_MS; }
         value.revision += 1;
-        write(&tx, &value)?;
+        write(tx, &value)?;
     }
     claims.remove(&reminder.id);
-    write_claims(&tx, &claims)?;
-    tx.commit()?;
+    write_claims(tx, &claims)?;
     Ok(())
 }
 
@@ -679,6 +691,118 @@ mod tests {
         tx.commit().unwrap();
         assert_eq!(again.len(), 1, "超过租约的领取应重新入列");
         assert_eq!(again[0].at, now - 1_000, "重试保留原提醒时间");
+    }
+
+    /// 1734e50 回归：领取只写租约，**不**把 delivered_at 当投递成功。
+    /// 旧实现领取即写 delivered_at，10 分钟后租约过期又把它当「未投递」重领 → 重复弹通知。
+    #[test]
+    fn claim_creates_lease_without_marking_delivered() {
+        let conn = db::open_in_memory().unwrap();
+        db::init(&conn).unwrap();
+        seed(&conn, "todo", false);
+        let now = 1_000_000i64;
+        let tx = conn.unchecked_transaction().unwrap();
+        write(&tx, &Workflow {
+            reminders_enabled: true,
+            reminders: vec![reminder("r1", now - 1_000, None)],
+            ..Default::default()
+        })
+        .unwrap();
+        tx.commit().unwrap();
+
+        let tx = conn.unchecked_transaction().unwrap();
+        let claimed = claim_in_tx(&tx, now).unwrap();
+        tx.commit().unwrap();
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(
+            read(&conn).unwrap().reminders[0].delivered_at,
+            None,
+            "领取不是投递成功，delivered_at 必须等 ack 才写"
+        );
+        let claims = read_claims(&conn).unwrap();
+        assert_eq!(claims.get("r1"), Some(&(now - 1_000, now)), "租约要落库以便跨进程去重");
+    }
+
+    /// 1734e50 回归：ack 后写 delivered_at 并清租约；之后即使超过租约也不再重领（不再重复通知）。
+    #[test]
+    fn acknowledge_marks_delivered_and_stops_reclaim() {
+        let conn = db::open_in_memory().unwrap();
+        db::init(&conn).unwrap();
+        seed(&conn, "todo", false);
+        let now = 1_000_000i64;
+        let tx = conn.unchecked_transaction().unwrap();
+        write(&tx, &Workflow {
+            reminders_enabled: true,
+            reminders: vec![reminder("r1", now - 1_000, None)],
+            ..Default::default()
+        })
+        .unwrap();
+        tx.commit().unwrap();
+        let tx = conn.unchecked_transaction().unwrap();
+        let claimed = claim_in_tx(&tx, now).unwrap();
+        tx.commit().unwrap();
+
+        let tx = conn.unchecked_transaction().unwrap();
+        finish_in_tx(&tx, &claimed[0], true, now + 5).unwrap();
+        tx.commit().unwrap();
+        let stored = read(&conn).unwrap();
+        assert_eq!(stored.reminders[0].delivered_at, Some(now + 5));
+        assert!(!read_claims(&conn).unwrap().contains_key("r1"), "ack 后租约应清除");
+        // 再等两个租约周期也不应重领（旧实现会重领并重复通知）
+        let tx = conn.unchecked_transaction().unwrap();
+        assert!(claim_in_tx(&tx, now + CLAIM_LEASE_MS * 2).unwrap().is_empty());
+        tx.commit().unwrap();
+    }
+
+    /// 1734e50 回归：发送失败只释放租约并延后，不算投递成功；
+    /// 旧回执不能确认被重新领取后的新租约。
+    #[test]
+    fn retry_reschedules_and_stale_ack_is_ignored() {
+        let conn = db::open_in_memory().unwrap();
+        db::init(&conn).unwrap();
+        seed(&conn, "todo", false);
+        let now = 1_000_000i64;
+        let tx = conn.unchecked_transaction().unwrap();
+        write(&tx, &Workflow {
+            reminders_enabled: true,
+            reminders: vec![reminder("r1", now - 1_000, None)],
+            ..Default::default()
+        })
+        .unwrap();
+        tx.commit().unwrap();
+
+        let tx = conn.unchecked_transaction().unwrap();
+        let first = claim_in_tx(&tx, now).unwrap();
+        tx.commit().unwrap();
+        let tx = conn.unchecked_transaction().unwrap();
+        finish_in_tx(&tx, &first[0], false, now + 1).unwrap();
+        tx.commit().unwrap();
+        let stored = read(&conn).unwrap();
+        assert_eq!(stored.reminders[0].delivered_at, None, "失败不能算投递成功");
+        assert_eq!(stored.reminders[0].at, now + 1 + RETRY_DELAY_MS, "失败要延后重试");
+        assert!(!read_claims(&conn).unwrap().contains_key("r1"), "失败要释放租约");
+        // 延后时间未到：不领取
+        let tx = conn.unchecked_transaction().unwrap();
+        assert!(claim_in_tx(&tx, now + RETRY_DELAY_MS).unwrap().is_empty());
+        tx.commit().unwrap();
+        // 到点后重新领取出新回执
+        let tx = conn.unchecked_transaction().unwrap();
+        let second = claim_in_tx(&tx, now + 1 + RETRY_DELAY_MS).unwrap();
+        tx.commit().unwrap();
+        assert_eq!(second.len(), 1);
+        // 旧回执不能确认新租约
+        let tx = conn.unchecked_transaction().unwrap();
+        finish_in_tx(&tx, &first[0], true, now + 2 + RETRY_DELAY_MS).unwrap();
+        tx.commit().unwrap();
+        assert_eq!(read(&conn).unwrap().reminders[0].delivered_at, None, "旧回执必须被拒绝");
+        // 新回执可以确认
+        let tx = conn.unchecked_transaction().unwrap();
+        finish_in_tx(&tx, &second[0], true, now + 3 + RETRY_DELAY_MS).unwrap();
+        tx.commit().unwrap();
+        assert_eq!(
+            read(&conn).unwrap().reminders[0].delivered_at,
+            Some(now + 3 + RETRY_DELAY_MS)
+        );
     }
 
     /// 已完成/已归档任务不发送提醒，但仍消耗领取以避免反复扫描

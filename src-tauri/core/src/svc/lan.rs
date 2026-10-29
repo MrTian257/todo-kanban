@@ -224,6 +224,63 @@ mod tests {
         assert_eq!(saved.commits.len(), 1);
     }
 
+    /// 1734e50 回归：访客**新建**共享项目待办时，本机隐藏字段也必须清空/重写，
+    /// 旧实现只对「已有记录」覆盖，新建记录可写入任意 repo_path/commits/created_by。
+    #[test]
+    fn merge_sanitizes_hidden_fields_of_new_todo() {
+        let full = DbState {
+            projects: vec![project("p1")],
+            todos: vec![],
+            resources: vec![],
+        };
+        let mut forged = todo("t-new", "p1");
+        forged.repo_path = "C:/victim/repo".into();
+        forged.commits = vec![DbCommitInfo {
+            hash: "deadbeef".into(),
+            subject: "伪造提交".into(),
+            date: "2026-01-01".into(),
+            ..Default::default()
+        }];
+        forged.created_by = "ai".into();
+        forged.ai_coordinated = true;
+        forged.seq = 4242;
+        forged.created_at = 1;
+        let payload = DbState {
+            projects: vec![],
+            todos: vec![forged],
+            resources: vec![],
+        };
+        let merged = merge_todos(&full, &payload, &scope(&["p1"])).unwrap();
+        let saved = &merged.todos[0];
+        assert_eq!(saved.repo_path, "", "仓库路径是桌面端私有字段，访客不能写");
+        assert!(saved.commits.is_empty(), "提交关联不能由访客写入");
+        assert_eq!(saved.seq, 0, "序号由后端重新分配");
+        assert_eq!(saved.created_by, "human");
+        assert!(!saved.ai_coordinated);
+        assert!(saved.created_at > 1, "创建时间由服务端重写");
+    }
+
+    /// 1734e50 回归：访客把未共享项目的待办 id 伪装成共享项目回传，不能借此覆盖未共享记录。
+    #[test]
+    fn merge_rejects_spoofed_unshared_todo_id() {
+        let full = DbState {
+            projects: vec![project("p1"), project("p2")],
+            todos: vec![todo("t2", "p2")],
+            resources: vec![],
+        };
+        let mut spoof = todo("t2", "p1");
+        spoof.title = "被篡改".into();
+        let payload = DbState {
+            projects: vec![],
+            todos: vec![spoof],
+            resources: vec![],
+        };
+        assert!(
+            merge_todos(&full, &payload, &scope(&["p1"])).is_err(),
+            "未共享项目的待办不能被同 id 快照覆盖"
+        );
+    }
+
     #[test]
     fn merge_rejects_out_of_scope_todo() {
         let full = DbState {

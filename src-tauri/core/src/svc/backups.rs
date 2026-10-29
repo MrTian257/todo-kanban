@@ -662,6 +662,55 @@ mod tests {
         }
     }
 
+    /// 1734e50 回归：原宿主待办已删除、但图片仍被其它宿主（资料）的备注引用时，
+    /// 备份必须可恢复。旧实现要求 relative_path 首段宿主仍在快照里，对这种合法状态整份拒绝。
+    #[test]
+    fn attachment_snapshot_accepts_cross_owner_reference() {
+        let dir = std::env::temp_dir().join(format!("tk-backup-cross-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_path = dir.join("todo-kanban.db");
+        let (conn, _) = db::open_and_init(&db_path, &dir.join("backup")).unwrap();
+        let snapshot_root = dir.join("snapshot-attachments");
+        // 文件先落在 t1/ 下（引用形态不换，ADR-0002 决策 1）
+        let info = crate::svc::attachments::import_b64_at(
+            &db_path,
+            "todo",
+            "t1",
+            &base64_encode(&png_bytes()),
+            "x.png",
+        )
+        .unwrap();
+        copy_tree(
+            &crate::svc::attachments::attachments_root_at(&db_path),
+            &snapshot_root,
+            &mut Vec::new(),
+        )
+        .unwrap();
+        // 模拟跨宿主引用：关系改到资料 r1，待办 t1 已删除；文件仍在 t1/ 目录
+        conn.execute(
+            "UPDATE note_attachments SET owner_kind='resource', owner_id='r1'",
+            [],
+        )
+        .unwrap();
+        let mut snapshot_state = state(vec![]);
+        snapshot_state.resources = vec![crate::models::DbLibraryResource {
+            id: "r1".into(),
+            title: "资料".into(),
+            created_at: 1,
+            updated_at: 1,
+            ..Default::default()
+        }];
+        let read = AttachmentSnapshot::read(&conn, &snapshot_root, &snapshot_state);
+        assert!(
+            read.is_ok(),
+            "跨宿主引用的合法备份不应被拒绝：{:?}",
+            read.err().map(|error| error.to_string())
+        );
+        assert!(info.relative_path.starts_with("t1/"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// 备份目录自洽：文件齐全且与清单一致时通过；缺文件 / 目录与快照不符时拒绝
     #[test]
     fn attachment_snapshot_rejects_missing_and_orphan_files() {
@@ -711,7 +760,7 @@ mod tests {
         .unwrap();
         let orphan = AttachmentSnapshot::read(&conn, &snapshot_root, &state(vec![]));
         assert!(orphan.is_err());
-        assert!(orphan.unwrap_err().to_string().contains("不一致"));
+        assert!(orphan.unwrap_err().to_string().contains("失效引用"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

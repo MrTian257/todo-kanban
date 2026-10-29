@@ -963,6 +963,71 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// 1734e50 回归：导入先落盘后写库；事务失败必须删掉本次已写的文件，不能留永久孤儿。
+    #[test]
+    fn failed_import_removes_files_written_in_the_transaction() {
+        let (dir, db_path) = temp_db("import-cleanup");
+        {
+            let conn = db::open(&db_path).unwrap();
+            conn.execute_batch(
+                "CREATE TRIGGER fail_attach_insert BEFORE INSERT ON attachments
+                 BEGIN SELECT RAISE(ABORT, 'simulated insert failure'); END;",
+            )
+            .unwrap();
+        }
+        let error = import_at(&db_path, OwnerKind::Todo, "t1", png_bytes(), "x.png")
+            .expect_err("写索引失败时导入必须报错");
+        assert!(!error.to_string().is_empty());
+        let owner_dir = attachments_root_at(&db_path).join("t1");
+        let files = fs::read_dir(&owner_dir)
+            .map(|entries| entries.filter_map(Result::ok).count())
+            .unwrap_or(0);
+        assert_eq!(files, 0, "事务回滚后本次新写的文件必须删除（不留孤儿文件）");
+        let conn = db::open(&db_path).unwrap();
+        assert_eq!(count(&conn, "SELECT COUNT(*) FROM attachments"), 0);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 1734e50 回归：GC 的磁盘差集要回收「有文件、无索引行」的孤儿（旧实现只按 DB 行收敛）。
+    #[test]
+    fn gc_moves_disk_only_orphans_to_trash() {
+        let (dir, db_path) = temp_db("gc-disk");
+        let root = attachments_root_at(&db_path);
+        let owner = root.join("t1");
+        fs::create_dir_all(&owner).unwrap();
+        let stray = owner.join("t1-9999.png");
+        fs::write(&stray, png_bytes()).unwrap();
+
+        let summary = gc_orphans_at(&db_path).unwrap();
+        assert!(summary.moved_files >= 1, "磁盘孤儿应被移入回收目录：{summary:?}");
+        assert!(!stray.exists(), "孤儿文件不能原地保留");
+        // trash/<时间戳>/<owner>/<file>：可人工找回
+        let recovered = fs::read_dir(root.join("trash")).unwrap().filter_map(Result::ok).any(|stamp| {
+            stamp.file_type().map(|kind| kind.is_dir()).unwrap_or(false)
+                && stamp.path().join("t1/t1-9999.png").is_file()
+        });
+        assert!(recovered, "回收目录里应能找回该文件");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 1734e50 回归：GC 新增磁盘扫描不能误删仍被索引的文件。
+    #[test]
+    fn gc_keeps_indexed_attachment_files() {
+        let (dir, db_path) = temp_db("gc-keep");
+        let info = import_at(&db_path, OwnerKind::Todo, "t1", png_bytes(), "x.png").unwrap();
+        {
+            // 让宿主待办真实存在且正文引用该图，关系行才不会被 GC 判成悬空
+            let conn = db::open(&db_path).unwrap();
+            seed(&conn, vec![todo_row("t1", &format!("![x]({})", info.r#ref))]);
+        }
+        let file = attachments_root_at(&db_path).join(&info.relative_path);
+        assert!(file.is_file());
+        let summary = gc_orphans_at(&db_path).unwrap();
+        assert_eq!(summary.moved_files, 0, "有索引行的文件不能进 trash：{summary:?}");
+        assert!(file.is_file());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     fn base64_png() -> String {
         use base64::Engine as _;
         base64::engine::general_purpose::STANDARD.encode(png_bytes())

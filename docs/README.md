@@ -27,6 +27,10 @@
 - [Agent 本地任务记录约定](agents/issue-tracker.md)
 - [领域与文档约定](agents/domain.md)
 
+## 质量
+
+- [Bug 清单（2026-10-29 全程序检测）](bug-list-2026-10-29.md)：按严重级别列出程序缺陷、证据与处理建议。
+
 ## 架构决策
 
 - [ADR 索引与状态说明](adr/README.md)

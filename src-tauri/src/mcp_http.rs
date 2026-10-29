@@ -383,27 +383,31 @@ async fn guard_request(
 ) -> Response {
     let peer = request.extensions().get::<ConnectInfo<SocketAddr>>()
         .map(|peer| peer.0.to_string()).unwrap_or_default();
-    let metadata = json!({"method": format!("HTTP {}", request.method())});
-    if !crate::http_security::headers_allowed(request.headers()) {
-        mcp::audit_denied(&ctx.db_path, TRANSPORT, &peer, &metadata, "Host 或 Origin 校验失败");
+    let (parts, body) = request.into_parts();
+    let metadata = json!({"method": format!("HTTP {}", parts.method)});
+    if !crate::http_security::headers_allowed(&parts.headers) {
+        // 拒绝前先把请求体读完：服务端在客户端发完 body 前提前关闭连接时，
+        // 对端观察到的会是 ConnectionReset（而不是 403），测试和真实客户端都会被误导。
+        // 顺带把 JSON-RPC method/tool 记进审计，安全事件才有排查价值。
+        let bytes = axum::body::to_bytes(body, MAX_BODY_BYTES).await.unwrap_or_default();
+        let audited_request = serde_json::from_slice::<Value>(&bytes)
+            .ok()
+            .filter(Value::is_object)
+            .unwrap_or_else(|| metadata.clone());
+        mcp::audit_denied(&ctx.db_path, TRANSPORT, &peer, &audited_request, "Host 或 Origin 校验失败");
         return json_response(StatusCode::FORBIDDEN, &mcp::error(Value::Null, -32000, "Host 或 Origin 校验失败"), None);
     }
+    let request = axum::extract::Request::from_parts(parts, body);
     if request.uri().path() != "/mcp" { return next.run(request).await; }
-    let provided = provided_token(request.headers());
-    let path = ctx.db_path.clone();
-    let auth = tokio::task::spawn_blocking(move || mcp::authorize(&path, provided.as_deref())).await;
-    let auth = match auth {
-        Ok(Ok(auth)) => auth,
-        _ => {
-            mcp::audit_denied(&ctx.db_path, TRANSPORT, &peer, &metadata, "授权失败");
-            return json_response(StatusCode::UNAUTHORIZED, &mcp::error(Value::Null, -32001, "授权失败"), None);
-        }
-    };
+    // 鉴权留在各 handler 里做：只有它能拿到真实请求体与详细失败原因（停用 / Token 停用 / 未授权），
+    // 放中间件里会把 405 之类的协议响应挡成 401，也会让审计丢失 JSON-RPC method/tool。
     let started = Instant::now();
     let response = next.run(request).await;
     if response.extensions().get::<Audited>().is_none() {
+        // 未进入协议调度的前置拒绝（GET 405 / Accept 406 / 未知会话 / JSON 解析失败）也要留痕，
+        // 此时没有可信身份，按「未授权」记，避免把拒绝伪装成某个 AI 的行为。
         let context = McpContext { db_path: ctx.db_path.clone(), transport: TRANSPORT,
-            actor: auth.actor, token_id: auth.token_id, readonly: auth.readonly, peer };
+            actor: "未授权".into(), token_id: String::new(), readonly: true, peer };
         let mut entry = mcp::audit_from(&context, &metadata, None, started.elapsed().as_millis() as i64);
         entry.ok = response.status().is_success() && response.status() != StatusCode::OK;
         entry.status = if entry.ok { "OK" } else { "CLIENT_ERROR" }.into();
@@ -685,13 +689,21 @@ async fn handle_delete(
     ConnectInfo(_peer): ConnectInfo<SocketAddr>,
 ) -> Response {
     let provided = provided_token(&headers);
-    let Some(_auth) = mcp::authorize(&ctx.db_path, provided.as_deref()).ok() else {
+    // DELETE 也要保留具体拒绝原因（停用 / Token 停用 / 未授权），并留痕。
+    if let Err(message) = mcp::authorize(&ctx.db_path, provided.as_deref()) {
+        mcp::audit_denied(
+            &ctx.db_path,
+            TRANSPORT,
+            &_peer.to_string(),
+            &json!({"method": "HTTP DELETE"}),
+            &message,
+        );
         return json_response(
             StatusCode::UNAUTHORIZED,
-            &mcp::error(Value::Null, -32001, "授权失败"),
+            &mcp::error(Value::Null, -32001, message),
             None,
         );
-    };
+    }
     if let Some(id) = headers
         .get(SESSION_HEADER)
         .and_then(|value| value.to_str().ok())

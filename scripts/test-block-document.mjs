@@ -16,7 +16,7 @@ try {
   // 桥与 remark 解析器打进同一个 bundle（入口见 scripts/__block-document-entry.ts）：
   // 从临时目录 import 一次就够，不必再解析 node_modules 路径。
   await build({ entryPoints: ['scripts/__block-document-entry.ts'], bundle: true, platform: 'node', format: 'esm', outfile: path.join(dir, 'doc.mjs') });
-  const { markdownToEditorJson, editorJsonToMarkdown, emptyEditorNodes, blockToLexicalNodes, unified, parsePlugin, gfm, math } =
+  const { markdownToEditorJson, editorJsonToMarkdown, emptyEditorNodes, blockToLexicalNodes, lexicalNodesToMarkdown, unified, parsePlugin, gfm, math } =
     await import(pathToFileURL(path.join(dir, 'doc.mjs')));
 
   const parse = md => unified().use(parsePlugin).use(gfm).use(math).parse(md);
@@ -109,7 +109,38 @@ try {
     assert.ok(out.includes('\|'), '单元格里的竖线必须被转义，实际=' + JSON.stringify(out));
     assert.equal(cols(out.split('\n')[2]), cols(out.split('\n')[0]), '数据行列数与表头一致');
   }
-  console.log('PASS: mdast ↔ Lexical 桥（21 例语义往返、脚注与行内 HTML 的明写降级、空任务项识别、空值边界、围栏加长、表格列数）。');
+  // ---------- D. 1734e50 回归：不可无损往返的形态整块保留源文 / 序列化边界 ----------
+  {
+    // 混合任务列表、松散列表、带 info string 的围栏代码：Lexical 表达不了 → 必须是源文块
+    const kinds = [
+      ['- [ ] 甲\n- 乙', '混合任务列表'],
+      ['- a\n\n- b', '松散列表'],
+      ['```js title="a.js"\nx\n```', '带 info string 的代码围栏'],
+    ];
+    for (const [md, label] of kinds) {
+      const node = markdownToEditorJson(md).children[0];
+      assert.equal(node.type, 'sourceblock', label + ' 应整块保留源文，实际=' + node.type);
+      assert.equal(editorJsonToMarkdown(markdownToEditorJson(md)).trimEnd(), md, label + ' 源文必须逐字节往返');
+    }
+    // 0 起始有序列表的序号不能被改成 1
+    const ordered = editorJsonToMarkdown(markdownToEditorJson('0. zero\n1. one\n'));
+    assert.ok(ordered.startsWith('0. zero'), '0 起始有序列表应保留 start=0，实际=' + JSON.stringify(ordered));
+    // 段落中的 Tab 是字面内容，序列化成 &#9; 而不是丢掉
+    const withTab = {
+      type: 'paragraph', version: 1, children: [
+        { type: 'text', version: 1, text: '前文', format: 0, detail: 0, mode: 'normal', style: '' },
+        { type: 'tab', version: 1 },
+        { type: 'text', version: 1, text: '后文', format: 0, detail: 0, mode: 'normal', style: '' },
+      ],
+    };
+    assert.equal(lexicalNodesToMarkdown([withTab]), '前文&#9;后文', 'Tab 必须保留为字面内容');
+    // 空标签链接不能丢 URL（本次修复用地址补 label）
+    const emptyLabel = editorJsonToMarkdown(markdownToEditorJson('前文 [](https://example.com) 后文\n'));
+    assert.ok(emptyLabel.includes('https://example.com'), '空标签链接的 URL 不能丢，实际=' + JSON.stringify(emptyLabel));
+    assert.ok(/\]\(https:\/\/example\.com\)/.test(emptyLabel), '空标签链接仍应是链接，实际=' + JSON.stringify(emptyLabel));
+  }
+
+  console.log('PASS: mdast ↔ Lexical 桥（21 例语义往返、脚注与行内 HTML 的明写降级、空任务项识别、空值边界、围栏加长、表格列数、不可往返形态保源文、0 起始列表、Tab 字面、空标签链接）。');
 } finally {
   await rm(dir, { recursive: true, force: true });
 }
