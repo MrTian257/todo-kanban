@@ -56,8 +56,8 @@ export function blockToLexicalNodes(block: Block): LexicalNode[] {
   }
 }
 
-interface MdNode { type: string; position?: Content["position"]; children?: Content[]; value?: string; identifier?: string; depth?: number; lang?: string | null; ordered?: boolean; start?: number | null; checked?: boolean | null; spread?: boolean; align?: (string | null)[] | null; url?: string; title?: string | null; alt?: string | null; }
-type MdList = MdNode & { children: MdNode[] };
+interface MdNode { type: string; position?: Content["position"]; children?: Content[]; value?: string; identifier?: string; depth?: number; lang?: string | null; ordered?: boolean | null; start?: number | null; checked?: boolean | null; spread?: boolean | null; align?: (string | null)[] | null; url?: string; title?: string | null; alt?: string | null; }
+type MdList = Omit<MdNode, "children"> & { children: MdNode[] };
 // mdast 的 Table / TableRow / TableCell 一律用 children 存下级（**没有 rows 字段**；
 // GFM 语法文档里的 "row list" 是说法不是属性名）。读错字段会让整张表静默消失。
 type MdTable = MdNode & { align?: (string | null)[] | null };
