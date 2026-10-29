@@ -363,10 +363,10 @@ pub struct GcSummary {
     pub moved_files: usize,
 }
 
-/// 默认全局固定 MCP 授权 Token（设置页可修改；MCP server 启动认证用）
+/// 旧版本公开默认值：仅用于拒绝不安全的历史凭据。
 pub const DEFAULT_MCP_TOKEN: &str = "sk-GLOBAl_MCP_BY_ADMIN";
 
-/// MCP 集成设置（app_meta 持久化；缺失回默认：启用 + 可写 + 全局固定授权 Token）
+/// MCP 集成设置（缺失时关闭；授权凭据必须由用户显式设置）。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct McpSettings {
@@ -380,9 +380,9 @@ pub struct McpSettings {
 impl Default for McpSettings {
     fn default() -> Self {
         McpSettings {
-            enabled: true,
+            enabled: false,
             readonly: false,
-            token: DEFAULT_MCP_TOKEN.to_string(),
+            token: String::new(),
         }
     }
 }

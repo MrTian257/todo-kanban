@@ -10,6 +10,7 @@ export function ChangeDiff({ before, after }: { before: Record<string, unknown> 
 }
 export function HistoryDialog({ open, onOpenChange, entity, entityId }: { open: boolean; onOpenChange: (open: boolean) => void; entity?: string; entityId?: string }) {
   const [entries, setEntries] = useState<HistoryEntry[]>([]); const [error, setError] = useState(""); const [offset, setOffset] = useState(0); const [busy,setBusy] = useState(false); const [selected,setSelected] = useState<HistoryEntry | null>(null);
+  useEffect(() => { setOffset(0); setEntries([]); }, [open, entity, entityId]);
   useEffect(() => { if (!open) return; let alive = true; setSelected(null); setError("");
     void desktopAction<HistoryEntry[]>("history_list", { entity: entity ?? null, entityId: entityId ?? null, offset }).then(value => { if (alive) setEntries(value); }).catch(error => { if (alive) setError(String(error)); });
     return () => { alive = false; };

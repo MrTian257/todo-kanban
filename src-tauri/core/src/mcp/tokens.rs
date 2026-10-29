@@ -43,6 +43,9 @@ pub fn authenticate(
                 .into(),
         );
     };
+    if candidate == crate::models::DEFAULT_MCP_TOKEN {
+        return Err("旧版默认 Token 已停用，请在 MCP 设置中生成并保存新的随机 Token".into());
+    }
     if !settings.token.trim().is_empty() && candidate == settings.token.trim() {
         return Ok(Authenticated {
             actor: "管理 Key".into(),

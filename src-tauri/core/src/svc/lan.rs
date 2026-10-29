@@ -92,7 +92,7 @@ pub fn merge_todos(
         let mut item = todo.clone();
         if let Some(prev) = existing.get(item.id.as_str()) {
             if !scope.contains(prev.project_id.as_str()) {
-                return Err(AppError::invalid("不能覆盖未共享项目的待办"));
+                return Err(AppError::invalid("STATE_CONFLICT: 共享范围或任务归属已变化，请刷新后重试"));
             }
             item.repo_path = prev.repo_path.clone();
             item.commits = prev.commits.clone();

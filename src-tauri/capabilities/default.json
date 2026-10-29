@@ -179,19 +179,18 @@
     "core:window:allow-toggle-maximize",
     "core:window:allow-unmaximize",
     "core:window:allow-unminimize",
-    "opener:default",
-    "opener:allow-default-urls",
+    "clipboard-manager:allow-read-text",
+    "dialog:allow-open",
     {
-      "identifier": "opener:allow-open-path",
+      "identifier": "opener:allow-open-url",
       "allow": [
         {
-          "path": "**"
+          "url": "https://*"
+        },
+        {
+          "url": "http://*"
         }
       ]
-    },
-    "opener:allow-open-url",
-    "opener:allow-reveal-item-in-dir",
-    "clipboard-manager:allow-read-text",
-    "dialog:allow-open"
+    }
   ]
 }

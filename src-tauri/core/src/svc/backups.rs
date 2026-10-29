@@ -466,6 +466,7 @@ pub fn restore(id: &str, expected: DbState, workflow_revision: Option<i64>) -> A
                 .map_or(0, |r| r.updated_at + 1),
         );
     }
+    let _files = super::attachments::lock_files()?;
     let root = super::attachments::attachments_root_at(&super::db_cmds::db_path()?);
     // 附件文件先补齐（缺失立即失败；同名异内容停止，不覆盖任何当前文件）。
     let copied = copy_tree(&directory.join(ATTACHMENTS), &root, &mut Vec::new())?;
@@ -588,10 +589,6 @@ impl AttachmentSnapshot {
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
             .collect::<Result<Vec<AttachmentLinkRow>, _>>()?;
         let ids: std::collections::HashSet<_> = files.iter().map(|file| file.0.as_str()).collect();
-        let referenced: std::collections::HashSet<_> = links.iter().map(|link| link.2.as_str()).collect();
-        if files.iter().any(|file| !referenced.contains(file.0.as_str())) {
-            return Err(AppError::invalid("备份附件没有有效备注引用"));
-        }
         // 关系行两端都必须还在快照里：附件行在、宿主也在（且 kind 对得上），否则恢复出来的是悬空引用
         if links
             .iter()

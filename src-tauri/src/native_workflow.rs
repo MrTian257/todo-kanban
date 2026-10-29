@@ -201,6 +201,7 @@ pub fn start(app: tauri::AppHandle) {
     std::thread::spawn(move || {
         // 启动时先做一次过期提醒清理（丢弃超过宽限期的历史提醒），再进入周期任务。
         let mut last_sweep: Option<std::time::Instant> = None;
+        let mut pending_ack = Vec::new();
         loop {
             std::thread::sleep(std::time::Duration::from_secs(30));
             let mut errors = Vec::new();
@@ -216,8 +217,14 @@ pub fn start(app: tauri::AppHandle) {
                     Err(error) => errors.push(format!("提醒清理失败：{error}")),
                 }
             }
+            pending_ack.retain(|reminder| {
+                match todo_kanban_core::svc::workflow::acknowledge_reminder(reminder) {
+                    Ok(()) => false,
+                    Err(error) => { errors.push(format!("提醒投递确认重试失败：{error}")); true }
+                }
+            });
             match app.notification().permission_state() {
-                Ok(tauri::plugin::PermissionState::Granted) => {
+                Ok(tauri::plugin::PermissionState::Granted) if pending_ack.is_empty() => {
                     match todo_kanban_core::svc::workflow::claim_reminders() {
                         Ok(reminders) => {
                             for reminder in reminders {
@@ -237,6 +244,7 @@ pub fn start(app: tauri::AppHandle) {
                                     errors.push(format!("系统提醒失败：{error}"));
                                 } else if let Err(error) = todo_kanban_core::svc::workflow::acknowledge_reminder(&reminder) {
                                     errors.push(format!("提醒投递确认失败：{error}"));
+                                    pending_ack.push(reminder);
                                 }
                             }
                         }

@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { openPath } from "@tauri-apps/plugin-opener";
+import { openDirectory } from "@/lib/openDirectory";
 import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -28,7 +28,7 @@ export function DirectoryInput({ id, value, onChange, autoFocus = false }: {
       placeholder={isMacOS ? "/Users/你的用户名/Projects/project" : "代码仓库绝对路径"} />
     {isTauri() && <div className="flex flex-wrap gap-2">
       <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void choose()}>选择文件夹…</Button>
-      {value && <Button type="button" size="sm" variant="ghost" onClick={() => void openPath(value).catch(error => toast.error(`无法打开目录：${String(error)}`))}>{isMacOS ? "在 Finder 中打开" : "打开目录"}</Button>}
+      {value && <Button type="button" size="sm" variant="ghost" onClick={() => void openDirectory(value).catch(error => toast.error(`无法打开目录：${String(error)}`))}>{isMacOS ? "在 Finder 中打开" : "打开目录"}</Button>}
     </div>}
   </div>;
 }

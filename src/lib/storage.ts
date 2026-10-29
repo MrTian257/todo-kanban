@@ -26,5 +26,10 @@ export async function saveState(state: AppState, expected: AppState): Promise<Ap
 
 /** revision 只用于当前后端观察连接；不持久化，重启后自动重新取得完整快照。 */
 export async function pollState(revision: string | null): Promise<{ revision: string; state: AppState | null }> {
+  if (!isTauri()) {
+    const state = await loadState();
+    const nextRevision = JSON.stringify(state);
+    return { revision: nextRevision, state: nextRevision === revision ? null : state };
+  }
   return invoke("db_poll_state", { revision });
 }

@@ -90,6 +90,7 @@ export function BlockToolbar({ disabled, busy, onInsertImage }: ToolbarProps): R
       if (inputKind === "link") editor.dispatchCommand(TOGGLE_LINK_COMMAND, value);
       else if (size) editor.dispatchCommand(INSERT_TABLE_COMMAND, { rows: size[1], columns: size[2], includeHeaders: true });
     }, { discrete: true });
+    savedSelection.current = null;
     setInputKind(null);
   };
 
@@ -192,7 +193,13 @@ export function BlockToolbar({ disabled, busy, onInsertImage }: ToolbarProps): R
     document.body,
   )}
     <Dialog open={inputKind !== null} onOpenChange={open => { if (!open) setInputKind(null); }}>
-      <DialogContent data-block-editor-toolbar="on" onCloseAutoFocus={event => { event.preventDefault(); editor.focus(); }}>
+      <DialogContent data-block-editor-toolbar="on" onCloseAutoFocus={event => {
+        event.preventDefault();
+        const selection = savedSelection.current;
+        if (selection) editor.update(() => $setSelection(selection.clone()), { discrete: true });
+        savedSelection.current = null;
+        editor.focus();
+      }}>
         <DialogTitle>{inputKind === "link" ? "插入链接" : "插入表格"}</DialogTitle>
         <DialogDescription>{inputKind === "link" ? "输入链接地址" : "输入行数和列数，例如 3x3"}</DialogDescription>
         <input aria-label={inputKind === "link" ? "链接地址" : "表格尺寸"}

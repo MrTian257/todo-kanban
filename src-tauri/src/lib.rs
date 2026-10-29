@@ -166,6 +166,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::open_directory,
             native_workflow::desktop_ready,
             native_workflow::desktop_quick_done,
             native_workflow::desktop_enable_notifications,

@@ -1,4 +1,4 @@
-// MCP 集成设置封装：启用开关 + 只读模式 + 授权 Token（默认全局固定 key）；
+// MCP 集成设置封装：启用开关 + 只读模式 + 授权 Token（首次启用前设置）；
 // 另含 HTTP 传输设置、多 AI 接入 Token 与审计日志的调用封装。
 // 只读模式**只由这里决定**，不再由 MCP_TODO_READONLY / --readonly 决定（见 docs/decisions/ADR-022.md）。
 // HTTP 传输与多 Token / 审计的设计见 docs/decisions/ADR-023.md。
@@ -14,12 +14,12 @@ export interface McpSettings {
   token: string;
 }
 
-/** 默认全局固定授权 Token（设置页可修改；MCP server 启动认证用） */
-export const DEFAULT_MCP_TOKEN = "sk-GLOBAl_MCP_BY_ADMIN";
+/** 未设置凭据时保持空值 */
+export const DEFAULT_MCP_TOKEN = "";
 
-/** 默认设置：启用 + 可写 + 固定 Token（与 Rust 侧 McpSettings::default 一致） */
+/** 默认设置：关闭 + 未设置 Token（与 Rust 侧 McpSettings::default 一致） */
 export const DEFAULT_MCP_SETTINGS: McpSettings = {
-  enabled: true,
+  enabled: false,
   readonly: false,
   token: DEFAULT_MCP_TOKEN,
 };

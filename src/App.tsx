@@ -6,7 +6,7 @@ import { DesktopLifecycle } from "@/components/layout/DesktopLifecycle";
 // 副作用集中：initAppStore / startExternalSync / startGitCacheWarm / 皮肤与展示尺寸初始化
 // （右键菜单系统与输入建议控制在 main.tsx 全局安装，弹层在下方挂载）
 
-import { lazy, Suspense, useEffect, useState } from "react";
+import { Component, type ReactNode, lazy, Suspense, useEffect, useState } from "react";
 import { createHashRouter, RouterProvider, Navigate, Route, Routes } from "react-router-dom";
 import { ThemeProvider } from "next-themes";
 import { Toaster, toast } from "sonner";
@@ -161,6 +161,19 @@ function Application() {
     </ThemeProvider>
   );
 }
-const router = createHashRouter([{ path: "*", element: <Application /> }]);
+class AppErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() { return { failed: true }; }
+  render() {
+    if (this.state.failed) return <div role="alert" className="flex min-h-screen flex-col items-center justify-center gap-4 p-6">
+      <h1>页面暂时无法显示</h1>
+      <p>加载或渲染发生错误。重新加载会丢弃尚未保存的输入，已保存的数据不受影响。</p>
+      <button type="button" className="rounded border px-4 py-2" onClick={() => window.location.reload()}>重新加载</button>
+    </div>;
+    return this.props.children;
+  }
+}
 
-export default function App() { return <RouterProvider router={router} />; }
+const router = createHashRouter([{ path: "*", element: <AppErrorBoundary><Application /></AppErrorBoundary> }]);
+
+export default function App() { return <AppErrorBoundary><RouterProvider router={router} /></AppErrorBoundary>; }

@@ -45,11 +45,7 @@ fn main() {
             db_path.display()
         ));
     }
-    // 启动即校验一次：数据源可用 + 设置页启用 + Token 匹配。不满足直接退出，不留半启动状态。
-    if let Err(message) = mcp::authorize(&db_path, parsed.token.as_deref()) {
-        fail(message);
-    }
-
+    // 授权错误由首个协议请求返回，保持 JSON-RPC 错误帧与请求 id 的对应。
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     let mut input = stdin.lock();
@@ -60,7 +56,7 @@ fn main() {
         frame.clear();
         match input
             .by_ref()
-            .take((MAX_FRAME_BYTES + 1) as u64)
+            .take((MAX_FRAME_BYTES + 3) as u64)
             .read_until(b'\n', &mut frame)
         {
             Ok(0) => break,
@@ -70,12 +66,15 @@ fn main() {
                 break;
             }
         }
+        // 分帧换行不属于 JSON 内容，兼容 LF 和 CRLF。
+        if frame.last() == Some(&b'\n') { frame.pop(); }
+        if frame.last() == Some(&b'\r') { frame.pop(); }
         if frame.len() > MAX_FRAME_BYTES {
             let _ = write_response(
                 &mut output,
                 &mcp::error(Value::Null, -32600, "请求超过 64 MiB，连接关闭"),
             );
-            break;
+            std::process::exit(1);
         }
         if frame.iter().all(u8::is_ascii_whitespace) {
             continue;

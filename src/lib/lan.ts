@@ -6,7 +6,7 @@ import { isTauri } from "./storage";
 export interface LanShareSettings {
   enabled: boolean;
   port: number;
-  /** 访问令牌：空串 = 局域网内免验证 */
+  /** 访问令牌：启用共享时必须非空 */
   token: string;
   /** 勾选共享的项目 id */
   projectIds: string[];

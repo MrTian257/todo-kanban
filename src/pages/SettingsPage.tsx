@@ -61,7 +61,7 @@ export function SettingsPage() {
     [petPrefs.themePreset, petPrefs.theme],
   );
   const [displaySize, setDisplaySize] = useDisplaySize();
-  const [mcpEnabled, setMcpEnabled] = React.useState(true);
+  const [mcpEnabled, setMcpEnabled] = React.useState(false);
   const [mcpReadonly, setMcpReadonly] = React.useState(false);
   const [mcpToken, setMcpToken] = React.useState(DEFAULT_MCP_TOKEN);
   const [mcpShowToken, setMcpShowToken] = React.useState(false);
@@ -568,7 +568,7 @@ export function SettingsPage() {
                   type={mcpShowToken ? "text" : "password"}
                   value={mcpToken}
                   onChange={(e) => setMcpToken(e.target.value)}
-                  placeholder={DEFAULT_MCP_TOKEN}
+                  placeholder="请生成或输入随机 Token"
                   className="font-mono"
                 />
                 <Button
@@ -580,13 +580,17 @@ export function SettingsPage() {
                 >
                   {mcpShowToken ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                 </Button>
+                <Button type="button" variant="outline" onClick={() => {
+                  const bytes = crypto.getRandomValues(new Uint8Array(32));
+                  setMcpToken("sk-" + Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join(""));
+                }}>生成 Token</Button>
                 <Button onClick={saveMcp} disabled={mcpSaving}>
                   {mcpSaving ? "保存中…" : "保存"}
                 </Button>
               </div>
               <p className="text-xs text-muted-foreground">
-                默认全局固定授权 Key：<code className="font-mono">{DEFAULT_MCP_TOKEN}</code>
-                ；MCP server 启动需携带此 Token（--token 参数或 MCP_TODO_TOKEN 环境变量）。
+                首次启用前请生成并保存随机 Token；旧版公开默认 Key 已停用。
+                MCP server 需携带此 Token（--token 参数或 MCP_TODO_TOKEN 环境变量）。
                 多个 AI 建议各发一把「接入 Token」（见下方 HTTP 传输区），管理 Key 只留给自己用。
               </p>
             </div>

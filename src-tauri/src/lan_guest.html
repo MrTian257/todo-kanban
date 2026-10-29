@@ -110,8 +110,10 @@
       var toastRoot = document.getElementById("toast-root");
       var gate = document.getElementById("token-gate");
       var params = new URLSearchParams(window.location.search);
-      var token = params.get("t") || sessionStorage.getItem("tk-lan-token") || "";
+      var token = new URLSearchParams(window.location.hash.slice(1)).get("t") || params.get("t") || sessionStorage.getItem("tk-lan-token") || "";
       if (token) sessionStorage.setItem("tk-lan-token", token);
+      params.delete("t");
+      window.history.replaceState(null, "", window.location.pathname + (params.toString() ? "?" + params.toString() : ""));
       var clientId = sessionStorage.getItem("tk-lan-client");
       if (!clientId) {
         clientId = "c" + Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -120,10 +122,12 @@
 
       var state = { projects: [], todos: [], resources: [] };
       var fieldDefs = [];
+      var fieldsReady = true;
       var serverSnapshot = null;
       var activeProjectId = sessionStorage.getItem("tk-lan-project") || "";
       var source = null;
       var saving = false;
+      var needsRefresh = false;
       var connection = "connecting";
       var loaded = false;
       var modalContext = null;
@@ -164,7 +168,7 @@
       }
 
       function apiUrl(path) {
-        var query = "t=" + encodeURIComponent(token) + "&c=" + encodeURIComponent(clientId);
+        var query = "c=" + encodeURIComponent(clientId);
         return path + (path.indexOf("?") >= 0 ? "&" : "?") + query;
       }
 
@@ -300,7 +304,13 @@
         ].join("");
         var board = "<div class=\"board\">" + laneList(project).map(function (lane) { return renderLane(project, lane); }).join("") + "</div>";
         var foot = "<footer class=\"foot\">改动会实时同步到所有已连接设备；连接断开后浏览器会自动重连。</footer>";
+        if (!fieldsReady) foot = "<footer class=\"foot\">自定义字段暂时无法读取，当前仅供查看；请刷新后再编辑。</footer>";
         app.innerHTML = header + board + foot;
+        app.querySelectorAll("button, select").forEach(function (control) {
+          if (control.getAttribute("data-action") !== "refresh") control.disabled = saving || !serverSnapshot || !fieldsReady;
+        });
+        modalRoot.querySelectorAll("button, input, textarea, select").forEach(function (control) { control.disabled = saving; });
+        if (saving || !serverSnapshot || !fieldsReady) app.querySelectorAll("[draggable]").forEach(function (node) { node.draggable = false; });
       }
 
       function applyServerState(scoped) {
@@ -311,7 +321,7 @@
       }
 
       function refresh() {
-        return fetch(apiUrl("/api/state"), { headers: { Accept: "application/json" } }).then(function (response) {
+        return fetch(apiUrl("/api/state"), { headers: { Accept: "application/json", "X-Lan-Token": token } }).then(function (response) {
           if (response.status === 401) {
             showGate();
             throw new Error("unauthorized");
@@ -320,6 +330,7 @@
           return response.json();
         }).then(function (body) {
           fieldDefs = body.fieldDefs || [];
+          fieldsReady = body.fieldDefsAvailable !== false;
           applyServerState(body.state || { projects: [], todos: [], resources: [] });
           setConnection("live");
         }).catch(function (error) {
@@ -329,14 +340,14 @@
       }
 
       function saveTodos(nextTodos, successMessage) {
-        if (saving) { toast("正在保存，请稍候", "warn"); return; }
+        if (saving || !serverSnapshot || !fieldsReady) { toast(saving ? "正在保存，请稍候" : "请先刷新数据再保存", "warn"); return; }
         var next = { projects: state.projects, todos: nextTodos, resources: [] };
         var expected = serverSnapshot || { projects: [], todos: [], resources: [] };
         saving = true;
         render();
         fetch(apiUrl("/api/save"), {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", "X-Lan-Token": token },
           body: JSON.stringify({ payload: next, expected: expected, clientId: clientId })
         }).then(function (response) {
           return response.json().catch(function () { return {}; }).then(function (body) {
@@ -345,14 +356,18 @@
         }).then(function (result) {
           saving = false;
           if (result.ok && result.body && result.body.state) {
+            closeModal();
             applyServerState(result.body.state);
             setConnection("live");
             if (successMessage) toast(successMessage, "ok");
+            if (needsRefresh) { needsRefresh = false; void refresh().catch(function () {}); }
           } else if (result.status === 401) {
             showGate();
             render();
           } else if (result.status === 409) {
-            toast("数据刚被其他设备修改，已刷新为最新，请重试", "warn");
+            serverSnapshot = null;
+            render();
+            toast("数据已变化，正在刷新；刷新成功后请重试", "warn");
             void refresh().catch(function () {});
           } else {
             toast((result.body && result.body.error) || "保存失败", "err");
@@ -360,6 +375,7 @@
           }
         }).catch(function (error) {
           saving = false;
+          serverSnapshot = null;
           setConnection("offline");
           toast("网络错误：" + error, "err");
           render();
@@ -367,25 +383,59 @@
       }
 
       function subscribe() {
-        if (source) { source.close(); source = null; }
-        setConnection("connecting");
-        source = new EventSource(apiUrl("/api/events"));
-        source.onopen = function () {
-          setConnection("live");
-          // 重连后补一次全量，避免断线期间漏掉的改动
-          void refresh().catch(function () {});
-        };
-        source.addEventListener("state", function (event) {
-          var message = null;
-          try { message = JSON.parse(event.data); } catch (error) { return; }
-          if (!message || message.origin === clientId) return;
-          if (message.state) applyServerState(message.state);
-        });
-        source.addEventListener("resync", function () { void refresh().catch(function () {}); });
-        source.onerror = function () { setConnection("offline"); };
+        if (source) source.close();
+        var controller = new AbortController();
+        var timer = null;
+        var stopped = false;
+        source = { close: function () { stopped = true; controller.abort(); window.clearTimeout(timer); } };
+        async function connect() {
+          setConnection("connecting");
+          var reader = null;
+          try {
+            var response = await fetch(apiUrl("/api/events"), { headers: { "X-Lan-Token": token, Accept: "text/event-stream" }, signal: controller.signal });
+            if (response.status === 401) { showGate("令牌已失效，请输入新的访问令牌"); return; }
+            if (!response.ok || !response.body) throw new Error("HTTP " + response.status);
+            setConnection("live");
+            reader = response.body.getReader();
+            if (!saving) await refresh();
+            var decoder = new TextDecoder();
+            var buffer = "";
+            while (!stopped) {
+              var chunk = await reader.read();
+              if (chunk.done) break;
+              buffer += decoder.decode(chunk.value, { stream: true });
+              var match;
+              while ((match = /\r?\n\r?\n/.exec(buffer))) {
+                var frame = buffer.slice(0, match.index);
+                buffer = buffer.slice(match.index + match[0].length);
+                var kind = "message", data = [];
+                frame.split(/\r?\n/).forEach(function (line) {
+                  if (line.indexOf("event:") === 0) kind = line.slice(6).trim();
+                  if (line.indexOf("data:") === 0) data.push(line.slice(5).trimStart());
+                });
+                if (saving) { needsRefresh = true; continue; }
+                if (kind === "resync") { await refresh(); continue; }
+                if (kind === "state") {
+                  var message;
+                  try { message = JSON.parse(data.join("\n")); } catch (_) { continue; }
+                  if (message && message.origin !== clientId && message.state) applyServerState(message.state);
+                }
+              }
+            }
+          } catch (error) {
+            if (stopped || error.name === "AbortError") return;
+          } finally {
+            if (reader) await reader.cancel().catch(function () {});
+          }
+          if (!stopped) { setConnection("offline"); timer = window.setTimeout(connect, 3000); }
+        }
+        void connect();
       }
 
       function showGate(message) {
+        if (source) { source.close(); source = null; }
+        serverSnapshot = null;
+        setConnection("offline");
         gate.classList.remove("hidden");
         var error = document.getElementById("token-error");
         if (error) error.textContent = message || "";
@@ -499,11 +549,11 @@
 
       function submitModal() {
         if (!modalContext) return;
+        if (saving || !serverSnapshot || !fieldsReady) { toast("请等待保存或刷新完成，输入内容已保留", "warn"); return; }
         var project = modalContext.project;
         var values = collectValues(project);
         if (!values.title) { toast("标题不能为空", "warn"); return; }
         var todo = modalContext.todo;
-        closeModal();
         if (todo) updateTodo(project, todo, values);
         else createTodo(project, values);
       }

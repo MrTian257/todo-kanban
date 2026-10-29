@@ -64,10 +64,8 @@ type MdTable = MdNode & { align?: (string | null)[] | null };
 
 /** 无法完整往返的语法整块保留为可编辑源文，不能用空节点或纯文本替代。 */
 function canEditNode(node: MdNode, source = "", sourceStart = node.position?.start.offset): boolean {
-  // footnoteReference 有明确的降级分支（inlineToLexical 里转成字面 [id]），不属于「无法往返」；
-  // 把它挡在这里会让含脚注引用的整段退化成源文块，`[^note]` 原样留下，脚注降级永远走不到
-  // （回归断言见 scripts/test-block-document.mjs 的「明写降级组」）。
-  if (["html", "inlineMath", "math", "definition", "footnoteDefinition", "linkReference", "imageReference"].includes(node.type)) return false;
+  // 脚注引用与定义一起保留源文，不能把引用变成无语义的字面文本。
+  if (["html", "inlineMath", "math", "definition", "footnoteDefinition", "footnoteReference", "linkReference", "imageReference"].includes(node.type)) return false;
   if (node.type === "blockquote" && (node.children ?? []).some(child => kindOfChild(child.type) === "unsupported")) return false;
   if (node.type === "code" && node.meta) return false;
   if (node.type === "list") {
@@ -453,6 +451,25 @@ export function docToEditorState(doc: BlockDoc): { nodes: LexicalNode[]; index: 
     void i;
   });
   return { nodes, index };
+}
+
+/** 按 AST 解开块级容器；行内格式仍走同一桥，不重新猜测段落类型。 */
+export function paragraphNodesFromMarkdown(markdown: string): LexicalNode[] {
+  const out: LexicalNode[] = [];
+  const visit = (node: MdNode) => {
+    if (["list", "listItem", "blockquote"].includes(node.type)) {
+      (node.children ?? []).forEach(child => visit(child as MdNode));
+    } else if (node.type === "code") {
+      // 代码中的空行对应独立段落，避免保存后才意外拆块。
+      for (const text of (node.value ?? "").split(/\r?\n[ \t]*\r?\n/)) {
+        out.push({ type: "paragraph", version: 1, children: [textNode(text, 0)] });
+      }
+    } else if (node.type === "paragraph" || node.type === "heading") {
+      out.push({ type: "paragraph", version: 1, children: inlineToLexical(node.children ?? []) });
+    }
+  };
+  for (const block of splitBlocks(markdown).blocks) { if (block.node) visit(block.node); }
+  return out.length ? out : emptyEditorNodes();
 }
 
 /** 空文档必须至少有一个空段落块才能放光标，但序列化要回到 ""（§7 / 票 02 R2-5）。 */

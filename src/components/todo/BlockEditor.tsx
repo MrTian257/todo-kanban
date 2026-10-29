@@ -35,6 +35,7 @@ import { CodeNode, CodeHighlightNode } from "@lexical/code";
 import { HorizontalRuleNode } from "@lexical/react/LexicalHorizontalRuleNode";
 import { CHECK_LIST } from "@lexical/markdown";
 import {
+  KEY_TAB_COMMAND, COMMAND_PRIORITY_HIGH, $createTabNode,
   $getRoot, $getSelection, $isRangeSelection, $insertNodes, $createParagraphNode, $parseSerializedNode, ElementNode,
   type LexicalNode, type NodeKey, type SerializedLexicalNode,
 } from "lexical";
@@ -44,7 +45,7 @@ import {
   type AttachmentOwner,
 } from "@/lib/attachments";
 import { splitBlocks, type Block, type BlockDoc } from "@/lib/markdownBlocks";
-import { blockNodeToMarkdown, markdownToEditorJson } from "@/lib/blockDocument";
+import { blockNodeToMarkdown, markdownToEditorJson, paragraphNodesFromMarkdown } from "@/lib/blockDocument";
 import { ImageNode, SourceBlockNode, $createImageNode } from "./BlockNodes";
 import { BlockToolbar, BlockHandle, type StructureActions } from "./BlockChrome";
 import { BlockSlashMenu } from "./BlockSlashMenu";
@@ -124,6 +125,7 @@ function SyncPlugin(props: SyncProps): null {
   const busy = React.useRef(false);
   const applyingExternal = React.useRef(false);
   const initialized = React.useRef(false);
+  const preserveEmptySource = React.useRef(true);
 
   /** 把当前 Lexical 状态算成 Markdown（不比较、不回写）。publish 与结构操作共用它。 */
   const buildMarkdown = React.useCallback((): string => {
@@ -138,11 +140,18 @@ function SyncPlugin(props: SyncProps): null {
       // **快路**：没有任何脏键、顶层块数量也没变 → 逐字节返回原文。
       // 这是「打开→保存不产生 diff」最强的一条保证（ADR-0001 §7 / 票 02 R2-5），
       // 也让「纯打开、聚焦、移动光标」自动不脏。
+      const onlyEmptyParagraphs = children.every(child => child.getType() === "paragraph" && child.getTextContent() === "");
+      if (!onlyEmptyParagraphs) preserveEmptySource.current = false;
       const emptyPlaceholder = doc.blocks.length === 0 && children.length === 1 && children[0].getTextContent() === "";
       if (dirty.size === 0 && (children.length === doc.blocks.length || emptyPlaceholder)) {
         return attachmentDisplayToRef(doc.source);
       }
       // 顺序与 $getRoot().getChildren() 一一对应：状态序列化不会重排顶层节点
+      if (doc.blocks.length === 0 && onlyEmptyParagraphs && preserveEmptySource.current) {
+        // 占位节点的 dirty 不等于清空原文；新增空段落也要保留用户输入的换行。
+        const newline = doc.source.includes("\r\n") ? "\r\n" : "\n";
+        return attachmentDisplayToRef(doc.source + newline.repeat(Math.max(0, children.length - 1)));
+      }
       const serializedChildren = stateJson.root.children;
       const parts: string[] = [];
       const originalIndices = new Map(doc.blocks.map((block, index) => [block.id, index]));
@@ -180,6 +189,7 @@ function SyncPlugin(props: SyncProps): null {
   const importMarkdown = React.useCallback((markdown: string) => {
     const display = attachmentRefToDisplay(markdown);
     const nextDoc = splitBlocks(display);
+    preserveEmptySource.current = nextDoc.blocks.length === 0;
     applyingExternal.current = true;
     try {
       latest.current.engineError.current = null;
@@ -214,6 +224,17 @@ function SyncPlugin(props: SyncProps): null {
     lastEmitted.current = markdown;
     return true;
   }, [editor]);
+
+  React.useEffect(() => editor.registerCommand(KEY_TAB_COMMAND, event => {
+    const selection = $getSelection();
+    if (!$isRangeSelection(selection)) return false;
+    const top = selection.anchor.getNode().getTopLevelElement();
+    if (!top || !["paragraph", "heading", "quote"].includes(top.getType())) return false;
+    if (event.shiftKey) return false;
+    event.preventDefault();
+    selection.insertNodes([$createTabNode()]);
+    return true;
+  }, COMMAND_PRIORITY_HIGH), [editor]);
 
   /** 把 Lexical 自己造的节点（回车拆块、粘贴新段落）并入脏集合，否则它们会被当成「未碰」而丢内容。 */
   React.useEffect(() => {
@@ -355,10 +376,9 @@ function SyncPlugin(props: SyncProps): null {
         return;
       }
       // 仍复用源文转换规则，只解析目标块，不重建其余块或丢弃空段落。
-      const replacements = convertSource({ kind, source }, action).flatMap(markdown =>
-        action.kind === "paragraph"
-          ? [{ type: "paragraph", version: 1, children: [{ type: "text", version: 1, text: markdown, format: 0, detail: 0, mode: "normal", style: "" }] }]
-          : markdownToEditorJson(markdown).children ?? []);
+      const replacements = action.kind === "paragraph"
+        ? paragraphNodesFromMarkdown(source)
+        : convertSource({ kind, source }, action).flatMap(markdown => markdownToEditorJson(markdown).children ?? []);
       let previous = node;
       for (const replacement of replacements) {
         const next = $parseSerializedNode(replacement as Parameters<typeof $parseSerializedNode>[0]);

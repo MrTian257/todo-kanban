@@ -149,7 +149,7 @@ pub async fn db_save_state(payload: DbState, expected: DbState) -> Result<DbStat
     )
 }
 
-/// 12. 读取 MCP 集成设置（启用开关 + 授权 Token；缺失返回默认：启用 + sk-GLOBAl_MCP_BY_ADMIN）
+/// 12. 读取 MCP 集成设置（启用开关 + 授权 Token；缺失返回默认：关闭且无凭据）
 #[tauri::command]
 pub async fn mcp_get_config() -> Result<McpSettings, String> {
     blocking(move || db_cmds::mcp_get_config().map_err(err_str)).await
@@ -356,4 +356,19 @@ pub async fn pomodoro_recent(limit: usize) -> Result<Vec<pomodoro::PomodoroSessi
 #[tauri::command]
 pub async fn pomodoro_stats(days: i64) -> Result<pomodoro::PomodoroStats, String> {
     blocking(move || pomodoro::stats(days).map_err(err_str)).await
+}
+
+/// 只打开普通目录；禁止借目录入口启动程序、应用包或工作流。
+#[tauri::command]
+pub async fn open_directory(path: String) -> Result<(), String> {
+    blocking(move || {
+        let path = std::fs::canonicalize(path).map_err(err_str)?;
+        if !path.is_dir() || path.ancestors().any(|part| {
+            part.extension().and_then(|ext| ext.to_str()).is_some_and(|ext|
+                ["app", "bundle", "framework", "plugin", "prefpane", "workflow"].contains(&ext.to_ascii_lowercase().as_str()))
+        }) {
+            return Err("只能打开普通目录，不能打开程序或应用包".into());
+        }
+        tauri_plugin_opener::open_path(&path, None::<&str>).map_err(err_str)
+    }).await
 }

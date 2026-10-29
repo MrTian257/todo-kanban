@@ -610,7 +610,7 @@ pub fn mcp_read_from_db(path: &Path) -> AppResult<McpSettings> {
     Ok(settings)
 }
 
-/// 读取 MCP 集成设置（无数据源 / key 缺失 → 默认：启用 + 可写 + 全局固定授权 Token）
+/// 读取 MCP 集成设置（无数据源 / key 缺失 → 默认关闭，尚未设置凭据）
 pub fn mcp_get_config() -> AppResult<McpSettings> {
     let path = db_path()?;
     if !path.exists() {
@@ -622,12 +622,17 @@ pub fn mcp_get_config() -> AppResult<McpSettings> {
 /// 保存 MCP 集成设置（写 app_meta）。只读模式也只在这里决定，
 /// mcp-server 与 HTTP 每个业务请求重读一次（见 `core::mcp::authorize`）。
 pub fn mcp_set_config(s: McpSettings) -> AppResult<()> {
+    if s.enabled && (s.token.trim().is_empty() || s.token.trim() == crate::models::DEFAULT_MCP_TOKEN) {
+        return Err(AppError::invalid("启用 MCP 前请生成并保存新的随机 Token"));
+    }
     let path = db_path()?;
     let conn = db::open(&path)?;
     db::init(&conn)?;
-    write_meta(&conn, MCP_ENABLED_KEY, if s.enabled { "1" } else { "0" })?;
-    write_meta(&conn, MCP_READONLY_KEY, if s.readonly { "1" } else { "0" })?;
-    write_meta(&conn, MCP_TOKEN_KEY, &s.token)?;
+    let tx = conn.unchecked_transaction()?;
+    write_meta(&tx, MCP_ENABLED_KEY, if s.enabled { "1" } else { "0" })?;
+    write_meta(&tx, MCP_READONLY_KEY, if s.readonly { "1" } else { "0" })?;
+    write_meta(&tx, MCP_TOKEN_KEY, s.token.trim())?;
+    tx.commit()?;
     Ok(())
 }
 

@@ -45,8 +45,7 @@ pub fn ensure(
             let outcome = migrate(conn)?;
             return Ok(build_upgraded_report(data_version, &outcome));
         }
-        let _ = migrate(conn)?;
-        write_app_meta_version(conn, CURRENT_VERSION)?;
+        migrate(conn)?; // 迁移事务内已同步两个版本标记。
         return Ok(build_ok_report(CURRENT_VERSION));
     }
     // 版本已是最新：app_meta 与 PRAGMA user_version 已同步则不再写库

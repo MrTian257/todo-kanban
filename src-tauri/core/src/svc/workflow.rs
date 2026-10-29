@@ -324,6 +324,13 @@ pub fn save(mut value: Workflow, expected: i64) -> AppResult<Workflow> {
     if current.revision != expected {
         return Err(AppError::invalid("配置已变化，请刷新后重试"));
     }
+    // 后台投递状态不参与配置版本竞争；保存配置时以库内最新投递状态为准。
+    for reminder in &mut value.reminders {
+        if let Some(latest) = current.reminders.iter().find(|item| item.id == reminder.id && item.at == reminder.at) {
+            reminder.delivered_at = latest.delivered_at;
+        }
+    }
+    sweep(&mut value, now());
     if value.reminders.len() > REMINDER_LIMIT {
         return Err(AppError::invalid("提醒最多保存 2000 条，请清理后重试；本次未保存"));
     }
@@ -488,7 +495,7 @@ fn claim_in_tx(tx: &Connection, now: i64) -> AppResult<Vec<ReminderDispatch>> {
         changed = true;
     }
     if claims != previous { write_claims(tx, &claims)?; }
-    if changed { value.revision += 1; write(tx, &value)?; }
+    if changed { write(tx, &value)?; }
     Ok(result)
 }
 
@@ -513,10 +520,15 @@ fn finish_in_tx(
     let mut value = read(tx)?;
     if let Some(item) = value.reminders.iter_mut().find(|item|
         item.id == reminder.id && item.at == reminder.at && item.delivered_at.is_none()) {
-        if delivered { item.delivered_at = Some(at); }
-        else { item.at = at + RETRY_DELAY_MS; }
-        value.revision += 1;
-        write(tx, &value)?;
+        if delivered {
+            item.delivered_at = Some(at);
+            write(tx, &value)?;
+        } else {
+            // 原提醒时间保持不变，重试延迟只影响租约，不改用户配置。
+            claims.insert(reminder.id.clone(), (reminder.at, at + RETRY_DELAY_MS - CLAIM_LEASE_MS));
+            write_claims(tx, &claims)?;
+            return Ok(());
+        }
     }
     claims.remove(&reminder.id);
     write_claims(tx, &claims)?;
@@ -544,15 +556,15 @@ pub fn sweep_reminders() -> AppResult<usize> {
 /// 清理实现（供单测用内存库调用；调用方负责事务提交）
 fn sweep_in_tx(tx: &Connection, now: i64) -> AppResult<usize> {
     let mut value = read(tx)?;
-    let expected = value.revision;
+    let expected = value.reminders.clone();
     let removed = sweep(&mut value, now);
-    if value.revision != expected {
+    if value.reminders != expected {
         write(tx, &value)?;
     }
     Ok(removed)
 }
 
-/// 过期提醒清理（纯函数）：返回被删除的条数；有改动时推进 revision。
+/// 过期提醒清理：返回被删除的条数，不推进用户配置版本。
 fn sweep(value: &mut Workflow, now: i64) -> usize {
     const KEEP_DELIVERED_MS: i64 = 7 * 86_400_000;
     let before = value.reminders.len();
@@ -562,15 +574,10 @@ fn sweep(value: &mut Workflow, now: i64) -> usize {
             Some(delivered) => now - delivered < KEEP_DELIVERED_MS,
             None => true,
         });
-    let mut changed = value.reminders.len() != before;
     for reminder in &mut value.reminders {
         if reminder.delivered_at.is_none() && now - reminder.at > KEEP_DELIVERED_MS {
             reminder.delivered_at = Some(now);
-            changed = true;
         }
-    }
-    if changed {
-        value.revision += 1;
     }
     before.saturating_sub(value.reminders.len())
 }

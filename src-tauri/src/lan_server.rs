@@ -191,6 +191,7 @@ fn guest_page_response() -> Response {
         header::CONTENT_TYPE,
         HeaderValue::from_static("text/html; charset=utf-8"),
     );
+    response.headers_mut().insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
     response
 }
 
@@ -206,18 +207,20 @@ async fn api_state(
     // 同一个阻塞任务里取共享快照与自定义字段定义（访客面板据此渲染字段输入）
     let result = tokio::task::spawn_blocking(move || {
         let state = db_cmds::lan_scoped_state(&settings)?;
-        let workflow = todo_kanban_core::svc::workflow::load()?;
         let scope = lan::scope_ids(&settings);
-        let field_defs = serde_json::to_value(workflow.field_defs.into_iter()
-            .filter(|field| field.project_id.as_ref().is_none_or(|id| scope.contains(id)))
-            .collect::<Vec<_>>())?;
-        Ok::<_, todo_kanban_core::error::AppError>((state, field_defs))
+        let (field_defs, fields_available) = match todo_kanban_core::svc::workflow::load() {
+            Ok(workflow) => (serde_json::to_value(workflow.field_defs.into_iter()
+                .filter(|field| field.project_id.as_ref().is_none_or(|id| scope.contains(id)))
+                .collect::<Vec<_>>())?, true),
+            Err(error) => { log::warn!("访客自定义字段读取失败，暂时仅供查看：{error}"); (json!([]), false) }
+        };
+        Ok::<_, todo_kanban_core::error::AppError>((state, field_defs, fields_available))
     })
     .await;
     match result {
-        Ok(Ok((state, field_defs))) => {
+        Ok(Ok((state, field_defs, fields_available))) => {
             let state = state.unwrap_or_default();
-            Json(json!({ "state": state, "fieldDefs": field_defs })).into_response()
+            Json(json!({ "state": state, "fieldDefs": field_defs, "fieldDefsAvailable": fields_available })).into_response()
         }
         Ok(Err(error)) => json_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
         Err(error) => json_error(
@@ -264,7 +267,10 @@ async fn api_save(
                 *response.status_mut() = StatusCode::CONFLICT;
                 response
             } else {
-                json_error(StatusCode::INTERNAL_SERVER_ERROR, message)
+                let status = if matches!(error, todo_kanban_core::error::AppError::Invalid(_)) {
+                    StatusCode::BAD_REQUEST
+                } else { StatusCode::INTERNAL_SERVER_ERROR };
+                json_error(status, message)
             }
         }
         Err(error) => json_error(
@@ -480,15 +486,14 @@ fn lan_urls(port: u16, token: &str) -> Vec<String> {
         }
     }
     hosts.push("127.0.0.1".to_string());
-    let token = token.trim();
+    let token: String = token.trim().bytes().map(|byte| {
+        if byte.is_ascii_alphanumeric() || b"-_.~".contains(&byte) { (byte as char).to_string() }
+        else { format!("%{byte:02X}") }
+    }).collect();
     hosts
         .iter()
         .map(|host| {
-            if token.is_empty() {
-                format!("http://{host}:{port}/")
-            } else {
-                format!("http://{host}:{port}/?t={token}")
-            }
+            format!("http://{host}:{port}/#t={token}")
         })
         .collect()
 }

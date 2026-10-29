@@ -26,6 +26,12 @@ use crate::{
     svc::db_cmds,
 };
 
+/// 文件写入/恢复/回收使用同一把锁；先拿文件锁，再进入数据库事务。
+pub(crate) static FILE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(crate) fn lock_files() -> AppResult<std::sync::MutexGuard<'static, ()>> {
+    FILE_LOCK.lock().map_err(|_| AppError::invalid("附件文件操作锁不可用"))
+}
+
 /// 单张图片上限（导入与迁移共用）
 pub const MAX_IMAGE_BYTES: usize = 5 * 1024 * 1024;
 /// 协议供图读取上限（附件历史残留兜底）
@@ -276,6 +282,7 @@ fn import_at(
     bytes: Vec<u8>,
     original_name: &str,
 ) -> AppResult<AttachmentInfo> {
+    let _files = lock_files()?;
     if !valid_owner_id(owner_id) {
         return Err(AppError::invalid(format!(
             "{} 宿主 ID 含不支持的字符，无法保存附件",
@@ -546,8 +553,17 @@ pub fn move_to_trash(paths: &[String]) -> usize {
     }
 }
 
-/// 把附件文件移入 trash/<时间戳>/<ownerId>/（best-effort，失败仅告警；不自动清除）。
-/// 回收目录仍按宿主 id 分格：两类宿主同形，人工翻 trash 时与 attachments/ 下原位目录结构一致。
+/// 回收路径仅接受合法图片，或 write_atomic 生成的带随机后缀的临时文件。
+fn valid_gc_relative(path: &str) -> bool {
+    if valid_relative(path) { return true; }
+    let Some((owner, file)) = path.split_once('/') else { return false; };
+    let Some(stem) = file.strip_suffix(".tmp") else { return false; };
+    let Some((name, nonce)) = stem.rsplit_once('.') else { return false; };
+    valid_owner_id(owner) && !name.is_empty() && name.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
+        && nonce.len() == 32 && nonce.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+/// 文件移入 trash/<时间戳>/<ownerId>/；失败仅告警，不自动清空回收目录。
 pub fn move_to_trash_at(root: &Path, paths: &[String]) -> usize {
     if paths.is_empty() {
         return 0;
@@ -558,8 +574,8 @@ pub fn move_to_trash_at(root: &Path, paths: &[String]) -> usize {
         let Some((owner_id, file)) = path.split_once('/') else {
             continue;
         };
-        // 与 serve_at 同一套白名单：路径不合法就跳过（不报错——回收是 best-effort，不能因一条脏路径卡住整批）
-        if !valid_owner_id(owner_id) || !valid_file_name(file) {
+        // 回收比供图多接受本程序的临时文件，其余非法路径仍跳过。
+        if !valid_gc_relative(path) {
             continue;
         }
         let src = root.join(owner_id).join(file);
@@ -642,6 +658,7 @@ pub fn migrate_inline() -> AppResult<MigrateSummary> {
 }
 
 pub fn migrate_inline_at(db_path: &Path) -> AppResult<MigrateSummary> {
+    let _files = lock_files()?;
     let mut conn = open_db(db_path)?;
     let todos = db::load_state(&conn)?.todos;
     let mut summary = MigrateSummary {
@@ -764,6 +781,7 @@ pub fn gc_orphans() -> AppResult<GcSummary> {
 /// 所有资料关系当成悬空整表删掉、再把文件送进 trash——那是「删用户数据」级别的错误，
 /// 所以判据必须按 kind 分别绑定到 todos / resources 两张宿主表上。
 pub fn gc_orphans_at(db_path: &Path) -> AppResult<GcSummary> {
+    let _files = lock_files()?;
     let mut conn = open_db(db_path)?;
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let removed_relations = tx.execute(
@@ -777,12 +795,6 @@ pub fn gc_orphans_at(db_path: &Path) -> AppResult<GcSummary> {
     tx.commit()?;
     let root = attachments_root_at(db_path);
     let mut moved_files = move_to_trash_at(&root, &trash);
-    // 再拿 Immediate 锁扫描磁盘，避免与「先落盘后写索引」的导入并发。
-    let scan = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let mut stmt = scan.prepare("SELECT relative_path FROM attachments")?;
-    let indexed = stmt.query_map([], |row| row.get::<_, String>(0))?
-        .collect::<Result<std::collections::HashSet<_>, _>>()?;
-    drop(stmt);
     let mut disk_orphans = Vec::new();
     if root.exists() && !fs::symlink_metadata(&root)?.file_type().is_symlink() {
         for owner in fs::read_dir(&root)? {
@@ -792,12 +804,19 @@ pub fn gc_orphans_at(db_path: &Path) -> AppResult<GcSummary> {
             for file in fs::read_dir(owner.path())? {
                 let file = file?;
                 let relative = format!("{name}/{}", file.file_name().to_string_lossy());
-                if file.file_type()?.is_file() && valid_relative(&relative) && !indexed.contains(&relative) {
+                if file.file_type()?.is_file() && valid_gc_relative(&relative) {
                     disk_orphans.push(relative);
                 }
             }
         }
     }
+    // 慢盘目录枚举不占 SQLite 写锁；枚举结束后重查索引以排除并发提交。
+    let scan = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let mut stmt = scan.prepare("SELECT relative_path FROM attachments")?;
+    let indexed = stmt.query_map([], |row| row.get::<_, String>(0))?
+        .collect::<Result<std::collections::HashSet<_>, _>>()?;
+    drop(stmt);
+    disk_orphans.retain(|path| !indexed.contains(path));
     moved_files += move_to_trash_at(&root, &disk_orphans);
     scan.commit()?;
     Ok(GcSummary {

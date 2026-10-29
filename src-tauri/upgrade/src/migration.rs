@@ -100,10 +100,12 @@ pub fn migrate(conn: &Connection) -> UpgradeResult<MigrateOutcome> {
         // v3 → v4：projects 补 GitLab Token 两列（幂等保护）
         if !column_exists(&tx, "projects", "frontend_repo_token")? {
             tx.execute_batch(
-                "ALTER TABLE projects ADD COLUMN frontend_repo_token TEXT NOT NULL DEFAULT '';
-                 ALTER TABLE projects ADD COLUMN backend_repo_token TEXT NOT NULL DEFAULT '';",
+                "ALTER TABLE projects ADD COLUMN frontend_repo_token TEXT NOT NULL DEFAULT '';",
             )?;
         }
+    }
+    if from < 4 && !column_exists(&tx, "projects", "backend_repo_token")? {
+        tx.execute_batch("ALTER TABLE projects ADD COLUMN backend_repo_token TEXT NOT NULL DEFAULT '';")?;
     }
     if from < 5 {
         // v4 → v5：泳道重构——projects 补 swimlanes、todos 补 swimlane_id + 按状态回填默认泳道
@@ -134,8 +136,7 @@ pub fn migrate(conn: &Connection) -> UpgradeResult<MigrateOutcome> {
         // v6 → v7：创建者标识（human | ai）+ AI 协调标记（存量默认 human / 未协调）
         if !column_exists(&tx, "todos", "created_by")? {
             tx.execute_batch(
-                "ALTER TABLE todos ADD COLUMN created_by TEXT NOT NULL DEFAULT 'human';
-                 ALTER TABLE todos ADD COLUMN ai_coordinated INTEGER NOT NULL DEFAULT 0;",
+                "ALTER TABLE todos ADD COLUMN created_by TEXT NOT NULL DEFAULT 'human';",
             )?;
         }
         if !column_exists(&tx, "projects", "created_by")? {
@@ -143,6 +144,9 @@ pub fn migrate(conn: &Connection) -> UpgradeResult<MigrateOutcome> {
                 "ALTER TABLE projects ADD COLUMN created_by TEXT NOT NULL DEFAULT 'human';",
             )?;
         }
+    }
+    if from < 7 && !column_exists(&tx, "todos", "ai_coordinated")? {
+        tx.execute_batch("ALTER TABLE todos ADD COLUMN ai_coordinated INTEGER NOT NULL DEFAULT 0;")?;
     }
     if from < 8 {
         // v7 → v8：附件表 attachments + 关系表（当时名 todo_attachments，v16 起为 note_attachments）
@@ -199,9 +203,9 @@ pub fn migrate(conn: &Connection) -> UpgradeResult<MigrateOutcome> {
     }
 
     tx.execute_batch(&format!("PRAGMA user_version = {CURRENT_VERSION};"))?;
+    // 两个版本标记与 DDL 同一事务提交，避免崩溃后重跑已完成的迁移。
+    write_app_meta_version(&tx, CURRENT_VERSION).map_err(UpgradeError::from)?;
     tx.commit().map_err(UpgradeError::from)?;
-    // 同步写入 app_meta，便于外部诊断
-    write_app_meta_version(conn, CURRENT_VERSION).map_err(UpgradeError::from)?;
 
     // 收集实际执行的步骤（from..CURRENT 区间）
     let steps: Vec<(i64, i64, String)> = MIGRATION_STEPS

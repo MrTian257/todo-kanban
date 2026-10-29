@@ -463,6 +463,15 @@ pub fn git_commit_info(repo: &str, short_hash: &str) -> AppResult<CommitInfo> {
 /// 附加提交所属分支信息（git 查询结果补全）
 pub fn attach_branches(repo: &str, commits: &mut [CommitInfo]) {
     if commits.is_empty() { return; }
+    if commits.len() <= 3 {
+        for commit in commits {
+            match git_cli::commit_branches(repo, &commit.hash) {
+                Ok(branches) => commit.branches = branches,
+                Err(error) => log::warn!("读取提交所属分支失败：{error}"),
+            }
+        }
+        return;
+    }
     let Ok(refs) = run_git(repo, &["for-each-ref", "--format=%(refname:short) %(objectname)", "refs/heads", "refs/remotes"]) else { return; };
     let Some(graph) = commit_graph(repo, &["--all"]) else { return; };
     // 极大仓库不做可选标注，避免本地遍历退化成无界工作。
@@ -521,6 +530,7 @@ struct OriginAnalysis {
     intro_by_commit: HashMap<String, String>,
     cherry_set: HashSet<String>,
     cherry_source: HashMap<String, String>,
+    degraded: bool,
 }
 type OriginCache =
     HashMap<(String, String), (String, std::time::Instant, std::sync::Arc<OriginAnalysis>)>;
@@ -538,7 +548,7 @@ pub fn annotate_commit_origins(repo: &str, ref_branch: &str, commits: &mut [Comm
         ORIGIN_CACHE.lock().ok().and_then(|cache| {
             cache
                 .get(&key)
-                .filter(|(snapshot, at, _)| snapshot == refs && at.elapsed().as_secs() < 1800)
+                .filter(|(snapshot, at, analysis)| snapshot == refs && at.elapsed().as_secs() < (if analysis.degraded { 30 } else { 1800 }))
                 .map(|(_, _, analysis)| analysis.clone())
         })
     });
@@ -606,15 +616,15 @@ fn build_origin_analysis(repo: &str, ref_branch: &str) -> Option<OriginAnalysis>
             if let Some(parents) = graph.get(&hash) { stack.extend(parents.iter().cloned()); }
         }
     }
-    let (cherry_set, cherry_source) = detect_cherry_picks(repo, ref_branch)?;
-    Some(OriginAnalysis { fp, reach, intro_by_commit, cherry_set, cherry_source })
+    let (cherry_set, cherry_source, degraded) = detect_cherry_picks(repo, ref_branch);
+    Some(OriginAnalysis { fp, reach, intro_by_commit, cherry_set, cherry_source, degraded })
 }
 
 /// 剪切特征检测（相对参考分支 B）：返回（剪切提交集合, 提交 → 来源说明）
 /// ① 消息尾注：`git log B --grep="cherry picked from commit"`（git cherry-pick -x 写入；源并入 B 也能识别）
 /// ② 跨分支补丁等价：对每个其它分支 X 跑 `git cherry -v X B`，`- ` 前缀行 = B 侧提交的补丁在 X 已存在
 ///    （常规剪切：源未并入 B 时由补丁等价识别，来源记为分支名）
-fn detect_cherry_picks(repo: &str, ref_branch: &str) -> Option<(HashSet<String>, HashMap<String, String>)> {
+fn detect_cherry_picks(repo: &str, ref_branch: &str) -> (HashSet<String>, HashMap<String, String>, bool) {
     let started = std::time::Instant::now();
     let budget = std::time::Duration::from_secs(5);
     let bounded = |args: &[&str]| {
@@ -624,7 +634,10 @@ fn detect_cherry_picks(repo: &str, ref_branch: &str) -> Option<(HashSet<String>,
     let mut set = HashSet::new();
     let mut source = HashMap::new();
     // 同一条 log 同时取 hash 与正文，消除逐提交 show 子进程。
-    let trailer = bounded(&["log", ref_branch, "--grep=cherry picked from commit", "--format=%H%x1f%B%x1e"])?;
+    let Some(trailer) = bounded(&["log", ref_branch, "--grep=cherry picked from commit", "--format=%H%x1f%B%x1e"]) else {
+        log::warn!("剪切尾注检测失败，保留基础来源标注");
+        return (set, source, true);
+    };
     for record in trailer.split('\u{1e}') {
         let Some((hash, body)) = record.trim().split_once('\u{1f}') else { continue; };
         for line in body.lines().map(str::trim) {
@@ -637,16 +650,18 @@ fn detect_cherry_picks(repo: &str, ref_branch: &str) -> Option<(HashSet<String>,
             }
         }
     }
-    let branches = bounded(&["for-each-ref", "--format=%(refname:short)", "refs/heads", "refs/remotes"])?;
+    let Some(branches) = bounded(&["for-each-ref", "--format=%(refname:short)", "refs/heads", "refs/remotes"]) else {
+        return (set, source, true);
+    };
     let branches: Vec<_> = branches.lines().filter(|name| !name.is_empty() && *name != ref_branch).collect();
     if branches.len() > 16 {
-        log::warn!("提交来源标注已跳过：补丁比较分支超过 16 条");
-        return None;
+        log::warn!("补丁等价检测已降级，保留已知来源：补丁比较分支超过 16 条");
+        return (set, source, true);
     }
     for branch in branches {
         let Some(out) = bounded(&["cherry", "-v", branch, ref_branch]) else {
-            log::warn!("提交来源标注已跳过：补丁比较超过预算或失败");
-            return None;
+            log::warn!("补丁等价检测已降级，保留已知来源：补丁比较超过预算或失败");
+            return (set, source, true);
         };
         for line in out.lines() {
             if let Some(hash) = line.strip_prefix("- ").and_then(|rest| rest.split_whitespace().next()) {
@@ -654,7 +669,7 @@ fn detect_cherry_picks(repo: &str, ref_branch: &str) -> Option<(HashSet<String>,
             }
         }
     }
-    Some((set, source))
+    (set, source, false)
 }
 
 /// 短 hash（7 位，与前端 shortHash 一致）

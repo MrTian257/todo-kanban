@@ -70,7 +70,7 @@ import { cardFieldDefs, formatCustomValue, resolveFieldValue } from "@/lib/custo
 import { useWorkflow } from "@/lib/workflow";
 import { StatusNode } from "./StatusNode";
 import { cn } from "@/lib/utils";
-import { openPath } from "@tauri-apps/plugin-opener";
+import { openDirectory } from "@/lib/openDirectory";
 
 // 提交来源三分类徽标（后端 annotate_commit_origins 标注；origin 空串=未分析，不显示）
 const ORIGIN_BADGE: Record<string, { label: string; cls: string; tip: string }> = {
@@ -182,7 +182,7 @@ export const TodoRow = React.memo(function TodoRow({ todo, projectName, showProj
   const openDir = async () => {
     if (!todo.repoPath) return toast.error("该待办未绑定代码目录");
     try {
-      await openPath(todo.repoPath);
+      await openDirectory(todo.repoPath);
     } catch (e) {
       toast.error(`打开目录失败：${e}`);
     }
